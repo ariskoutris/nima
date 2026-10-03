@@ -25,8 +25,8 @@ class Frame:
     height: int
     rgba: bytes
 
-    def save_png(self, path: str | Path) -> None:
-        """Write an RGBA screenshot without an image dependency."""
+    def png_bytes(self) -> bytes:
+        """Encode an RGBA screenshot without an image dependency."""
         def chunk(kind: bytes, data: bytes) -> bytes:
             return (struct.pack(">I", len(data)) + kind + data
                     + struct.pack(">I", zlib.crc32(kind + data)))
@@ -38,7 +38,10 @@ class Frame:
                + chunk(b"IHDR", struct.pack(">IIBBBBB", self.width, self.height, 8, 6, 0, 0, 0))
                + chunk(b"IDAT", zlib.compress(rows))
                + chunk(b"IEND", b""))
-        Path(path).write_bytes(png)
+        return png
+
+    def save_png(self, path: str | Path) -> None:
+        Path(path).write_bytes(self.png_bytes())
 
 
 class GbaEmulator:
