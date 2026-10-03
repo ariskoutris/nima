@@ -1,6 +1,5 @@
 # Local game files, saves, and emulator output
 roms/*
-!roms/.gitkeep
 *.gba
 *.sav
 *.state
@@ -11,4 +10,4 @@ roms/*
 __pycache__/
 
 # Local planning notes
-docs/pilot_plan.md
+docs/*
