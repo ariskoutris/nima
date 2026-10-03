@@ -2,4 +2,10 @@
 name = "pezo"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["libretro.py==0.10.0"]
+dependencies = [
+    "libretro.py==0.10.0",
+    "qev",
+]
+
+[tool.uv.sources]
+qev = { git = "https://github.com/OmniJev/OneJev.git", rev = "81ce62f1597c91e46767d4d02d6ac2e18534fe94" }
