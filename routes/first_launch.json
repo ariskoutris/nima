@@ -1,9 +1,0 @@
-[
-  {"frames": 720, "note": "Health and safety warning"},
-  {"frames": 15, "buttons": ["A"], "note": "Dismiss warning"},
-  {"frames": 4200, "note": "New Game menu"},
-  {"frames": 2, "buttons": ["A"], "note": "Select New Game"},
-  {"frames": 240, "note": "Opening dialogue"},
-  {"frames": 2, "buttons": ["A"]},
-  {"frames": 30, "note": "Opening dialogue continues"}
-]
