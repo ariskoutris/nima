@@ -447,14 +447,19 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "libretro-py" },
+]
+
+[package.optional-dependencies]
+onejev = [
     { name = "qev" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "libretro-py", specifier = "==0.10.0" },
-    { name = "qev", git = "https://github.com/OmniJev/OneJev.git?rev=81ce62f1597c91e46767d4d02d6ac2e18534fe94" },
+    { name = "qev", marker = "extra == 'onejev'", git = "https://github.com/OmniJev/OneJev.git?rev=81ce62f1597c91e46767d4d02d6ac2e18534fe94" },
 ]
+provides-extras = ["onejev"]
 
 [[package]]
 name = "pillow"
