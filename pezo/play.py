@@ -60,15 +60,14 @@ def choose(classifier: Classifier, screenshot: Path, goal: str, recent: list[str
     }
 
 
-def main(argv: list[str] | None = None, default_classifier: str | None = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rom", type=Path)
     parser.add_argument("--core", type=Path, default=DEFAULT_CORE)
     parser.add_argument("--state", type=Path, default=Path(".local/baselines/post_continue.state"))
     parser.add_argument("--goal", required=True)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--classifier", required=default_classifier is None,
-                        default=default_classifier, metavar="MODULE:CALLABLE")
+    parser.add_argument("--classifier", required=True, metavar="MODULE:CALLABLE")
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
