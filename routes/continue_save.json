@@ -1,0 +1,11 @@
+[
+  {"frames": 720, "note": "Health and safety warning"},
+  {"frames": 15, "buttons": ["A"]},
+  {"frames": 4200, "note": "Continue menu"},
+  {"frames": 15, "buttons": ["A"], "note": "Select Continue"},
+  {"frames": 45},
+  {"frames": 15, "buttons": ["UP"], "note": "Select Yes"},
+  {"frames": 15},
+  {"frames": 15, "buttons": ["A"], "note": "Confirm resume"},
+  {"frames": 300}
+]

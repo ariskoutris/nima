@@ -11,6 +11,7 @@ from pathlib import Path
 
 from libretro import Session
 from libretro.api.input import JoypadState
+from libretro.api.memory import RETRO_MEMORY_SAVE_RAM
 from libretro.drivers.video.software.array import ArrayVideoDriver
 
 
@@ -94,6 +95,22 @@ class GbaEmulator:
         self._buttons.clear()
         if not self._session.core.unserialize(state):
             raise RuntimeError("core could not restore this state")
+
+    def save_ram(self) -> bytes:
+        """Return the game's battery save, suitable for a .sav file."""
+        memory = self._session.core.get_memory(RETRO_MEMORY_SAVE_RAM)
+        if memory is None:
+            raise RuntimeError("core has no save RAM")
+        return bytes(memory)
+
+    def load_save_ram(self, data: bytes) -> None:
+        """Load a battery save after entering the emulator session."""
+        memory = self._session.core.get_memory(RETRO_MEMORY_SAVE_RAM)
+        if memory is None:
+            raise RuntimeError("core has no save RAM")
+        if len(data) != len(memory):
+            raise ValueError(f"save RAM is {len(memory)} bytes, got {len(data)}")
+        memory[:] = data
 
 
 def main() -> None:
