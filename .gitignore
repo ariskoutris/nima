@@ -3,7 +3,7 @@
 __pycache__/
 roms/*
 !roms/.gitkeep
-PILOT_PLAN.md
+docs/pilot_plan.md
 *.gba
 *.sav
 *.state
