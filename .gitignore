@@ -1,0 +1,9 @@
+.local/
+.venv/
+__pycache__/
+roms/*
+!roms/.gitkeep
+PILOT_PLAN.md
+*.gba
+*.sav
+*.state
