@@ -1,9 +1,14 @@
-.local/
-.venv/
-__pycache__/
+# Local game files, saves, and emulator output
 roms/*
 !roms/.gitkeep
-docs/pilot_plan.md
 *.gba
 *.sav
 *.state
+.local/
+
+# Python environment and cache
+.venv/
+__pycache__/
+
+# Local planning notes
+docs/pilot_plan.md
