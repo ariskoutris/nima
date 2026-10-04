@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from emulator import BUTTONS, DEFAULT_CORE, GbaEmulator
-from pezo.play import choose, load_classifier
+from mystery_dungeon.play import choose, load_classifier
 
 
 class LiveRun:
@@ -293,7 +293,7 @@ def main() -> None:
     parser.add_argument("--core", type=Path, default=DEFAULT_CORE)
     parser.add_argument("--state", type=Path, default=Path(".local/baselines/post_continue.state"))
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--classifier", default="pezo.classifiers.onejev:classify")
+    parser.add_argument("--classifier", default="mystery_dungeon.classifiers.onejev:classify")
     parser.add_argument("--url", help="OneJev server URL")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=8)

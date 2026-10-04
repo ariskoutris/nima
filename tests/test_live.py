@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pezo.live import LiveRun
+from mystery_dungeon.live import LiveRun
 
 
 class FakeEmulator:
@@ -48,8 +48,8 @@ class LiveTest(unittest.TestCase):
                 button: 1.0 if button == "A" else 0.0 for button in options
             }
             emulator = FakeEmulator()
-            with patch("pezo.live.load_classifier", return_value=classifier), \
-                 patch("pezo.live.GbaEmulator", return_value=emulator):
+            with patch("mystery_dungeon.live.load_classifier", return_value=classifier), \
+                 patch("mystery_dungeon.live.GbaEmulator", return_value=emulator):
                 run = LiveRun(root / "game.gba", root / "core", state, root / "output",
                               "fake:classify", 8, 4)
                 thread = threading.Thread(target=run.run)
@@ -107,8 +107,8 @@ class LiveTest(unittest.TestCase):
                     assert release.wait(2)
                 return {button: 1.0 if button == "A" else 0.0 for button in options}
 
-            with patch("pezo.live.load_classifier", return_value=classifier), \
-                 patch("pezo.live.GbaEmulator", FakeEmulator):
+            with patch("mystery_dungeon.live.load_classifier", return_value=classifier), \
+                 patch("mystery_dungeon.live.GbaEmulator", FakeEmulator):
                 run = LiveRun(root / "game.gba", root / "core", state, root / "output",
                               "fake:classify", 8, 4)
                 thread = threading.Thread(target=run.run)

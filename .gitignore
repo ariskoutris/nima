@@ -11,4 +11,9 @@ roms/*
 __pycache__/
 
 # Local planning notes
-docs/*
+README.md
+requirements*.txt
+docs/pilot_plan.md
+
+# Finder metadata
+.DS_Store

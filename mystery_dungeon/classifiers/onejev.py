@@ -1,4 +1,4 @@
-"""OneJev adapter for the screenshot classifier used by pezo.play."""
+"""OneJev adapter for the screenshot classifier used by mystery_dungeon.play."""
 
 from __future__ import annotations
 
