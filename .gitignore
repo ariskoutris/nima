@@ -1,10 +1,9 @@
-# Local game files, saves, and emulator output
-roms/*
-!roms/.gitkeep
+# Local assets and run output
+/data/
+/runs/
 *.gba
 *.sav
 *.state
-.local/
 
 # Python environment and cache
 .venv/

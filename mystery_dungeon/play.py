@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable, Mapping
 
-from emulator import DEFAULT_CORE, GbaEmulator
+from emulator import GbaEmulator
 
 
 OPTIONS = {
@@ -63,8 +63,8 @@ def choose(classifier: Classifier, screenshot: Path, goal: str, recent: list[str
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rom", type=Path)
-    parser.add_argument("--core", type=Path, default=DEFAULT_CORE)
-    parser.add_argument("--state", type=Path, default=Path(".local/baselines/post_continue.state"))
+    parser.add_argument("--core", type=Path, required=True)
+    parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--goal", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--classifier", required=True, metavar="MODULE:CALLABLE")

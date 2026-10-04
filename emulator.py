@@ -16,7 +16,6 @@ from libretro.drivers.video.software.array import ArrayVideoDriver
 
 
 BUTTONS = frozenset("A B SELECT START UP DOWN LEFT RIGHT L R".split())
-DEFAULT_CORE = Path(__file__).parent / ".local/cores/mgba_libretro.dylib"
 
 
 @dataclass(frozen=True)
@@ -47,7 +46,7 @@ class Frame:
 class GbaEmulator:
     """Run a GBA ROM in mGBA, one controlled batch of frames at a time."""
 
-    def __init__(self, rom: str | Path, core: str | Path = DEFAULT_CORE):
+    def __init__(self, rom: str | Path, core: str | Path):
         self.rom = Path(rom).resolve()
         self.core_path = Path(core).resolve()
         if not self.rom.is_file():
@@ -119,9 +118,9 @@ class GbaEmulator:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check a GBA ROM with the mGBA adapter")
     parser.add_argument("rom", type=Path)
-    parser.add_argument("--core", type=Path, default=DEFAULT_CORE)
+    parser.add_argument("--core", type=Path, required=True)
     parser.add_argument("--boot-frames", type=int, default=120)
-    parser.add_argument("--screenshot", type=Path, default=Path(".local/smoke.png"))
+    parser.add_argument("--screenshot", type=Path, default=Path("runs/smoke.png"))
     args = parser.parse_args()
 
     with GbaEmulator(args.rom, args.core) as emulator:

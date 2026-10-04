@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from emulator import BUTTONS, DEFAULT_CORE, GbaEmulator
+from emulator import BUTTONS, GbaEmulator
 from mystery_dungeon.play import choose, load_classifier
 
 
@@ -290,8 +290,8 @@ def handler_for(run: LiveRun):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rom", type=Path)
-    parser.add_argument("--core", type=Path, default=DEFAULT_CORE)
-    parser.add_argument("--state", type=Path, default=Path(".local/baselines/post_continue.state"))
+    parser.add_argument("--core", type=Path, required=True)
+    parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--classifier", default="mystery_dungeon.classifiers.onejev:classify")
     parser.add_argument("--url", help="OneJev server URL")
@@ -303,7 +303,7 @@ def main() -> None:
         parser.error("frame counts must be positive")
     if args.url:
         os.environ["QEV_BASE_URL"] = args.url
-    output = args.output or Path(".local/live") / datetime.now().strftime("%Y%m%d-%H%M%S")
+    output = args.output or Path("runs") / datetime.now().strftime("%Y%m%d-%H%M%S")
     run = LiveRun(args.rom, args.core, args.state, output, args.classifier,
                   args.hold_frames, args.release_frames)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
