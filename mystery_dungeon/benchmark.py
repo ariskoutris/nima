@@ -1,0 +1,405 @@
+"""Replay fixed goals against OneJev with a grader hidden from the controller."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import struct
+import time
+import zlib
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from emulator import Frame, GbaEmulator, scene_distance
+from mystery_dungeon.play import Classifier, choose, load_classifier, with_context
+
+
+SCENE_OPTIONS = {
+    "dialogue": "A text dialogue box or message panel is visible without selectable choices.",
+    "menu": "A menu or list of selectable choices is visible on screen.",
+    "gameplay": "No dialogue panel or menu is visible; the main game scene is visible.",
+}
+ROM = Path("data/game/roms/red-rescue-team.gba")
+CORE = Path("data/engines/cores/mgba_libretro.dylib")
+STATE = Path("data/game/checkpoints/post-cutscene.ss0")
+MODEL_FILES = (Path("data/engines/models/onejev-0.8b-q4_k_m.gguf"),
+               Path("data/engines/models/onejev-0.8b-mmproj-q8_0.gguf"))
+MAILBOX_ROUTE = ("RIGHT", "DOWN", "DOWN", "LEFT", "LEFT", "UP", "A")
+HOLD, RELEASE, SECONDS = 8, 4, 180
+
+
+@dataclass(frozen=True)
+class Case:
+    id: str
+    start: str
+    goal: str
+    criterion: str
+    limit: int
+
+
+CASES = (
+    Case("room_south", "inside", "Move one tile south", "south", 8),
+    Case("room_exit_directional", "inside", "Walk down through the visible exit", "outside", 30),
+    Case("room_exit_goal", "inside", "Get out of the base", "outside", 30),
+    Case("outside_talk", "outside", "Talk to the nearby green Pokémon", "npc", 20),
+    Case("npc_ready_talk", "npc_ready", "Talk to the Pokémon directly in front of you", "npc", 8),
+    Case("outside_mailbox", "outside", "Check the mailbox", "mailbox", 40),
+    Case("mailbox_front_check", "mailbox_front", "Check the mailbox in front of you", "mailbox", 8),
+    Case("mailbox_front_button", "mailbox_front", "Press A to check the mailbox", "mailbox", 8),
+    Case("room_then_talk", "inside", "Leave the base and talk to the nearby Pokémon", "npc", 60),
+    Case("outside_clearing", "outside", "Find the wooded clearing beyond the base", "clearing", 70),
+    Case("bridge_to_clearing", "bridge", "Cross the bridge north and reach the wooded clearing", "clearing", 25),
+    Case("bridge_up_literal", "bridge", "Move up until you reach the wooded clearing", "clearing", 25),
+    Case("mailbox_to_cave", "mailbox", "Follow the rescue request to the cave", "cave", 120),
+    Case("outside_mailbox_to_cave", "outside", "Check the mailbox, then reach the cave", "mailbox_cave", 140),
+)
+
+
+@dataclass(frozen=True)
+class Seed:
+    state: bytes
+    save_ram: bytes
+
+
+def read_ss0(path: Path) -> Seed:
+    """Extract the mGBA core state and battery RAM from its PNG save state."""
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("checkpoint is not a PNG/mGBA save state")
+    state = save_ram = None
+    offset = 8
+    while offset + 12 <= len(data):
+        size = struct.unpack_from(">I", data, offset)[0]
+        end = offset + 12 + size
+        if end > len(data):
+            raise ValueError("truncated mGBA save state")
+        kind, payload = data[offset + 4:offset + 8], data[offset + 8:offset + 8 + size]
+        crc = struct.unpack_from(">I", data, end - 4)[0]
+        if zlib.crc32(kind + payload) != crc:
+            raise ValueError(f"bad {kind!r} checksum")
+        if kind == b"gbAs":
+            state = zlib.decompress(payload)
+        elif kind == b"gbAx" and payload[:4] == b"\x02\0\0\0":
+            save_ram = zlib.decompress(payload[8:])
+        offset = end
+    if state is None or save_ram is None:
+        raise ValueError("mGBA state or save RAM is missing")
+    return Seed(state, save_ram)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def restore(game: GbaEmulator, seed: Seed) -> None:
+    game.load_save_ram(seed.save_ram)
+    game.load_state(seed.state)
+    game.step()
+
+
+def press(game: GbaEmulator, button: str) -> None:
+    game.step(HOLD, () if button == "WAIT" else (button,))
+    game.step(RELEASE)
+
+
+def patch_distance(a: Frame, b: Frame, rect: tuple[int, int, int, int]) -> float:
+    x0, y0, x1, y1 = rect
+    total = count = 0
+    for y in range(y0, y1, 2):
+        for x in range(x0, x1, 2):
+            offset = (y * a.width + x) * 4
+            total += sum(abs(a.rgba[offset + i] - b.rgba[offset + i]) for i in range(3))
+            count += 3
+    return total / count
+
+
+def colors(frame: Frame) -> tuple[int, int]:
+    """Count forest and water palette pixels; no game pixels reach the agent."""
+    forest = water = 0
+    for offset in range(0, len(frame.rgba), 16):
+        red, green, blue = frame.rgba[offset:offset + 3]
+        forest += red < 90 and 40 <= green <= 200 and 45 <= blue <= 180
+        water += red < 35 and green > 130 and blue > 210
+    return forest, water
+
+
+def has_message_panel(frame: Frame) -> bool:
+    offset = (145 * frame.width + 10) * 4
+    red, green, blue = frame.rgba[offset:offset + 3]
+    return blue > 200 and green > red
+
+
+class Grader:
+    def __init__(self, references: dict[str, Frame], initial_ram: bytes):
+        self.references = references
+        self.initial_y = initial_ram[2300]
+        self.mailbox_seen = False
+
+    def observe(self, frame: Frame, ram: bytes, criterion: str) -> tuple[bool, list[str]]:
+        forest, water = colors(frame)
+        mailbox = patch_distance(frame, self.references["mailbox"], (15, 126, 230, 153)) < 5
+        npc = patch_distance(frame, self.references["npc"], (0, 60, 54, 120)) < 12
+        cave = patch_distance(frame, self.references["cave"], (0, 0, 65, 50)) < 20
+        milestones = []
+        if mailbox and not self.mailbox_seen:
+            self.mailbox_seen = True
+            milestones.append("mailbox_checked")
+        south = 8 <= (ram[2300] - self.initial_y) % 256 <= 80 and water < 200
+        success = {
+            "south": south,
+            "outside": water > 500,
+            "npc": npc,
+            "mailbox": mailbox,
+            "clearing": forest >= 4500 and water < 200,
+            "cave": cave,
+            "mailbox_cave": self.mailbox_seen and cave,
+        }[criterion]
+        return success, milestones
+
+
+def build_fixtures(game: GbaEmulator, source: Seed, output: Path) -> tuple[dict[str, Seed], dict[str, Frame]]:
+    seeds = {"outside": source}
+    references = {}
+    restore(game, source)
+    references["outside"] = game.screenshot()
+
+    restore(game, source)
+    game.step(32, ("UP",))
+    game.step(60)
+    seeds["inside"] = Seed(game.save_state(), game.save_ram())
+    references["inside"] = game.screenshot()
+
+    restore(game, source)
+    press(game, "DOWN")
+    seeds["npc_ready"] = Seed(game.save_state(), game.save_ram())
+    references["npc_ready"] = game.screenshot()
+    press(game, "A")
+    references["npc"] = game.screenshot()
+
+    restore(game, source)
+    press(game, "LEFT")
+    press(game, "A")
+    references["mailbox_side"] = game.screenshot()
+
+    restore(game, source)
+    for button in MAILBOX_ROUTE[:-1]:
+        press(game, button)
+    seeds["mailbox_front"] = Seed(game.save_state(), game.save_ram())
+    references["mailbox_front"] = game.screenshot()
+    press(game, "A")
+    game.step(30)
+    seeds["mailbox"] = Seed(game.save_state(), game.save_ram())
+    references["mailbox"] = game.screenshot()
+
+    for _ in range(30):
+        game.step(HOLD, ("A",))
+        game.step(40)
+    references["cave"] = game.screenshot()
+
+    restore(game, source)
+    for _ in range(7):
+        press(game, "RIGHT")
+    seeds["bridge"] = Seed(game.save_state(), game.save_ram())
+    references["bridge"] = game.screenshot()
+    for _ in range(10):
+        press(game, "UP")
+    references["clearing"] = game.screenshot()
+
+    refs = output / "references"
+    refs.mkdir()
+    for name, frame in references.items():
+        frame.save_png(refs / f"{name}.png")
+    for name, seed in seeds.items():
+        (refs / f"{name}.state").write_bytes(seed.state)
+        (refs / f"{name}.sav").write_bytes(seed.save_ram)
+    validate_fixtures(game, source, seeds, references)
+    return seeds, references
+
+
+def validate_fixtures(game: GbaEmulator, source: Seed, seeds: dict[str, Seed], refs: dict[str, Frame]) -> None:
+    """Fail before running a model if a reference or negative control is ambiguous."""
+    assert colors(refs["outside"])[1] > 500
+    assert colors(refs["inside"])[1] < 200
+    assert colors(refs["clearing"])[0] >= 4500 and colors(refs["clearing"])[1] < 200
+    assert patch_distance(refs["npc"], refs["outside"], (0, 60, 54, 120)) >= 12
+    assert patch_distance(refs["npc"], refs["mailbox_side"], (0, 60, 54, 120)) >= 12
+    assert patch_distance(refs["mailbox"], refs["mailbox_side"], (15, 126, 230, 153)) >= 5
+    assert patch_distance(refs["cave"], refs["outside"], (0, 0, 65, 50)) >= 20
+    assert colors(refs["bridge"])[0] < 4500
+    restore(game, seeds["inside"])
+    start = game.system_ram()
+    press(game, "DOWN")
+    assert Grader(refs, start).observe(game.screenshot(), game.system_ram(), "south")[0]
+    restore(game, source)
+    assert not Grader(refs, game.system_ram()).observe(game.screenshot(), game.system_ram(), "mailbox")[0]
+
+
+def is_cycle(recent: list[Frame]) -> bool:
+    for length in range(2, 7):
+        if len(recent) >= 3 * length and all(
+            scene_distance(recent[-i], recent[-i - length]) < 3
+            for i in range(1, 2 * length + 1)
+        ):
+            return True
+    return False
+
+
+def run_case(game: GbaEmulator, case: Case, controller: str, classifier: Classifier,
+             observer, seeds: dict[str, Seed], references: dict[str, Frame], output: Path) -> dict:
+    output.mkdir()
+    restore(game, seeds[case.start])
+    grader = Grader(references, game.system_ram())
+    if case.start == "mailbox":
+        grader.mailbox_seen = True
+    recent_buttons: list[str] = []
+    recent_frames: list[Frame] = []
+    repeat_button = None
+    repeat_count = 0
+    saw_dialogue = False
+    quiet_frames = 0
+    transition_waits = 0
+    low_change = 0
+    events: list[str] = []
+    started = time.monotonic()
+    reason = "budget"
+    error = None
+    with (output / "decisions.jsonl").open("w") as log:
+        for index in range(case.limit + 1):
+            frame = game.screenshot()
+            screenshot = output / f"{index:04d}.png"
+            frame.save_png(screenshot)
+            ram = game.system_ram()
+            success, new_events = grader.observe(frame, ram, case.criterion)
+            events.extend(new_events)
+            if success:
+                reason = "success"
+                break
+            if index == case.limit:
+                reason = "budget"
+                break
+            if time.monotonic() - started >= SECONDS:
+                reason = "time_limit"
+                break
+            instruction, mode, scene_scores = case.goal, "task", None
+            try:
+                if controller == "guided":
+                    scene = observer(screenshot, "What kind of screen is visible?", SCENE_OPTIONS)
+                    scene_scores = dict(scene)
+                    if scene["menu"] >= 0.5:
+                        reason = "menu_requires_planner"
+                        break
+                    if scene["dialogue"] >= 0.4:
+                        mode, saw_dialogue, quiet_frames = "dialogue", True, 0
+                        instruction = "Advance the visible dialogue or message"
+                    elif saw_dialogue and quiet_frames < 2:
+                        mode = "settle"
+                        quiet_frames += 1
+                decision = ({"choice": "WAIT", "scores": {}, "latency_ms": 0} if mode == "settle"
+                            else choose(classifier, screenshot, instruction, recent_buttons))
+            except Exception as exc:
+                reason, error = "model_error", f"{type(exc).__name__}: {exc}"
+                break
+            button = decision["choice"]
+            press(game, button)
+            after = game.screenshot()
+            distance = scene_distance(frame, after)
+            low_change += distance < 10
+            repeat_count = repeat_count + 1 if mode == "task" and button == repeat_button and distance < 10 else 1
+            repeat_button = button
+            recent_buttons.append(button)
+            recent_frames.append(after)
+            log.write(json.dumps({"step": index, "screenshot": screenshot.name,
+                                  "instruction": instruction, "mode": mode,
+                                  "scene_scores": scene_scores,
+                                  "scene_change": round(distance, 2), **decision}) + "\n")
+            log.flush()
+            stalled = repeat_count >= 8
+            # Text can stay nearly still while an A press advances a scripted event.
+            if (stalled or is_cycle(recent_frames)) and not has_message_panel(after):
+                checkpoint = Seed(game.save_state(), game.save_ram())
+                game.step(60)
+                if scene_distance(after, game.screenshot()) >= 10:
+                    transition_waits += 1
+                    recent_frames.clear()
+                    repeat_button = None
+                    repeat_count = 0
+                    log.write(json.dumps({"step": index, "event": "transition_wait", "frames": 60}) + "\n")
+                    continue
+                restore(game, checkpoint)
+                reason = "stalled" if stalled else "loop"
+                break
+    final = game.screenshot()
+    final.save_png(output / "final.png")
+    (output / "final.state").write_bytes(game.save_state())
+    (output / "final.sav").write_bytes(game.save_ram())
+    result = {"case": case.id, "controller": controller, "goal": case.goal,
+              "success": reason == "success", "stop_reason": reason,
+              "steps": index, "low_visual_change_actions": low_change,
+              "transition_waits": transition_waits, "events": events,
+              "seconds": round(time.monotonic() - started, 2), "error": error}
+    (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
+def report(results: list[dict], output: Path) -> None:
+    (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+    lines = ["# Game goal benchmark", "", "| Case | Controller | Result | Decisions | Low visual change | Seconds |", "|---|---|---|---:|---:|---:|"]
+    for row in results:
+        lines.append(f"| {row['case']} | {row['controller']} | {row['stop_reason']} | {row['steps']} | {row['low_visual_change_actions']} | {row['seconds']} |")
+    lines += ["", "A case passes only when the hidden grader observes its goal. The controller receives screenshots, goal text, and button descriptions; it never receives grader memory or success signals.", ""]
+    (output / "report.md").write_text("\n".join(lines))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("rom", type=Path, nargs="?", default=ROM)
+    parser.add_argument("--core", type=Path, default=CORE)
+    parser.add_argument("--state", type=Path, default=STATE)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--classifier", default="mystery_dungeon.classifiers.onejev:classify")
+    parser.add_argument("--observer", default="mystery_dungeon.classifiers.onejev:inspect",
+                        help="screen-mode scorer for guided runs")
+    parser.add_argument("--model-file", type=Path, action="append",
+                        help="model artifact to hash; repeat for weights and vision projector")
+    parser.add_argument("--context", type=Path, help="general controls supplied on every button decision")
+    parser.add_argument("--controller", choices=("direct", "guided", "both"), default="both")
+    parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
+    args = parser.parse_args()
+    selected = [case for case in CASES if args.case is None or case.id in args.case]
+    controllers = ("direct", "guided") if args.controller == "both" else (args.controller,)
+    args.output.mkdir(parents=True, exist_ok=False)
+    classifier = with_context(load_classifier(args.classifier), args.context.read_text() if args.context else "")
+    observer = load_classifier(args.observer) if "guided" in controllers else None
+    source = read_ss0(args.state)
+    model_files = (MODEL_FILES if args.model_file is None and
+                   args.classifier == "mystery_dungeon.classifiers.onejev:classify"
+                   else args.model_file or ())
+    hashes = {str(path): sha256(path) for path in (args.rom, args.core, args.state, *model_files,
+                                                 *((args.context,) if args.context else ()))}
+    hashes["classifier"] = args.classifier
+    if observer is not None:
+        hashes["observer"] = args.observer
+    (args.output / "config.json").write_text(json.dumps({"cases": [asdict(c) for c in selected],
+                                                         "controllers": controllers, "hashes": hashes,
+                                                         "context": str(args.context) if args.context else None,
+                                                         "hold_frames": HOLD, "release_frames": RELEASE}, indent=2) + "\n")
+    with GbaEmulator(args.rom, args.core) as game:
+        seeds, refs = build_fixtures(game, source, args.output)
+        results = []
+        for case in selected:
+            for controller in controllers:
+                print(f"{case.id} / {controller}", flush=True)
+                result = run_case(game, case, controller, classifier, observer, seeds, refs,
+                                  args.output / f"{case.id}-{controller}")
+                results.append(result)
+                report(results, args.output)
+                print(f"  {result['stop_reason']} after {result['steps']} decisions", flush=True)
+
+
+if __name__ == "__main__":
+    main()

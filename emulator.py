@@ -11,7 +11,7 @@ from pathlib import Path
 
 from libretro import Session
 from libretro.api.input import JoypadState
-from libretro.api.memory import RETRO_MEMORY_SAVE_RAM
+from libretro.api.memory import RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_SYSTEM_RAM
 from libretro.drivers.video.software.array import ArrayVideoDriver
 
 
@@ -117,6 +117,13 @@ class GbaEmulator:
         memory = self._session.core.get_memory(RETRO_MEMORY_SAVE_RAM)
         if memory is None:
             raise RuntimeError("core has no save RAM")
+        return bytes(memory)
+
+    def system_ram(self) -> bytes:
+        """Snapshot working RAM for benchmark grading, never for agent input."""
+        memory = self._session.core.get_memory(RETRO_MEMORY_SYSTEM_RAM)
+        if memory is None:
+            raise RuntimeError("core has no system RAM")
         return bytes(memory)
 
     def load_save_ram(self, data: bytes) -> None:
