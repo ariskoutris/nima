@@ -1,0 +1,8 @@
+[server]
+gguf = "data/engines/models/onejev-0.8b-q4_k_m.gguf"
+mmproj = "data/engines/models/onejev-0.8b-mmproj-q8_0.gguf"
+
+[game]
+rom = "data/game/roms/red-rescue-team.gba"
+core = "data/engines/cores/mgba_libretro.dylib"
+state = "data/game/checkpoints/post-tiny-woods.state"
