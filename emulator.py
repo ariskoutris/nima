@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import struct
 import zlib
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from libretro import Session
 from libretro.api.input import JoypadState
-from libretro.api.memory import RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_SYSTEM_RAM
+from libretro.api.memory import RETRO_MEMORY_SAVE_RAM
 from libretro.drivers.video.software.array import ArrayVideoDriver
 
 
@@ -119,12 +120,18 @@ class GbaEmulator:
             raise RuntimeError("core has no save RAM")
         return bytes(memory)
 
-    def system_ram(self) -> bytes:
-        """Snapshot working RAM for benchmark grading, never for agent input."""
-        memory = self._session.core.get_memory(RETRO_MEMORY_SYSTEM_RAM)
-        if memory is None:
-            raise RuntimeError("core has no system RAM")
-        return bytes(memory)
+    def read_memory(self, address: int, size: int) -> bytes:
+        """Read a GBA address through the core's Libretro memory map."""
+        maps = self._session.memory_maps
+        if maps is None or size < 1:
+            raise ValueError("memory map unavailable or invalid read size")
+        for index in range(maps.num_descriptors):
+            region = maps.descriptors[index]
+            if (region.ptr and region.start <= address and
+                    address + size <= region.start + region.len):
+                return ctypes.string_at(region.ptr.value + region.offset + address - region.start,
+                                        size)
+        raise ValueError(f"unmapped GBA memory: {address:#x} ({size} bytes)")
 
     def load_save_ram(self, data: bytes) -> None:
         """Load a battery save after entering the emulator session."""

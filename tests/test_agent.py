@@ -23,7 +23,7 @@ class FakeEmulator:
     def step(self, frames=1, buttons=()):
         self.presses.append((frames, buttons))
 
-    def system_ram(self):
+    def read_memory(self, address, size):
         raise AssertionError("RAM leaked into the agent")
 
 
