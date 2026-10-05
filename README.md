@@ -16,6 +16,8 @@ uv run --extra onejev -m mystery_dungeon play
 
 Open <http://127.0.0.1:8765> and enter a goal. A goal change during inference takes effect after the current action. Append `--context mystery_dungeon/prompts/controls-v1.md` to the play command for the optional control guide. Other options include `--history-frames N` (default 1), `--completion-votes N` (default 1), and `--decision-model module:Class` for another no-argument model class.
 
+To use hosted GLM-5.3-Flash through OpenRouter, set `OPENROUTER_API_KEY` and start the live player with `uv run -m mystery_dungeon play --decision-model mystery_dungeon.decision_models.glm:GlmDecisionModel`. This adapter sends screenshots to OpenRouter; it does not need the local OneJev server or the `onejev` extra.
+
 ## Benchmark and tests
 
 ```sh
@@ -30,7 +32,7 @@ The benchmark grades goal reach independently of the decision model. Results are
 - `emulator.py` wraps the Libretro core.
 - `mystery_dungeon/agent.py` owns each gameplay turn: choose an action or stop, apply it, track the result, and record experience.
 - `mystery_dungeon/session.py` provides emulator I/O: apply inputs and capture resulting frames.
-- `mystery_dungeon/decision_models/` contains system-one adapters that score actions and visible goal completion. A model implements `score(goal, guidance, current_frame, recent_steps, button_options) -> DecisionScores`.
+- `mystery_dungeon/decision_models/` contains adapters that score actions and visible goal completion. A model implements `score(goal, guidance, current_frame, recent_steps, button_options) -> DecisionScores`.
 - `mystery_dungeon/live.py`, `play.py`, and `benchmark.py` are the runners; `scripts/` holds one-off experiments.
 
 Generated data belongs in ignored `runs/`. A run contains `config.json`, `decisions.jsonl`, numbered `frames/`, `states/`, and snapshots of any loaded prompt or guide. OneJev loads `mystery_dungeon/prompts/onejev-v1.json`; set `QEV_PROMPT_VERSION=vN` to select another immutable version. Run configs record prompt, guide, and button-option hashes. Historical runs retain their earlier layout.

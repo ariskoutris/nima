@@ -8,6 +8,7 @@
 # Python environment and cache
 .venv/
 __pycache__/
+.env
 
 # Local reference material
 /docs/manuals/
