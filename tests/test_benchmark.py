@@ -2,7 +2,6 @@
 
 import json
 import sys
-from io import BytesIO
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -182,17 +181,3 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
     assert config["hashes"][str(model_file)] == benchmark.sha256(model_file)
-
-
-def test_main_rejects_wrong_local_model_before_creating_run(tmp_path, monkeypatch):
-    output = tmp_path / "run"
-    monkeypatch.setattr(sys, "argv", ["benchmark", "--output", str(output),
-                                  "--decision-model", "mystery_dungeon.decision_models.onejev:OneJevDecisionModel",
-                                  "--expected-model", "OneJev-4B.Q4_K_M"])
-    monkeypatch.setenv("QEV_BASE_URL", "http://127.0.0.1:18043")
-    monkeypatch.setattr(benchmark.urllib.request, "urlopen",
-                        lambda url, timeout: BytesIO(b'{"model":"onejev-0.8b-q4_k_m"}'))
-    with pytest.raises(SystemExit) as error:
-        benchmark.main()
-    assert error.value.code == 2
-    assert not output.exists()

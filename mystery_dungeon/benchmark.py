@@ -5,10 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import struct
 import time
-import urllib.request
 import zlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -284,7 +282,6 @@ def main() -> None:
     parser.add_argument("--core", type=Path, default=CORE)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.glm:GlmDecisionModel")
-    parser.add_argument("--expected-model", help="require this model name from a local OneJev server")
     parser.add_argument("--model-file", type=Path, action="append",
                         help="hash a local model artifact; repeat for weights and vision projector")
     parser.add_argument("--context", type=Path)
@@ -294,20 +291,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.history_frames < 0 or args.completion_votes < 1:
         parser.error("history frames must be non-negative and completion votes positive")
-    model_server = None
-    if args.expected_model:
-        if args.decision_model != "mystery_dungeon.decision_models.onejev:OneJevDecisionModel":
-            parser.error("--expected-model requires the OneJev decision model")
-        base_url = (os.getenv("QEV_BASE_URL") or os.getenv("TYPESAFE_BASE_URL") or
-                    "http://localhost:8000")
-        try:
-            with urllib.request.urlopen(base_url.rstrip("/") + "/health", timeout=5) as response:
-                model_server = json.load(response)
-        except (OSError, ValueError) as exc:
-            parser.error(f"could not check OneJev server: {exc}")
-        reported = model_server.get("model") if isinstance(model_server, dict) else None
-        if reported != args.expected_model:
-            parser.error(f"OneJev server reports {reported!r}, expected {args.expected_model!r}")
     selected = [case for case in CASES if args.case is None or case.id in args.case]
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
@@ -323,7 +306,6 @@ def main() -> None:
         "cases": [asdict(c) for c in selected],
         "hashes": hashes, "context": str(args.context) if args.context else None,
         "history_frames": args.history_frames, "completion_votes": args.completion_votes,
-        "model_server": model_server,
         "hold_frames": HOLD, "release_frames": RELEASE, "time_limit_seconds": SECONDS,
         "recognition_window": RECOGNITION_WINDOW,
     }, indent=2) + "\n")
