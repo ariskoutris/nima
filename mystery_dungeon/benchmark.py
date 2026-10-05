@@ -11,7 +11,7 @@ import zlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from emulator import Frame, GbaEmulator, scene_distance
+from emulator import Frame, GbaEmulator
 from mystery_dungeon.agent import Agent, DecisionModel, load_decision_model
 from mystery_dungeon.session import GameplaySession
 
@@ -122,12 +122,6 @@ def colors(frame: Frame) -> tuple[int, int]:
         forest += red < 90 and 40 <= green <= 200 and 45 <= blue <= 180
         water += red < 35 and green > 130 and blue > 210
     return forest, water
-
-
-def has_message_panel(frame: Frame) -> bool:
-    offset = (145 * frame.width + 10) * 4
-    red, green, blue = frame.rgba[offset:offset + 3]
-    return blue > 200 and green > red
 
 
 class Grader:
@@ -242,16 +236,6 @@ def validate_fixtures(game: GbaEmulator, source: Seed, seeds: dict[str, Seed], r
     assert not Grader(refs, game.system_ram()).observe(game.screenshot(), game.system_ram(), "mailbox")[0]
 
 
-def is_cycle(recent: list[Frame]) -> bool:
-    for length in range(2, 7):
-        if len(recent) >= 3 * length and all(
-            scene_distance(recent[-i], recent[-i - length]) < 3
-            for i in range(1, 2 * length + 1)
-        ):
-            return True
-    return False
-
-
 RECOGNITION_WINDOW = 3
 
 
@@ -267,16 +251,11 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
     agent = Agent(model, output, model_spec, history_frames, completion_votes, context,
                   {"kind": "benchmark_case", "case": case.id, "start": case.start,
                    "criterion": case.criterion, "action_limit": case.limit,
-                   "hold_frames": HOLD, "release_frames": RELEASE})
+                   "hold_frames": HOLD, "release_frames": RELEASE},
+                  detect_cycles=True, transition_wait=True)
     agent.set_goal(case.goal)
-    session = GameplaySession(game, agent, output, HOLD, RELEASE)
+    session = GameplaySession(game, output, HOLD, RELEASE)
     session.capture()
-    recent_frames: list[Frame] = []
-    repeat_button = None
-    repeat_count = 0
-    pending_loop = None
-    transition_waits = 0
-    low_change = 0
     events: list[str] = []
     started = time.monotonic()
     reason = "budget"
@@ -298,51 +277,22 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
         if reached_at is not None and decisions - reached_at >= RECOGNITION_WINDOW:
             reason = "recognition_window"
             break
-        try:
-            decision, stop = session.decide()
-        except Exception as exc:
-            reason, error = "model_error", f"{type(exc).__name__}: {exc}"
-            agent.failure(agent.decision_context(), session.current_name, exc)
+        turn = agent.step(session, deadline=started + SECONDS)
+        if turn.status == "model_error":
+            reason, error = "model_error", turn.error
             break
         decisions += 1
-        if time.monotonic() - started >= SECONDS:
-            agent.discard(decision, session.current_name, "time_limit")
+        if turn.status == "time_limit":
             reason = "time_limit"
             break
-        if stop:
-            session.stop(decision)
+        if turn.status == "completed":
             reason = "recognized" if reached_at is not None else "false_completion"
             break
-        if pending_loop is not None:
-            agent.discard(decision, session.current_name, pending_loop)
-            checkpoint = Seed(game.save_state(), game.save_ram())
-            after_wait = session.apply("WAIT", "transition_wait", frames=60)
-            agent.transition_wait(session.current_name)
-            if scene_distance(frame, after_wait) >= 10:
-                transition_waits += 1
-                recent_frames.clear()
-                repeat_button = None
-                repeat_count = 0
-                pending_loop = None
-                continue
-            restore(game, checkpoint)
-            session.capture()
-            agent.clear_short_memory()
-            reason = pending_loop
+        if turn.status in ("stalled", "loop"):
+            reason = turn.status
             break
-        button = decision.choice
-        after = session.apply(button, "agent", decision)
-        actions += 1
-        distance = scene_distance(frame, after)
-        low_change += distance < 10
-        repeat_count = repeat_count + 1 if button == repeat_button and distance < 10 else 1
-        repeat_button = button
-        recent_frames.append(after)
-        stalled = repeat_count >= 8
-        if (stalled or is_cycle(recent_frames)) and not has_message_panel(after):
-            pending_loop = "stalled" if stalled else "loop"
-            agent.record({"event": "suspected_loop", "reason": pending_loop,
-                          "screenshot": session.current_name, "button": button})
+        if turn.status == "acted":
+            actions += 1
     final = session.current
     final.save_png(output / "frames/final.png")
     (output / "states").mkdir(exist_ok=True)
@@ -358,8 +308,8 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
               "false_completion": reason == "false_completion", "success": reached,
               "reached_at": reached_at, "stop_reason": reason,
               "steps": actions, "decisions": decisions,
-              "low_visual_change_actions": low_change,
-              "transition_waits": transition_waits, "events": events,
+              "low_visual_change_actions": agent.low_visual_change_actions,
+              "transition_waits": agent.transition_waits, "events": events,
               "seconds": round(time.monotonic() - started, 2), "error": error}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result

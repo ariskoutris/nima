@@ -43,18 +43,19 @@ def test_history_and_journal_have_one_owner(tmp_path):
     model = FakeDecisionModel()
     agent = Agent(model, tmp_path, "fake:Model", history_frames=2)
     agent.set_goal("Find exit")
-    session = GameplaySession(FakeEmulator(), agent, tmp_path)
+    session = GameplaySession(FakeEmulator(), tmp_path)
     session.capture()
     for button in ("A", "RIGHT"):
-        session.apply(button, "manual")
-    decision, stop = session.decide()
-    assert not stop
+        agent.manual_step(session, button)
+    turn = agent.step(session)
+    assert turn.status == "acted"
     assert [step.action for step in model.calls[-1][3]] == ["A", "RIGHT"]
-    assert [step.screenshot for step in decision.history] == [
+    assert [step.screenshot for step in turn.decision.history] == [
         "frames/000000.png", "frames/000001.png"]
-    assert all((tmp_path / step.screenshot).is_file() for step in decision.history)
+    assert all((tmp_path / step.screenshot).is_file() for step in turn.decision.history)
     rows = [json.loads(line) for line in (tmp_path / "decisions.jsonl").read_text().splitlines()]
-    assert [row["source"] for row in rows if row["event"] == "action"] == ["manual", "manual"]
+    assert [row["source"] for row in rows if row["event"] == "action"] == [
+        "manual", "manual", "agent"]
     agent.set_goal("Talk")
     assert not agent.history
     assert agent.goal == "Talk"
@@ -78,22 +79,17 @@ def test_completion_stops_before_input_and_two_votes_continue(tmp_path):
     game = FakeEmulator()
     agent = Agent(FakeDecisionModel((0.6,)), tmp_path, "fake:Model")
     agent.set_goal("Done")
-    session = GameplaySession(game, agent, tmp_path)
+    session = GameplaySession(game, tmp_path)
     session.capture()
-    decision, stop = session.decide()
-    assert stop
-    session.stop(decision)
+    assert agent.step(session).status == "completed"
     assert game.presses == []
 
     agent = Agent(FakeDecisionModel((0.6, 0.6)), tmp_path, "fake:Model", completion_votes=2)
     agent.set_goal("Done")
-    session = GameplaySession(game, agent, tmp_path)
+    session = GameplaySession(game, tmp_path)
     session.capture()
-    first, stop = session.decide()
-    assert not stop
-    session.apply(first.choice, "agent", first)
-    _, stop = session.decide()
-    assert stop
+    assert agent.step(session).status == "acted"
+    assert agent.step(session).status == "completed"
     assert len(game.presses) == 2
 
 
@@ -115,13 +111,10 @@ def test_zero_history_and_half_completion_do_not_stop(tmp_path):
     model = FakeDecisionModel((0.5, 0.5))
     agent = Agent(model, tmp_path, "fake:Model", history_frames=0)
     agent.set_goal("Find exit")
-    session = GameplaySession(FakeEmulator(), agent, tmp_path)
+    session = GameplaySession(FakeEmulator(), tmp_path)
     session.capture()
-    first, stop = session.decide()
-    assert not stop
-    session.apply(first.choice, "agent", first)
-    _, stop = session.decide()
-    assert not stop
+    assert agent.step(session).status == "acted"
+    assert agent.step(session).status == "acted"
     assert not model.calls[-1][3]
     agent.transition_wait(session.current_name)
     assert agent.streak == 0

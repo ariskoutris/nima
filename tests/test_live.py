@@ -1,4 +1,4 @@
-"""Live controls reject stale decisions and record manual actions."""
+"""Live controls queue goal changes and record manual actions."""
 
 import json
 import threading
@@ -124,7 +124,7 @@ def test_stalled_eighth_action_gets_completion_check(start_run):
     with run.condition:
         assert run.condition.wait_for(lambda: bool(run.notice), 2)
     assert len(run.history) == 8
-    assert "repeated" in run.notice
+    assert "stalled" in run.notice
     assert len(model.calls) == 9
     rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
     actions = [row for row in rows if row["event"] == "action"]
@@ -136,7 +136,7 @@ def test_stalled_eighth_action_gets_completion_check(start_run):
     assert discarded[-1]["history"][0]["action"] == "DOWN"
 
 
-def test_changed_goal_discards_inflight_answer(start_run):
+def test_changed_goal_takes_effect_after_current_action(start_run):
     entered, release = threading.Event(), threading.Event()
 
     class Blocking(FakeDecisionModel):
@@ -154,11 +154,62 @@ def test_changed_goal_discards_inflight_answer(start_run):
     release.set()
     with run.condition:
         assert run.condition.wait_for(lambda: len(run.history) == 1, 2)
+    assert run.history[0]["goal"] == "Old"
+    run.control({"command": "step"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: len(run.history) == 2, 2)
     assert [call[0] for call in model.calls] == ["Old", "New"]
-    assert run.history[0]["goal"] == "New"
+    assert run.history[-1]["goal"] == "New"
+    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
+    assert not any(row["event"] == "discarded_decision" for row in rows)
 
 
-def test_changed_goal_ignores_inflight_error(start_run):
+def test_running_agent_applies_queued_goal_on_next_decision(start_run):
+    entered, release = threading.Event(), threading.Event()
+
+    class Blocking(FakeDecisionModel):
+        def score(self, goal, guidance, frame, history, options):
+            if goal == "Old":
+                entered.set()
+                assert release.wait(2)
+            self.complete = float(goal == "New")
+            return super().score(goal, guidance, frame, history, options)
+
+    model = Blocking()
+    run = start_run(model)
+    run.control({"goal": "Old", "command": "start"})
+    assert entered.wait(2)
+    run.control({"goal": "New"})
+    release.set()
+    with run.condition:
+        assert run.condition.wait_for(lambda: run.notice == "Completed: New", 2)
+    assert [call[0] for call in model.calls] == ["Old", "New"]
+    assert [row["goal"] for row in run.history] == ["Old"]
+
+
+def test_pause_during_inference_prevents_press(start_run):
+    entered, release = threading.Event(), threading.Event()
+
+    class Blocking(FakeDecisionModel):
+        def score(self, goal, guidance, frame, history, options):
+            entered.set()
+            assert release.wait(2)
+            return super().score(goal, guidance, frame, history, options)
+
+    run = start_run(Blocking())
+    run.control({"goal": "Move", "command": "start"})
+    assert entered.wait(2)
+    run.control({"command": "pause"})
+    release.set()
+    with run.condition:
+        assert run.condition.wait_for(lambda: not run.busy, 2)
+    assert not run.history
+    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
+    assert rows[-1]["event"] == "discarded_decision"
+    assert rows[-1]["reason"] == "paused"
+
+
+def test_changed_goal_retries_after_current_model_error(start_run):
     entered, release = threading.Event(), threading.Event()
 
     class FailingOldGoal(FakeDecisionModel):
@@ -179,5 +230,5 @@ def test_changed_goal_ignores_inflight_error(start_run):
     assert run.history[0]["goal"] == "New"
     assert not run.error
     rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    discarded = [row for row in rows if row["event"] == "discarded_error"]
-    assert discarded[0]["goal"] == "Old"
+    errors = [row for row in rows if row["event"] == "model_error"]
+    assert errors[0]["goal"] == "Old"

@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from emulator import BUTTONS, GbaEmulator, scene_distance
+from emulator import BUTTONS, GbaEmulator
 from mystery_dungeon.agent import Agent, load_decision_model
 from mystery_dungeon.session import GameplaySession
 
@@ -32,6 +32,9 @@ class LiveRun:
                             "release_frames": release_frames})
         self.hold_frames, self.release_frames = hold_frames, release_frames
         self.condition = threading.Condition()
+        self.pending_goal = ""
+        self.pending_steering = ""
+        self.pending_history = True
         self.running = False
         self.single_step = False
         self.manual: deque[str] = deque()
@@ -49,15 +52,15 @@ class LiveRun:
 
     @property
     def goal(self) -> str:
-        return self.agent.goal
+        return self.pending_goal
 
     @property
     def steering(self) -> str:
-        return self.agent.steering
+        return self.pending_steering
 
     @property
     def use_recent(self) -> bool:
-        return self.agent.use_recent
+        return self.pending_history
 
     @property
     def history(self):
@@ -102,13 +105,13 @@ class LiveRun:
             if command in ("start", "step", "manual", "reset"):
                 self.error = ""
                 self.notice = ""
-            changed = self.agent.set_goal(goal)
-            changed |= self.agent.set_steering(data.get("steering", self.steering))
-            changed |= self.agent.set_history_enabled(data.get("use_recent", self.use_recent))
+            steering = data.get("steering", self.steering).strip()
+            history = data.get("use_recent", self.use_recent)
+            changed = (goal, steering, history) != (self.goal, self.steering, self.use_recent)
+            self.pending_goal, self.pending_steering, self.pending_history = goal, steering, history
             if changed:
                 self.notice = ""
             if command in ("start", "step"):
-                self.agent.resume()
                 self.running = True
                 self.single_step = command == "step"
             elif command == "pause":
@@ -123,8 +126,18 @@ class LiveRun:
                 self.single_step = False
                 self.manual.clear()
                 self.reset_requested = True
-                self.agent.generation += 1
             self.condition.notify_all()
+
+    def _cancel_reason(self) -> str | None:
+        if self.stopping:
+            return "stopping"
+        if self.reset_requested:
+            return "reset_requested"
+        if self.manual:
+            return "manual_control"
+        if not self.running:
+            return "paused"
+        return None
 
     def run(self) -> None:
         try:
@@ -141,7 +154,7 @@ class LiveRun:
             initial_state = self.state.read_bytes()
             emulator.load_state(initial_state)
             emulator.step()
-            session = GameplaySession(emulator, self.agent, self.output,
+            session = GameplaySession(emulator, self.output,
                                       self.hold_frames, self.release_frames)
             session.frame_count = 1
             session.capture()
@@ -153,24 +166,12 @@ class LiveRun:
                 self.loaded = True
                 self.condition.notify_all()
 
-            step_number = 0
-            repeated_button = None
-            repeated_count = 0
-            repeat_start = None
-            pending_stall = None
-            state_generation = self.agent.generation
             while True:
                 with self.condition:
                     self.busy = False
                     self.condition.wait_for(lambda: self.stopping or self.reset_requested or self.manual or self.running)
                     if self.stopping:
                         return
-                    if state_generation != self.agent.generation:
-                        repeated_button = None
-                        repeated_count = 0
-                        repeat_start = None
-                        pending_stall = None
-                        state_generation = self.agent.generation
                     if self.reset_requested:
                         self.reset_requested = False
                         self.resetting = True
@@ -184,6 +185,7 @@ class LiveRun:
                         session.capture()
                         session.save_latest()
                         self.agent.reset(session.current_name)
+                        session.action_count = 0
                         self.frame = 1
                         self.screen = session.current.png_bytes()
                         self.screen_revision += 1
@@ -193,100 +195,56 @@ class LiveRun:
                         self.busy = False
                         self.error = ""
                         self.condition.notify_all()
-                        step_number = 0
-                        repeated_button = None
-                        repeated_count = 0
-                        repeat_start = None
-                        pending_stall = None
                         continue
+                    self.agent.set_goal(self.pending_goal)
+                    self.agent.set_steering(self.pending_steering)
+                    self.agent.set_history_enabled(self.pending_history)
                     manual = self.manual.popleft() if self.manual else None
-                    context = self.agent.decision_context()
-                    generation = context.generation
+                    if manual is None:
+                        self.agent.resume()
                     self.busy = True
 
-                decision = None
-                if manual is None:
-                    try:
-                        decision, stop = session.decide(context)
-                    except Exception as exc:
-                        with self.condition:
-                            stale = (generation != self.agent.generation or not self.running or
-                                     self.stopping or self.reset_requested)
-                            if not stale:
-                                self.error = f"DecisionModel failed: {type(exc).__name__}: {exc}"
-                                self.running = False
-                                self.single_step = False
-                            self.agent.failure(context, session.current_name, exc, stale)
-                            self.busy = False
-                            self.condition.notify_all()
-                        continue
-                else:
-                    stop = False
+                if manual is not None:
+                    with self.condition:
+                        self.agent.manual_step(session, manual)
+                        session.save_latest()
+                        self.frame = session.frame_count
+                        self.screen = session.current.png_bytes()
+                        self.screen_revision += 1
+                        self.busy = False
+                        self.condition.notify_all()
+                    continue
 
+                turn = self.agent.step(session, action_lock=self.condition,
+                                       cancel_reason=self._cancel_reason)
                 with self.condition:
-                    if manual is None and (generation != self.agent.generation or
-                                           not self.running or self.stopping or self.reset_requested):
-                        self.agent.discard(decision, session.current_name, "stale_control")
-                        self.busy = False
-                        continue
-                    if stop:
-                        session.stop(decision)
-                        self.running = False
-                        self.single_step = False
-                        self.busy = False
-                        self.notice = f"Completed: {self.goal}"
-                        self.condition.notify_all()
-                        continue
-                    if pending_stall is not None and manual is None:
-                        self.agent.discard(decision, session.current_name, "stalled")
-                        self.running = False
-                        self.single_step = False
-                        self.busy = False
-                        self.notice = f"Paused: {pending_stall} repeated without visible progress. Revise the direction."
-                        self.agent.record({"event": "stalled", "goal": self.goal,
-                                           "screenshot": session.current_name,
-                                           "completion_scores": dict(decision.completion_scores)})
-                        pending_stall = None
-                        self.condition.notify_all()
-                        continue
-                    button = manual if manual is not None else decision.choice
-                    before = session.current
-                    if manual is None:
-                        if button != repeated_button:
-                            repeated_button = button
-                            repeated_count = 0
-                            repeat_start = before
-                        repeated_count += 1
-                    else:
-                        repeated_button = None
-                        repeated_count = 0
-                        repeat_start = None
-                        pending_stall = None
-                    after = session.apply(button, "manual" if manual is not None else "agent",
-                                          decision, after_details=lambda next_frame: {
-                                              "step": step_number + 1,
-                                              "stalled": (manual is None and repeated_count >= 8 and
-                                                          repeat_start is not None and
-                                                          scene_distance(repeat_start, next_frame) < 10)})
-                    session.save_latest()
-                    stalled = session.last_row["stalled"]
-                    if repeated_count >= 8:
-                        repeated_button = None
-                        repeated_count = 0
-                        repeat_start = None
-                    pending_stall = button if stalled else None
-                    if stalled:
-                        self.agent.record({"event": "suspected_stall", "goal": self.goal,
-                                           "screenshot": session.current_name, "button": button})
-                    self.frame = session.frame_count
-                    self.screen = after.png_bytes()
-                    self.screen_revision += 1
                     self.busy = False
-                    if self.single_step and not stalled:
+                    if turn.status == "cancelled":
+                        self.condition.notify_all()
+                        continue
+                    if turn.status in ("acted", "transition"):
+                        session.save_latest()
+                        self.frame = session.frame_count
+                        self.screen = session.current.png_bytes()
+                        self.screen_revision += 1
+                        if self.single_step and not turn.needs_followup:
+                            self.running = False
+                            self.single_step = False
+                    elif turn.status == "completed":
+                        if self.pending_goal == self.agent.goal:
+                            self.running = False
+                            self.single_step = False
+                            self.notice = f"Completed: {self.agent.goal}"
+                    elif turn.status in ("stalled", "loop"):
+                        if self.pending_goal == self.agent.goal:
+                            self.running = False
+                            self.single_step = False
+                            self.notice = f"Paused: {turn.status} without visible progress. Revise the direction."
+                    elif turn.status == "model_error" and self.pending_goal == self.agent.goal:
+                        self.error = f"DecisionModel failed: {turn.error}"
                         self.running = False
                         self.single_step = False
                     self.condition.notify_all()
-                    step_number += 1
 
 
 def handler_for(run: LiveRun):

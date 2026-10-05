@@ -39,19 +39,23 @@ def main(argv: list[str] | None = None) -> None:
     with GbaEmulator(args.rom, args.core) as emulator:
         emulator.load_state(args.state.read_bytes())
         emulator.step()
-        session = GameplaySession(emulator, agent, args.output,
+        session = GameplaySession(emulator, args.output,
                                   args.hold_frames, args.release_frames)
         session.frame_count = 1
         session.capture()
         for index in range(args.steps):
-            decision, stop = session.decide()
-            if stop:
-                session.stop(decision)
+            turn = agent.step(session)
+            if turn.status == "completed":
                 print(f"{index}: goal complete")
                 break
-            button = decision.choice
-            session.apply(button, "agent", decision)
-            print(f"{index}: {button} ({decision.latency_ms} ms)")
+            if turn.status == "model_error":
+                raise RuntimeError(turn.error)
+            if turn.status in ("stalled", "loop"):
+                agent.record({"event": "run_stop", "reason": turn.status,
+                              "screenshot": session.current_name})
+                print(f"{index}: {turn.status}")
+                break
+            print(f"{index}: {turn.button} ({turn.decision.latency_ms} ms)")
         else:
             agent.record({"event": "run_stop", "reason": "step_limit",
                           "screenshot": session.current_name})
