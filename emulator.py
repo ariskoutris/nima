@@ -43,6 +43,20 @@ class Frame:
         Path(path).write_bytes(self.png_bytes())
 
 
+def scene_distance(before: Frame, after: Frame) -> float:
+    """Mean RGB change at a sparse grid of screen pixels (0–255 scale)."""
+    if (before.width, before.height) != (after.width, after.height):
+        return 255.0
+    total = count = 0
+    for y in range(4, before.height, 8):
+        for x in range(4, before.width, 8):
+            offset = (y * before.width + x) * 4
+            total += sum(abs(a - b) for a, b in zip(
+                before.rgba[offset:offset + 3], after.rgba[offset:offset + 3]))
+            count += 3
+    return total / count if count else 255.0
+
+
 class GbaEmulator:
     """Run a GBA ROM in mGBA, one controlled batch of frames at a time."""
 

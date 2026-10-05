@@ -12,20 +12,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from emulator import BUTTONS, GbaEmulator
-from mystery_dungeon.play import choose, load_classifier
+from emulator import BUTTONS, GbaEmulator, scene_distance
+from mystery_dungeon.play import choose, load_classifier, with_context
 
 
 class LiveRun:
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 classifier_spec: str, hold_frames: int, release_frames: int):
+                 classifier_spec: str, hold_frames: int, release_frames: int, context: str = ""):
         self.rom, self.core, self.state, self.output = rom, core, state, output
         self.classifier_spec = classifier_spec
-        self.classifier = load_classifier(classifier_spec)
+        self.classifier = with_context(load_classifier(classifier_spec), context)
         self.hold_frames, self.release_frames = hold_frames, release_frames
         self.condition = threading.Condition()
         self.goal = ""
         self.steering = ""
+        self.use_recent = True
         self.running = False
         self.single_step = False
         self.manual: deque[str] = deque()
@@ -41,6 +42,7 @@ class LiveRun:
         self.loaded = False
         self.busy = False
         self.error = ""
+        self.notice = ""
         self.stopping = False
 
     def snapshot(self) -> dict:
@@ -48,19 +50,22 @@ class LiveRun:
             status = ("error" if self.error else "loading" if not self.loaded else
                       "resetting" if self.reset_requested or self.resetting else
                       "thinking" if self.busy else "running" if self.running else "paused")
-            return {"status": status, "error": self.error, "goal": self.goal,
-                    "steering": self.steering, "frame": self.frame,
+            return {"status": status, "error": self.error, "notice": self.notice,
+                    "goal": self.goal,
+                    "steering": self.steering, "use_recent": self.use_recent, "frame": self.frame,
                     "screen_revision": self.screen_revision, "reset_count": self.reset_count,
                     "history": list(reversed(self.history)),
                     "classifier": self.classifier_spec,
                     "output": str(self.output)}
 
     def control(self, data: dict) -> None:
-        if not isinstance(data, dict) or set(data) - {"goal", "steering", "command", "button"}:
+        if not isinstance(data, dict) or set(data) - {"goal", "steering", "use_recent", "command", "button"}:
             raise ValueError("unknown control field")
         for key in ("goal", "steering"):
             if key in data and (not isinstance(data[key], str) or len(data[key]) > 1000):
                 raise ValueError(f"{key} must be text of at most 1000 characters")
+        if "use_recent" in data and type(data["use_recent"]) is not bool:
+            raise ValueError("use_recent must be a boolean")
         command = data.get("command")
         if command not in (None, "start", "pause", "step", "manual", "reset"):
             raise ValueError("unknown command")
@@ -79,8 +84,16 @@ class LiveRun:
                 raise ValueError("set a goal before running")
             if command in ("start", "step", "manual", "reset"):
                 self.error = ""
+                self.notice = ""
+            steering = data.get("steering", self.steering).strip()
+            if goal != self.goal or steering != self.steering:
+                self.recent.clear()
+                self.notice = ""
             self.goal = goal
-            self.steering = data.get("steering", self.steering).strip()
+            self.steering = steering
+            self.use_recent = data.get("use_recent", self.use_recent)
+            if not self.use_recent:
+                self.recent.clear()
             if command == "start":
                 self.running = True
                 self.single_step = False
@@ -129,6 +142,10 @@ class LiveRun:
 
             index = 0
             step_number = 0
+            repeated_button = None
+            repeated_count = 0
+            repeat_start = None
+            repeat_revision = None
             while True:
                 with self.condition:
                     self.busy = False
@@ -144,6 +161,7 @@ class LiveRun:
                         reset = False
                         manual = self.manual.popleft() if self.manual else None
                         goal, steering = self.goal, self.steering
+                        use_recent = self.use_recent
                         revision = self.revision
                         frame_before = self.frame
                         screenshot = f"{index:06d}.png"
@@ -175,11 +193,15 @@ class LiveRun:
                         self.error = ""
                         self.condition.notify_all()
                     step_number = 0
+                    repeated_button = None
+                    repeated_count = 0
+                    repeat_start = None
                     continue
                 if manual is None:
                     prompt = goal + ("\nOperator guidance: " + steering if steering else "")
                     try:
-                        decision = choose(self.classifier, self.output / screenshot, prompt, self.recent)
+                        decision = choose(self.classifier, self.output / screenshot, prompt,
+                                          self.recent if use_recent else [])
                     except Exception as exc:
                         with self.condition:
                             self.error = f"Classifier failed: {type(exc).__name__}: {exc}"
@@ -198,9 +220,27 @@ class LiveRun:
                     source = "manual"
 
                 button = decision["choice"]
+                if manual is None:
+                    if button != repeated_button or revision != repeat_revision:
+                        repeated_button = button
+                        repeated_count = 0
+                        repeat_start = emulator.screenshot()
+                        repeat_revision = revision
+                    repeated_count += 1
+                else:
+                    repeated_button = None
+                    repeated_count = 0
+                    repeat_start = None
                 emulator.step(self.hold_frames, () if button == "WAIT" else (button,))
                 emulator.step(self.release_frames)
-                after = emulator.screenshot().png_bytes()
+                after_frame = emulator.screenshot()
+                after = after_frame.png_bytes()
+                stalled = (manual is None and repeated_count >= 8 and repeat_start is not None
+                           and scene_distance(repeat_start, after_frame) < 10)
+                if repeated_count >= 8:
+                    repeated_button = None
+                    repeated_count = 0
+                    repeat_start = None
                 next_screenshot = f"{index + 1:06d}.png"
                 (self.output / next_screenshot).write_bytes(after)
                 checkpoint = self.output / "latest.state.tmp"
@@ -211,7 +251,7 @@ class LiveRun:
                        "frame_before": frame_before,
                        "frame_after": frame_before + self.hold_frames + self.release_frames,
                        "screenshot": screenshot, "goal": goal, "steering": steering,
-                       "source": source, **decision}
+                       "source": source, "stalled": stalled, **decision}
                 log.write(json.dumps(row) + "\n")
                 log.flush()
                 with self.condition:
@@ -219,12 +259,16 @@ class LiveRun:
                     self.screen = after
                     self.screen_revision += 1
                     self.history.append(row)
-                    self.recent.append(button)
-                    self.recent = self.recent[-4:]
+                    if self.use_recent and (goal, steering) == (self.goal, self.steering):
+                        self.recent.append(button)
                     self.busy = False
                     if self.single_step:
                         self.running = False
                         self.single_step = False
+                    if stalled:
+                        self.running = False
+                        self.single_step = False
+                        self.notice = f"Paused: {button} repeated without visible progress. Revise the direction."
                     self.condition.notify_all()
                 index += 1
                 step_number += 1
@@ -294,6 +338,7 @@ def main() -> None:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--classifier", default="mystery_dungeon.classifiers.onejev:classify")
+    parser.add_argument("--context", type=Path, help="general controls supplied on every decision")
     parser.add_argument("--url", help="OneJev server URL")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=8)
@@ -305,7 +350,7 @@ def main() -> None:
         os.environ["QEV_BASE_URL"] = args.url
     output = args.output or Path("runs") / datetime.now().strftime("%Y%m%d-%H%M%S")
     run = LiveRun(args.rom, args.core, args.state, output, args.classifier,
-                  args.hold_frames, args.release_frames)
+                  args.hold_frames, args.release_frames, args.context.read_text() if args.context else "")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
     threading.Thread(target=run.run, daemon=True).start()
     print(f"Live view: http://127.0.0.1:{server.server_port}", flush=True)

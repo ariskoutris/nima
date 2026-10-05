@@ -40,6 +40,8 @@
     textarea:focus { border-color: #8de3b0; box-shadow: 0 0 0 3px #8de3b01e; }
     textarea::placeholder { color: #6e8581; }
     #steering { min-height: 70px; }
+    .recent-toggle { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: .84rem; }
+    .recent-toggle input { accent-color: #9be8ba; }
     .hint { margin: 5px 0 0; color: #859a97; font-size: .76rem; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
     .button { border: 1px solid #405450; border-radius: 8px; padding: 9px 14px; background: #223239; color: #e3ebe6; font-weight: 700; }
@@ -100,6 +102,7 @@
           <label for="steering">Steering note</label>
           <textarea id="steering" maxlength="1000" placeholder="e.g. Open the menu first; avoid entering a dungeon yet"></textarea>
           <p class="hint">The note stays active until you clear it.</p>
+          <label class="recent-toggle" for="use-recent"><input id="use-recent" type="checkbox" checked>Pass recent buttons to custom classifiers</label>
           <div class="actions">
             <button class="button primary" type="button" data-command="start">Start / resume</button>
             <button class="button" type="button" data-command="pause">Pause</button>
@@ -131,11 +134,12 @@
   </div>
   <script>
     const $ = id => document.getElementById(id);
-    const goal = $('goal'), steering = $('steering');
+    const goal = $('goal'), steering = $('steering'), useRecent = $('use-recent');
     let screenRevision = 0, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
-    let goalDirty = false, steeringDirty = false, sending = false;
+    let goalDirty = false, steeringDirty = false, recentDirty = false, sending = false;
     goal.addEventListener('input', () => goalDirty = true);
     steering.addEventListener('input', () => steeringDirty = true);
+    useRecent.addEventListener('change', () => { recentDirty = true; send(); });
 
     for (const button of ['UP', 'LEFT', 'DOWN', 'RIGHT', 'A', 'B', 'START', 'SELECT', 'L', 'R', 'WAIT']) {
       const element = document.createElement('button');
@@ -152,22 +156,24 @@
     async function send(command, button) {
       if (sending) return;
       sending = true;
+      useRecent.disabled = true;
       $('feedback').textContent = '';
       try {
         const response = await fetch('/api/control', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({goal: goal.value, steering: steering.value, ...(command && {command}), ...(button && {button})})
+          body: JSON.stringify({goal: goal.value, steering: steering.value, use_recent: useRecent.checked,
+                                ...(command && {command}), ...(button && {button})})
         });
         const state = await response.json();
         if (!response.ok) throw new Error(state.error || 'Control failed');
-        goalDirty = steeringDirty = false;
+        goalDirty = steeringDirty = recentDirty = false;
         render(state);
         $('feedback').style.color = '#a9d9b8';
-        $('feedback').textContent = command === 'manual' ? `${button} sent` : command === 'pause' ? 'Paused' : command === 'step' ? 'One decision queued' : command === 'start' ? 'Agent running' : command === 'reset' ? 'Resetting game…' : 'Direction saved';
+        $('feedback').textContent = command === 'manual' ? `${button} sent` : command === 'pause' ? 'Paused' : command === 'step' ? 'One decision queued' : command === 'start' ? 'Agent running' : command === 'reset' ? 'Resetting game…' : 'Settings saved';
       } catch (error) {
         $('feedback').style.color = '#ffb9ad';
         $('feedback').textContent = error.message;
-      } finally { sending = false; }
+      } finally { sending = false; useRecent.disabled = false; }
     }
 
     function render(state) {
@@ -178,7 +184,9 @@
       $('output').textContent = `Classifier: ${state.classifier} · Session: ${state.output}`;
       if (!goalDirty) goal.value = state.goal;
       if (!steeringDirty) steering.value = state.steering;
+      if (!recentDirty) useRecent.checked = state.use_recent;
       if (state.error) { $('feedback').style.color = '#ffb9ad'; $('feedback').textContent = state.error; }
+      else if (state.notice) { $('feedback').style.color = '#ebcf8c'; $('feedback').textContent = state.notice; }
       if (state.screen_revision && state.screen_revision !== screenRevision) {
         screenRevision = state.screen_revision;
         $('screen').src = `/api/screen?revision=${screenRevision}`;
@@ -213,7 +221,7 @@
       $('choice').textContent = item.choice;
       $('choice').className = `choice ${item.source === 'manual' ? 'manual-choice' : ''}`;
       $('decision-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.latency_ms} ms · frame ${item.frame_before}`;
-      $('choice-detail').textContent = item.source === 'manual' ? 'Manual move' : (item.steering ? `Goal: ${item.goal} · Steering: ${item.steering}` : `Goal: ${item.goal}`);
+      $('choice-detail').textContent = item.stalled ? `No visible progress after repeated ${item.choice}; agent paused.` : item.source === 'manual' ? 'Manual move' : (item.steering ? `Goal: ${item.goal} · Steering: ${item.steering}` : `Goal: ${item.goal}`);
       $('observation').src = `/api/observation/${item.index}`;
       $('observation').hidden = false;
       $('observation-label').hidden = false;
