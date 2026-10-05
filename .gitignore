@@ -9,8 +9,9 @@
 .venv/
 __pycache__/
 
-# Local planning notes
-docs/
+# Local reference material
+/docs/manuals/
+/docs/pilot_plan.md
 
 # Mac OS
 .DS_Store
