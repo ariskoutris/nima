@@ -1,4 +1,4 @@
-"""Local browser view and controls for a live screenshot classifier run."""
+"""Local browser view and controls for a live screenshot model run."""
 
 from __future__ import annotations
 
@@ -13,37 +13,55 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from emulator import BUTTONS, GbaEmulator, scene_distance
-from mystery_dungeon.play import choose, load_classifier, with_context
+from mystery_dungeon.agent import Agent, load_decision_model
+from mystery_dungeon.session import GameplaySession
 
 
 class LiveRun:
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 classifier_spec: str, hold_frames: int, release_frames: int, context: str = ""):
+                 model_spec: str, hold_frames: int, release_frames: int, context: str = "",
+                 history_frames: int = 1, completion_votes: int = 1):
+        if output.exists():
+            raise FileExistsError(f"session output already exists: {output}")
         self.rom, self.core, self.state, self.output = rom, core, state, output
-        self.classifier_spec = classifier_spec
-        self.classifier = with_context(load_classifier(classifier_spec), context)
+        self.model_spec = model_spec
+        self.agent = Agent(load_decision_model(model_spec), output, model_spec,
+                           history_frames, completion_votes, context,
+                           {"kind": "live", "rom": str(rom), "core": str(core),
+                            "initial_state": str(state), "hold_frames": hold_frames,
+                            "release_frames": release_frames})
         self.hold_frames, self.release_frames = hold_frames, release_frames
         self.condition = threading.Condition()
-        self.goal = ""
-        self.steering = ""
-        self.use_recent = True
         self.running = False
         self.single_step = False
         self.manual: deque[str] = deque()
         self.reset_requested = False
         self.resetting = False
         self.reset_count = 0
-        self.revision = 0
         self.screen_revision = 0
         self.screen = b""
         self.frame = 0
-        self.history: deque[dict] = deque(maxlen=40)
-        self.recent: list[str] = []
         self.loaded = False
         self.busy = False
         self.error = ""
         self.notice = ""
         self.stopping = False
+
+    @property
+    def goal(self) -> str:
+        return self.agent.goal
+
+    @property
+    def steering(self) -> str:
+        return self.agent.steering
+
+    @property
+    def use_recent(self) -> bool:
+        return self.agent.use_recent
+
+    @property
+    def history(self):
+        return self.agent.events
 
     def snapshot(self) -> dict:
         with self.condition:
@@ -51,12 +69,11 @@ class LiveRun:
                       "resetting" if self.reset_requested or self.resetting else
                       "thinking" if self.busy else "running" if self.running else "paused")
             return {"status": status, "error": self.error, "notice": self.notice,
-                    "goal": self.goal,
-                    "steering": self.steering, "use_recent": self.use_recent, "frame": self.frame,
+                    "goal": self.goal, "steering": self.steering,
+                    "use_recent": self.use_recent, "frame": self.frame,
                     "screen_revision": self.screen_revision, "reset_count": self.reset_count,
                     "history": list(reversed(self.history)),
-                    "classifier": self.classifier_spec,
-                    "output": str(self.output)}
+                    "decision_model": self.model_spec, "output": str(self.output)}
 
     def control(self, data: dict) -> None:
         if not isinstance(data, dict) or set(data) - {"goal", "steering", "use_recent", "command", "button"}:
@@ -85,21 +102,15 @@ class LiveRun:
             if command in ("start", "step", "manual", "reset"):
                 self.error = ""
                 self.notice = ""
-            steering = data.get("steering", self.steering).strip()
-            if goal != self.goal or steering != self.steering:
-                self.recent.clear()
+            changed = self.agent.set_goal(goal)
+            changed |= self.agent.set_steering(data.get("steering", self.steering))
+            changed |= self.agent.set_history_enabled(data.get("use_recent", self.use_recent))
+            if changed:
                 self.notice = ""
-            self.goal = goal
-            self.steering = steering
-            self.use_recent = data.get("use_recent", self.use_recent)
-            if not self.use_recent:
-                self.recent.clear()
-            if command == "start":
+            if command in ("start", "step"):
+                self.agent.resume()
                 self.running = True
-                self.single_step = False
-            elif command == "step":
-                self.running = True
-                self.single_step = True
+                self.single_step = command == "step"
             elif command == "pause":
                 self.running = False
                 self.single_step = False
@@ -112,7 +123,7 @@ class LiveRun:
                 self.single_step = False
                 self.manual.clear()
                 self.reset_requested = True
-            self.revision += 1
+                self.agent.generation += 1
             self.condition.notify_all()
 
     def run(self) -> None:
@@ -125,157 +136,161 @@ class LiveRun:
                 self.condition.notify_all()
 
     def _run(self) -> None:
-        self.output.mkdir(parents=True, exist_ok=False)
-        with GbaEmulator(self.rom, self.core) as emulator, (self.output / "decisions.jsonl").open("w") as log:
+        self.output.mkdir(parents=True, exist_ok=True)
+        with GbaEmulator(self.rom, self.core) as emulator:
             initial_state = self.state.read_bytes()
             emulator.load_state(initial_state)
             emulator.step()
-            initial_screen = emulator.screenshot().png_bytes()
-            (self.output / "000000.png").write_bytes(initial_screen)
-            (self.output / "latest.state").write_bytes(emulator.save_state())
+            session = GameplaySession(emulator, self.agent, self.output,
+                                      self.hold_frames, self.release_frames)
+            session.frame_count = 1
+            session.capture()
+            session.save_latest()
             with self.condition:
-                self.screen = initial_screen
+                self.screen = session.current.png_bytes()
                 self.screen_revision = 1
                 self.frame = 1
                 self.loaded = True
                 self.condition.notify_all()
 
-            index = 0
             step_number = 0
             repeated_button = None
             repeated_count = 0
             repeat_start = None
-            repeat_revision = None
+            pending_stall = None
+            state_generation = self.agent.generation
             while True:
                 with self.condition:
                     self.busy = False
                     self.condition.wait_for(lambda: self.stopping or self.reset_requested or self.manual or self.running)
                     if self.stopping:
                         return
+                    if state_generation != self.agent.generation:
+                        repeated_button = None
+                        repeated_count = 0
+                        repeat_start = None
+                        pending_stall = None
+                        state_generation = self.agent.generation
                     if self.reset_requested:
                         self.reset_requested = False
                         self.resetting = True
                         self.busy = True
-                        reset = True
-                    else:
-                        reset = False
-                        manual = self.manual.popleft() if self.manual else None
-                        goal, steering = self.goal, self.steering
-                        use_recent = self.use_recent
-                        revision = self.revision
-                        frame_before = self.frame
-                        screenshot = f"{index:06d}.png"
-                        self.busy = True
-                if reset:
-                    (self.output / f"before-reset-{index:06d}.state").write_bytes(emulator.save_state())
-                    emulator.load_state(initial_state)
-                    emulator.step()
-                    index += 1
-                    screen = emulator.screenshot().png_bytes()
-                    filename = f"{index:06d}.png"
-                    (self.output / filename).write_bytes(screen)
-                    checkpoint = self.output / "latest.state.tmp"
-                    checkpoint.write_bytes(emulator.save_state())
-                    checkpoint.replace(self.output / "latest.state")
-                    log.write(json.dumps({"event": "reset", "time": datetime.now().astimezone().isoformat(timespec="seconds"),
-                                          "screenshot": filename, "saved_state": f"before-reset-{index - 1:06d}.state"}) + "\n")
-                    log.flush()
-                    with self.condition:
+                        previous = session.image_index
+                        (self.output / "states" / f"before-reset-{previous:06d}.state").write_bytes(
+                            emulator.save_state())
+                        emulator.load_state(initial_state)
+                        emulator.step()
+                        session.frame_count = 1
+                        session.capture()
+                        session.save_latest()
+                        self.agent.reset(session.current_name)
                         self.frame = 1
-                        self.screen = screen
+                        self.screen = session.current.png_bytes()
                         self.screen_revision += 1
-                        self.history.clear()
-                        self.recent.clear()
                         self.running = False
                         self.resetting = False
                         self.reset_count += 1
                         self.busy = False
                         self.error = ""
                         self.condition.notify_all()
-                    step_number = 0
-                    repeated_button = None
-                    repeated_count = 0
-                    repeat_start = None
-                    continue
+                        step_number = 0
+                        repeated_button = None
+                        repeated_count = 0
+                        repeat_start = None
+                        pending_stall = None
+                        continue
+                    manual = self.manual.popleft() if self.manual else None
+                    context = self.agent.decision_context()
+                    generation = context.generation
+                    self.busy = True
+
+                decision = None
                 if manual is None:
-                    prompt = goal + ("\nOperator guidance: " + steering if steering else "")
                     try:
-                        decision = choose(self.classifier, self.output / screenshot, prompt,
-                                          self.recent if use_recent else [])
+                        decision, stop = session.decide(context)
                     except Exception as exc:
                         with self.condition:
-                            self.error = f"Classifier failed: {type(exc).__name__}: {exc}"
-                            self.running = False
-                            self.single_step = False
+                            stale = (generation != self.agent.generation or not self.running or
+                                     self.stopping or self.reset_requested)
+                            if not stale:
+                                self.error = f"DecisionModel failed: {type(exc).__name__}: {exc}"
+                                self.running = False
+                                self.single_step = False
+                            self.agent.failure(context, session.current_name, exc, stale)
                             self.busy = False
                             self.condition.notify_all()
                         continue
-                    with self.condition:
-                        if self.revision != revision or not self.running or self.stopping:
-                            self.busy = False
-                            continue
-                    source = "agent"
                 else:
-                    decision = {"choice": manual, "scores": {}, "latency_ms": 0}
-                    source = "manual"
+                    stop = False
 
-                button = decision["choice"]
-                if manual is None:
-                    if button != repeated_button or revision != repeat_revision:
-                        repeated_button = button
-                        repeated_count = 0
-                        repeat_start = emulator.screenshot()
-                        repeat_revision = revision
-                    repeated_count += 1
-                else:
-                    repeated_button = None
-                    repeated_count = 0
-                    repeat_start = None
-                emulator.step(self.hold_frames, () if button == "WAIT" else (button,))
-                emulator.step(self.release_frames)
-                after_frame = emulator.screenshot()
-                after = after_frame.png_bytes()
-                stalled = (manual is None and repeated_count >= 8 and repeat_start is not None
-                           and scene_distance(repeat_start, after_frame) < 10)
-                if repeated_count >= 8:
-                    repeated_button = None
-                    repeated_count = 0
-                    repeat_start = None
-                next_screenshot = f"{index + 1:06d}.png"
-                (self.output / next_screenshot).write_bytes(after)
-                checkpoint = self.output / "latest.state.tmp"
-                checkpoint.write_bytes(emulator.save_state())
-                checkpoint.replace(self.output / "latest.state")
-                row = {"index": index, "step": step_number + 1,
-                       "time": datetime.now().astimezone().isoformat(timespec="seconds"),
-                       "frame_before": frame_before,
-                       "frame_after": frame_before + self.hold_frames + self.release_frames,
-                       "screenshot": screenshot, "goal": goal, "steering": steering,
-                       "source": source, "stalled": stalled, **decision}
-                log.write(json.dumps(row) + "\n")
-                log.flush()
                 with self.condition:
-                    self.frame = row["frame_after"]
-                    self.screen = after
-                    self.screen_revision += 1
-                    self.history.append(row)
-                    if self.use_recent and (goal, steering) == (self.goal, self.steering):
-                        self.recent.append(button)
-                    self.busy = False
-                    if self.single_step:
+                    if manual is None and (generation != self.agent.generation or
+                                           not self.running or self.stopping or self.reset_requested):
+                        self.agent.discard(decision, session.current_name, "stale_control")
+                        self.busy = False
+                        continue
+                    if stop:
+                        session.stop(decision)
                         self.running = False
                         self.single_step = False
+                        self.busy = False
+                        self.notice = f"Completed: {self.goal}"
+                        self.condition.notify_all()
+                        continue
+                    if pending_stall is not None and manual is None:
+                        self.agent.discard(decision, session.current_name, "stalled")
+                        self.running = False
+                        self.single_step = False
+                        self.busy = False
+                        self.notice = f"Paused: {pending_stall} repeated without visible progress. Revise the direction."
+                        self.agent.record({"event": "stalled", "goal": self.goal,
+                                           "screenshot": session.current_name,
+                                           "completion_scores": dict(decision.completion_scores)})
+                        pending_stall = None
+                        self.condition.notify_all()
+                        continue
+                    button = manual if manual is not None else decision.choice
+                    before = session.current
+                    if manual is None:
+                        if button != repeated_button:
+                            repeated_button = button
+                            repeated_count = 0
+                            repeat_start = before
+                        repeated_count += 1
+                    else:
+                        repeated_button = None
+                        repeated_count = 0
+                        repeat_start = None
+                        pending_stall = None
+                    after = session.apply(button, "manual" if manual is not None else "agent",
+                                          decision, after_details=lambda next_frame: {
+                                              "step": step_number + 1,
+                                              "stalled": (manual is None and repeated_count >= 8 and
+                                                          repeat_start is not None and
+                                                          scene_distance(repeat_start, next_frame) < 10)})
+                    session.save_latest()
+                    stalled = session.last_row["stalled"]
+                    if repeated_count >= 8:
+                        repeated_button = None
+                        repeated_count = 0
+                        repeat_start = None
+                    pending_stall = button if stalled else None
                     if stalled:
+                        self.agent.record({"event": "suspected_stall", "goal": self.goal,
+                                           "screenshot": session.current_name, "button": button})
+                    self.frame = session.frame_count
+                    self.screen = after.png_bytes()
+                    self.screen_revision += 1
+                    self.busy = False
+                    if self.single_step and not stalled:
                         self.running = False
                         self.single_step = False
-                        self.notice = f"Paused: {button} repeated without visible progress. Revise the direction."
                     self.condition.notify_all()
-                index += 1
-                step_number += 1
+                    step_number += 1
 
 
 def handler_for(run: LiveRun):
-    page = Path(__file__).with_name("live.html").read_bytes()
+    page = (Path(__file__).parent / "static/live.html").read_bytes()
 
     class Handler(BaseHTTPRequestHandler):
         def respond(self, status: int, body: bytes, content_type: str) -> None:
@@ -303,7 +318,7 @@ def handler_for(run: LiveRun):
             elif path.startswith("/api/observation/") and observation_number.isascii() \
                     and observation_number.isdecimal() and len(observation_number) <= 12:
                 index = int(observation_number)
-                screenshot = run.output / f"{index:06d}.png"
+                screenshot = run.output / "frames" / f"{index:06d}.png"
                 if screenshot.is_file():
                     self.respond(200, screenshot.read_bytes(), "image/png")
                 else:
@@ -337,20 +352,23 @@ def main() -> None:
     parser.add_argument("--core", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--classifier", default="mystery_dungeon.classifiers.onejev:classify")
+    parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
     parser.add_argument("--context", type=Path, help="general controls supplied on every decision")
     parser.add_argument("--url", help="OneJev server URL")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
+    parser.add_argument("--history-frames", type=int, default=1)
+    parser.add_argument("--completion-votes", type=int, default=1)
     args = parser.parse_args()
-    if min(args.hold_frames, args.release_frames) < 1:
-        parser.error("frame counts must be positive")
+    if min(args.hold_frames, args.release_frames, args.completion_votes) < 1 or args.history_frames < 0:
+        parser.error("frame counts and completion votes must be positive; history frames may be zero")
     if args.url:
         os.environ["QEV_BASE_URL"] = args.url
-    output = args.output or Path("runs") / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run = LiveRun(args.rom, args.core, args.state, output, args.classifier,
-                  args.hold_frames, args.release_frames, args.context.read_text() if args.context else "")
+    output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    run = LiveRun(args.rom, args.core, args.state, output, args.decision_model,
+                  args.hold_frames, args.release_frames, args.context.read_text() if args.context else "",
+                  args.history_frames, args.completion_votes)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
     threading.Thread(target=run.run, daemon=True).start()
     print(f"Live view: http://127.0.0.1:{server.server_port}", flush=True)

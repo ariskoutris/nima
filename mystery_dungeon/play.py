@@ -1,76 +1,13 @@
-"""Replay a checkpoint with any classifier that scores buttons from a screenshot.
-
-A classifier is a callable (screenshot_path, goal, buttons_for_this_goal, options)
-returning one finite score per option. Higher scores are better.
-Select an importable callable with --classifier module:callable.
-"""
+"""Replay a checkpoint toward one manually supplied short-term goal."""
 
 from __future__ import annotations
 
 import argparse
-import importlib
-import json
-import math
-import time
 from pathlib import Path
-from typing import Callable, Mapping
 
 from emulator import GbaEmulator
-
-
-OPTIONS = {
-    "UP": "press up on the directional pad",
-    "DOWN": "press down on the directional pad",
-    "LEFT": "press left on the directional pad",
-    "RIGHT": "press right on the directional pad",
-    "A": "confirm, interact, or advance text",
-    "B": "cancel or go back",
-    "START": "press the Start button",
-    "SELECT": "press the Select button",
-    "L": "press the left shoulder button",
-    "R": "press the right shoulder button",
-    "WAIT": "press nothing and let the game advance",
-}
-
-Classifier = Callable[[Path, str, tuple[str, ...], Mapping[str, str]], Mapping[str, float]]
-
-
-def load_classifier(spec: str) -> Classifier:
-    module, separator, name = spec.partition(":")
-    if not (module and separator and name):
-        raise ValueError("classifier must be MODULE:CALLABLE")
-    classifier = getattr(importlib.import_module(module), name)
-    if not callable(classifier):
-        raise TypeError(f"{spec} is not callable")
-    return classifier
-
-
-def with_context(classifier: Classifier, context: str) -> Classifier:
-    """Supply the same general game rules on every button decision."""
-    context = context.strip()
-    if not context:
-        return classifier
-
-    def classify(screenshot: Path, goal: str, recent: tuple[str, ...],
-                 options: Mapping[str, str]) -> Mapping[str, float]:
-        return classifier(screenshot, f"{context}\n\nCurrent goal: {goal}", recent, options)
-
-    return classify
-
-
-def choose(classifier: Classifier, screenshot: Path, goal: str, recent: list[str]) -> dict:
-    started = time.perf_counter()
-    scores = dict(classifier(screenshot, goal, tuple(recent), OPTIONS.copy()))
-    if scores.keys() != OPTIONS.keys() or any(
-        not isinstance(score, (int, float)) or not math.isfinite(score)
-        for score in scores.values()
-    ):
-        raise ValueError("classifier must return one finite score for every button option")
-    return {
-        "choice": max(scores, key=scores.get),
-        "scores": scores,
-        "latency_ms": round((time.perf_counter() - started) * 1000),
-    }
+from mystery_dungeon.agent import Agent, load_decision_model
+from mystery_dungeon.session import GameplaySession
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -80,35 +17,47 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--goal", required=True)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--classifier", required=True, metavar="MODULE:CALLABLE")
-    parser.add_argument("--context", type=Path, help="general controls supplied on every decision")
+    parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
+    parser.add_argument("--context", type=Path)
     parser.add_argument("--steps", type=int, default=1)
+    parser.add_argument("--history-frames", type=int, default=1)
+    parser.add_argument("--completion-votes", type=int, default=1)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
     args = parser.parse_args(argv)
-    if min(args.steps, args.hold_frames, args.release_frames) < 1:
-        parser.error("steps and frame counts must be positive")
-    classifier = with_context(load_classifier(args.classifier), args.context.read_text() if args.context else "")
-    args.output.mkdir(parents=True)
-    recent: list[str] = []
-    with GbaEmulator(args.rom, args.core) as emulator, (args.output / "decisions.jsonl").open("w") as log:
+    if min(args.steps, args.hold_frames, args.release_frames, args.completion_votes) < 1 \
+            or args.history_frames < 0:
+        parser.error("steps and frame counts must be positive; history frames may be zero")
+    args.output.mkdir(parents=True, exist_ok=False)
+    agent = Agent(load_decision_model(args.decision_model), args.output, args.decision_model,
+                  args.history_frames, args.completion_votes,
+                  args.context.read_text() if args.context else "",
+                  {"kind": "play", "rom": str(args.rom), "core": str(args.core),
+                   "initial_state": str(args.state), "hold_frames": args.hold_frames,
+                   "release_frames": args.release_frames, "step_limit": args.steps})
+    agent.set_goal(args.goal)
+    with GbaEmulator(args.rom, args.core) as emulator:
         emulator.load_state(args.state.read_bytes())
         emulator.step()
+        session = GameplaySession(emulator, agent, args.output,
+                                  args.hold_frames, args.release_frames)
+        session.frame_count = 1
+        session.capture()
         for index in range(args.steps):
-            screenshot = args.output / f"{index:03d}.png"
-            emulator.screenshot().save_png(screenshot)
-            decision = choose(classifier, screenshot, args.goal, recent)
-            button = decision["choice"]
-            emulator.step(args.hold_frames, () if button == "WAIT" else (button,))
-            emulator.step(args.release_frames)
-            row = {"screenshot": screenshot.name, "goal": args.goal,
-                   "classifier": args.classifier, **decision}
-            log.write(json.dumps(row) + "\n")
-            log.flush()
-            recent.append(button)
-            print(f"{index}: {button} ({decision['latency_ms']} ms)")
-        emulator.screenshot().save_png(args.output / "final.png")
-        (args.output / "final.state").write_bytes(emulator.save_state())
+            decision, stop = session.decide()
+            if stop:
+                session.stop(decision)
+                print(f"{index}: goal complete")
+                break
+            button = decision.choice
+            session.apply(button, "agent", decision)
+            print(f"{index}: {button} ({decision.latency_ms} ms)")
+        else:
+            agent.record({"event": "run_stop", "reason": "step_limit",
+                          "screenshot": session.current_name})
+        session.current.save_png(args.output / "frames/final.png")
+        (args.output / "states").mkdir(exist_ok=True)
+        (args.output / "states/final.state").write_bytes(emulator.save_state())
 
 
 if __name__ == "__main__":

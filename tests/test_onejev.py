@@ -1,44 +1,42 @@
-"""Keep action history out of the small vision model's button prompt."""
+"""OneJev receives ordered frames and separates guidance from completion."""
 
-import tempfile
-import unittest
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock
 
-from mystery_dungeon.classifiers.onejev import classify
-from mystery_dungeon.play import with_context
+import pytest
 
-
-class OneJevTest(unittest.TestCase):
-    def test_general_controls_are_sent_on_every_decision(self):
-        calls = []
-
-        def classifier(image, goal, recent, options):
-            calls.append(goal)
-            return {name: 0.0 for name in options}
-
-        wrapped = with_context(classifier, "D-pad moves the character. A confirms.")
-        wrapped(Path("screen.png"), "Find the exit", (), {"A": "confirm"})
-        wrapped(Path("screen.png"), "Talk to the NPC", (), {"A": "confirm"})
-        self.assertEqual(calls, [
-            "D-pad moves the character. A confirms.\n\nCurrent goal: Find the exit",
-            "D-pad moves the character. A confirms.\n\nCurrent goal: Talk to the NPC",
-        ])
-        self.assertIs(with_context(classifier, ""), classifier)
-
-    def test_repeated_buttons_are_not_sent_as_context(self):
-        with tempfile.TemporaryDirectory() as directory:
-            screenshot = Path(directory) / "screen.png"
-            screenshot.write_bytes(b"image")
-            response = SimpleNamespace(answers={"next": SimpleNamespace(probabilities={"UP": 1.0})})
-            with patch("mystery_dungeon.classifiers.onejev.Client") as client:
-                client.return_value.system_one.return_value = response
-                classify(screenshot, "Move up", ("LEFT",) * 8, {"UP": "press up"})
-
-            self.assertEqual(client.return_value.system_one.call_args.kwargs["state"],
-                             {"screen": "<image:1>", "task": {"instruction": "Move up"}})
+from emulator import Frame
+from mystery_dungeon.agent import RecentStep, load_decision_model
+from mystery_dungeon.decision_models import onejev
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_joint_request_uses_history_and_goal(monkeypatch):
+    frame = Frame(4, 4, bytes(4 * 4 * 4))
+    response = SimpleNamespace(answers={
+        "action": SimpleNamespace(probabilities={"A": 1.0}),
+        "completion": SimpleNamespace(probabilities={
+            "complete": 0.2, "incomplete": 0.7, "uncertain": 0.1})})
+    client = Mock()
+    client.system_one.return_value = response
+    monkeypatch.setenv("QEV_PROMPT_VERSION", "v1")
+    monkeypatch.setattr(onejev, "Client", lambda: client)
+    model = load_decision_model("mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
+    result = model.score("Find exit", "Use the D-pad", frame,
+                         (RecentStep(frame, "DOWN", "first.png"),),
+                         {"A": "press A"})
+    kwargs = client.system_one.call_args.kwargs
+    assert len(kwargs["media"]) == 2
+    assert kwargs["state"]["observations"][0]["action_after"] == "DOWN"
+    assert kwargs["state"]["goal"] == "Find exit"
+    assert "Use the D-pad" not in str(kwargs["state"])
+    assert "Use the D-pad" in kwargs["questions"]["action"].instructions
+    assert "Use the D-pad" not in kwargs["questions"]["completion"].instructions
+    assert kwargs["questions"]["completion"].instructions == model.prompt["completion_question"]
+    assert model.prompt["version"] == "v1"
+    assert result.completion_scores["incomplete"] == 0.7
+
+
+def test_prompt_version_rejects_paths(monkeypatch):
+    monkeypatch.setenv("QEV_PROMPT_VERSION", "../v1")
+    with pytest.raises(ValueError):
+        onejev.OneJevDecisionModel()

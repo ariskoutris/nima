@@ -12,14 +12,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from emulator import Frame, GbaEmulator, scene_distance
-from mystery_dungeon.play import Classifier, choose, load_classifier, with_context
+from mystery_dungeon.agent import Agent, DecisionModel, load_decision_model
+from mystery_dungeon.session import GameplaySession
 
 
-SCENE_OPTIONS = {
-    "dialogue": "A text dialogue box or message panel is visible without selectable choices.",
-    "menu": "A menu or list of selectable choices is visible on screen.",
-    "gameplay": "No dialogue panel or menu is visible; the main game scene is visible.",
-}
 ROM = Path("data/game/roms/red-rescue-team.gba")
 CORE = Path("data/engines/cores/mgba_libretro.dylib")
 STATE = Path("data/game/checkpoints/post-cutscene.ss0")
@@ -231,6 +227,13 @@ def validate_fixtures(game: GbaEmulator, source: Seed, seeds: dict[str, Seed], r
     assert patch_distance(refs["mailbox"], refs["mailbox_side"], (15, 126, 230, 153)) >= 5
     assert patch_distance(refs["cave"], refs["outside"], (0, 0, 65, 50)) >= 20
     assert colors(refs["bridge"])[0] < 4500
+    for case in CASES:
+        restore(game, seeds[case.start])
+        initial = game.system_ram()
+        grader = Grader(refs, initial)
+        if case.start == "mailbox":
+            grader.mailbox_seen = True
+        assert not grader.observe(game.screenshot(), initial, case.criterion)[0], case.id
     restore(game, seeds["inside"])
     start = game.system_ram()
     press(game, "DOWN")
@@ -249,97 +252,113 @@ def is_cycle(recent: list[Frame]) -> bool:
     return False
 
 
-def run_case(game: GbaEmulator, case: Case, controller: str, classifier: Classifier,
-             observer, seeds: dict[str, Seed], references: dict[str, Frame], output: Path) -> dict:
-    output.mkdir()
+RECOGNITION_WINDOW = 3
+
+
+def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
+             seeds: dict[str, Seed], references: dict[str, Frame], output: Path,
+             history_frames: int = 1, completion_votes: int = 1,
+             context: str = "", model_spec: str = "injected") -> dict:
+    output.mkdir(parents=True, exist_ok=False)
     restore(game, seeds[case.start])
     grader = Grader(references, game.system_ram())
     if case.start == "mailbox":
         grader.mailbox_seen = True
-    recent_buttons: list[str] = []
+    agent = Agent(model, output, model_spec, history_frames, completion_votes, context,
+                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
+                   "criterion": case.criterion, "action_limit": case.limit,
+                   "hold_frames": HOLD, "release_frames": RELEASE})
+    agent.set_goal(case.goal)
+    session = GameplaySession(game, agent, output, HOLD, RELEASE)
+    session.capture()
     recent_frames: list[Frame] = []
     repeat_button = None
     repeat_count = 0
-    saw_dialogue = False
-    quiet_frames = 0
+    pending_loop = None
     transition_waits = 0
     low_change = 0
     events: list[str] = []
     started = time.monotonic()
     reason = "budget"
     error = None
-    with (output / "decisions.jsonl").open("w") as log:
-        for index in range(case.limit + 1):
-            frame = game.screenshot()
-            screenshot = output / f"{index:04d}.png"
-            frame.save_png(screenshot)
-            ram = game.system_ram()
-            success, new_events = grader.observe(frame, ram, case.criterion)
-            events.extend(new_events)
-            if success:
-                reason = "success"
-                break
-            if index == case.limit:
-                reason = "budget"
-                break
-            if time.monotonic() - started >= SECONDS:
-                reason = "time_limit"
-                break
-            instruction, mode, scene_scores = case.goal, "task", None
-            try:
-                if controller == "guided":
-                    scene = observer(screenshot, "What kind of screen is visible?", SCENE_OPTIONS)
-                    scene_scores = dict(scene)
-                    if scene["menu"] >= 0.5:
-                        reason = "menu_requires_planner"
-                        break
-                    if scene["dialogue"] >= 0.4:
-                        mode, saw_dialogue, quiet_frames = "dialogue", True, 0
-                        instruction = "Advance the visible dialogue or message"
-                    elif saw_dialogue and quiet_frames < 2:
-                        mode = "settle"
-                        quiet_frames += 1
-                decision = ({"choice": "WAIT", "scores": {}, "latency_ms": 0} if mode == "settle"
-                            else choose(classifier, screenshot, instruction, recent_buttons))
-            except Exception as exc:
-                reason, error = "model_error", f"{type(exc).__name__}: {exc}"
-                break
-            button = decision["choice"]
-            press(game, button)
-            after = game.screenshot()
-            distance = scene_distance(frame, after)
-            low_change += distance < 10
-            repeat_count = repeat_count + 1 if mode == "task" and button == repeat_button and distance < 10 else 1
-            repeat_button = button
-            recent_buttons.append(button)
-            recent_frames.append(after)
-            log.write(json.dumps({"step": index, "screenshot": screenshot.name,
-                                  "instruction": instruction, "mode": mode,
-                                  "scene_scores": scene_scores,
-                                  "scene_change": round(distance, 2), **decision}) + "\n")
-            log.flush()
-            stalled = repeat_count >= 8
-            # Text can stay nearly still while an A press advances a scripted event.
-            if (stalled or is_cycle(recent_frames)) and not has_message_panel(after):
-                checkpoint = Seed(game.save_state(), game.save_ram())
-                game.step(60)
-                if scene_distance(after, game.screenshot()) >= 10:
-                    transition_waits += 1
-                    recent_frames.clear()
-                    repeat_button = None
-                    repeat_count = 0
-                    log.write(json.dumps({"step": index, "event": "transition_wait", "frames": 60}) + "\n")
-                    continue
-                restore(game, checkpoint)
-                reason = "stalled" if stalled else "loop"
-                break
-    final = game.screenshot()
-    final.save_png(output / "final.png")
-    (output / "final.state").write_bytes(game.save_state())
-    (output / "final.sav").write_bytes(game.save_ram())
-    result = {"case": case.id, "controller": controller, "goal": case.goal,
-              "success": reason == "success", "stop_reason": reason,
-              "steps": index, "low_visual_change_actions": low_change,
+    actions = decisions = 0
+    reached_at = None
+    while True:
+        frame = session.current
+        success, new_events = grader.observe(frame, game.system_ram(), case.criterion)
+        events.extend(new_events)
+        if success and reached_at is None:
+            reached_at = decisions
+        if time.monotonic() - started >= SECONDS:
+            reason = "time_limit"
+            break
+        if reached_at is None and actions >= case.limit:
+            reason = "budget"
+            break
+        if reached_at is not None and decisions - reached_at >= RECOGNITION_WINDOW:
+            reason = "recognition_window"
+            break
+        try:
+            decision, stop = session.decide()
+        except Exception as exc:
+            reason, error = "model_error", f"{type(exc).__name__}: {exc}"
+            agent.failure(agent.decision_context(), session.current_name, exc)
+            break
+        decisions += 1
+        if time.monotonic() - started >= SECONDS:
+            agent.discard(decision, session.current_name, "time_limit")
+            reason = "time_limit"
+            break
+        if stop:
+            session.stop(decision)
+            reason = "recognized" if reached_at is not None else "false_completion"
+            break
+        if pending_loop is not None:
+            agent.discard(decision, session.current_name, pending_loop)
+            checkpoint = Seed(game.save_state(), game.save_ram())
+            after_wait = session.apply("WAIT", "transition_wait", frames=60)
+            agent.transition_wait(session.current_name)
+            if scene_distance(frame, after_wait) >= 10:
+                transition_waits += 1
+                recent_frames.clear()
+                repeat_button = None
+                repeat_count = 0
+                pending_loop = None
+                continue
+            restore(game, checkpoint)
+            session.capture()
+            agent.clear_short_memory()
+            reason = pending_loop
+            break
+        button = decision.choice
+        after = session.apply(button, "agent", decision)
+        actions += 1
+        distance = scene_distance(frame, after)
+        low_change += distance < 10
+        repeat_count = repeat_count + 1 if button == repeat_button and distance < 10 else 1
+        repeat_button = button
+        recent_frames.append(after)
+        stalled = repeat_count >= 8
+        if (stalled or is_cycle(recent_frames)) and not has_message_panel(after):
+            pending_loop = "stalled" if stalled else "loop"
+            agent.record({"event": "suspected_loop", "reason": pending_loop,
+                          "screenshot": session.current_name, "button": button})
+    final = session.current
+    final.save_png(output / "frames/final.png")
+    (output / "states").mkdir(exist_ok=True)
+    (output / "states/final.state").write_bytes(game.save_state())
+    (output / "states/final.sav").write_bytes(game.save_ram())
+    public_reason = ("completion_claimed" if reason in ("recognized", "false_completion") else
+                     "benchmark_limit" if reason in ("budget", "time_limit", "recognition_window") else reason)
+    agent.record({"event": "run_stop", "reason": public_reason,
+                  "screenshot": session.current_name})
+    reached = reached_at is not None
+    result = {"case": case.id, "goal": case.goal, "reached": reached,
+              "recognized": reason == "recognized", "missed": reached and reason != "recognized",
+              "false_completion": reason == "false_completion", "success": reached,
+              "reached_at": reached_at, "stop_reason": reason,
+              "steps": actions, "decisions": decisions,
+              "low_visual_change_actions": low_change,
               "transition_waits": transition_waits, "events": events,
               "seconds": round(time.monotonic() - started, 2), "error": error}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -348,10 +367,15 @@ def run_case(game: GbaEmulator, case: Case, controller: str, classifier: Classif
 
 def report(results: list[dict], output: Path) -> None:
     (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
-    lines = ["# Game goal benchmark", "", "| Case | Controller | Result | Decisions | Low visual change | Seconds |", "|---|---|---|---:|---:|---:|"]
+    lines = ["# Game goal benchmark", "",
+             "| Case | Reached | Recognized | Missed | False completion | Actions | Seconds |",
+             "|---|:---:|:---:|:---:|:---:|---:|---:|"]
     for row in results:
-        lines.append(f"| {row['case']} | {row['controller']} | {row['stop_reason']} | {row['steps']} | {row['low_visual_change_actions']} | {row['seconds']} |")
-    lines += ["", "A case passes only when the hidden grader observes its goal. The controller receives screenshots, goal text, and button descriptions; it never receives grader memory or success signals.", ""]
+        lines.append(f"| {row['case']} | {row['reached']} | {row['recognized']} | "
+                     f"{row['missed']} | {row['false_completion']} | {row['steps']} | {row['seconds']} |")
+    lines += ["", "The hidden grader measures reach independently from model completion.",
+              "Joint action/completion requests and frame history change prompts and latency; "
+              "these runs are not directly comparable with earlier benchmark reports.", ""]
     (output / "report.md").write_text("\n".join(lines))
 
 
@@ -361,44 +385,46 @@ def main() -> None:
     parser.add_argument("--core", type=Path, default=CORE)
     parser.add_argument("--state", type=Path, default=STATE)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--classifier", default="mystery_dungeon.classifiers.onejev:classify")
-    parser.add_argument("--observer", default="mystery_dungeon.classifiers.onejev:inspect",
-                        help="screen-mode scorer for guided runs")
+    parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
     parser.add_argument("--model-file", type=Path, action="append",
                         help="model artifact to hash; repeat for weights and vision projector")
-    parser.add_argument("--context", type=Path, help="general controls supplied on every button decision")
-    parser.add_argument("--controller", choices=("direct", "guided", "both"), default="both")
+    parser.add_argument("--context", type=Path)
+    parser.add_argument("--history-frames", type=int, default=1)
+    parser.add_argument("--completion-votes", type=int, default=1)
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
+    if args.history_frames < 0 or args.completion_votes < 1:
+        parser.error("history frames must be non-negative and completion votes positive")
     selected = [case for case in CASES if args.case is None or case.id in args.case]
-    controllers = ("direct", "guided") if args.controller == "both" else (args.controller,)
     args.output.mkdir(parents=True, exist_ok=False)
-    classifier = with_context(load_classifier(args.classifier), args.context.read_text() if args.context else "")
-    observer = load_classifier(args.observer) if "guided" in controllers else None
+    cases_dir = args.output / "cases"
+    cases_dir.mkdir()
     source = read_ss0(args.state)
+    context = args.context.read_text() if args.context else ""
     model_files = (MODEL_FILES if args.model_file is None and
-                   args.classifier == "mystery_dungeon.classifiers.onejev:classify"
+                   args.decision_model == "mystery_dungeon.decision_models.onejev:OneJevDecisionModel"
                    else args.model_file or ())
     hashes = {str(path): sha256(path) for path in (args.rom, args.core, args.state, *model_files,
                                                  *((args.context,) if args.context else ()))}
-    hashes["classifier"] = args.classifier
-    if observer is not None:
-        hashes["observer"] = args.observer
-    (args.output / "config.json").write_text(json.dumps({"cases": [asdict(c) for c in selected],
-                                                         "controllers": controllers, "hashes": hashes,
-                                                         "context": str(args.context) if args.context else None,
-                                                         "hold_frames": HOLD, "release_frames": RELEASE}, indent=2) + "\n")
+    hashes["decision_model"] = args.decision_model
+    (args.output / "config.json").write_text(json.dumps({
+        "format_version": 2, "layout": "benchmark",
+        "cases": [asdict(c) for c in selected], "hashes": hashes,
+        "context": str(args.context) if args.context else None,
+        "history_frames": args.history_frames, "completion_votes": args.completion_votes,
+        "recognition_window": RECOGNITION_WINDOW,
+        "hold_frames": HOLD, "release_frames": RELEASE}, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game:
         seeds, refs = build_fixtures(game, source, args.output)
         results = []
         for case in selected:
-            for controller in controllers:
-                print(f"{case.id} / {controller}", flush=True)
-                result = run_case(game, case, controller, classifier, observer, seeds, refs,
-                                  args.output / f"{case.id}-{controller}")
-                results.append(result)
-                report(results, args.output)
-                print(f"  {result['stop_reason']} after {result['steps']} decisions", flush=True)
+            print(case.id, flush=True)
+            result = run_case(game, case, load_decision_model(args.decision_model), seeds, refs,
+                              cases_dir / case.id, args.history_frames, args.completion_votes,
+                              context, args.decision_model)
+            results.append(result)
+            report(results, args.output)
+            print(f"  {result['stop_reason']} after {result['steps']} actions", flush=True)
 
 
 if __name__ == "__main__":

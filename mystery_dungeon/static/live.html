@@ -102,7 +102,7 @@
           <label for="steering">Steering note</label>
           <textarea id="steering" maxlength="1000" placeholder="e.g. Open the menu first; avoid entering a dungeon yet"></textarea>
           <p class="hint">The note stays active until you clear it.</p>
-          <label class="recent-toggle" for="use-recent"><input id="use-recent" type="checkbox" checked>Pass recent buttons to custom classifiers</label>
+          <label class="recent-toggle" for="use-recent"><input id="use-recent" type="checkbox" checked>Use recent frames and actions</label>
           <div class="actions">
             <button class="button primary" type="button" data-command="start">Start / resume</button>
             <button class="button" type="button" data-command="pause">Pause</button>
@@ -181,7 +181,7 @@
       $('status').className = `status ${state.status}`;
       $('status-text').textContent = state.status;
       $('frame').textContent = state.frame ? `Frame ${state.frame.toLocaleString()}` : 'Frame —';
-      $('output').textContent = `Classifier: ${state.classifier} · Session: ${state.output}`;
+      $('output').textContent = `Decision model: ${state.decision_model} · Session: ${state.output}`;
       if (!goalDirty) goal.value = state.goal;
       if (!steeringDirty) steering.value = state.steering;
       if (!recentDirty) useRecent.checked = state.use_recent;
