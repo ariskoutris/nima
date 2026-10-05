@@ -1,6 +1,6 @@
 """Replay a checkpoint with any classifier that scores buttons from a screenshot.
 
-A classifier is a callable (screenshot_path, goal, recent_buttons, options)
+A classifier is a callable (screenshot_path, goal, buttons_for_this_goal, options)
 returning one finite score per option. Higher scores are better.
 Select an importable callable with --classifier module:callable.
 """
@@ -45,9 +45,22 @@ def load_classifier(spec: str) -> Classifier:
     return classifier
 
 
+def with_context(classifier: Classifier, context: str) -> Classifier:
+    """Supply the same general game rules on every button decision."""
+    context = context.strip()
+    if not context:
+        return classifier
+
+    def classify(screenshot: Path, goal: str, recent: tuple[str, ...],
+                 options: Mapping[str, str]) -> Mapping[str, float]:
+        return classifier(screenshot, f"{context}\n\nCurrent goal: {goal}", recent, options)
+
+    return classify
+
+
 def choose(classifier: Classifier, screenshot: Path, goal: str, recent: list[str]) -> dict:
     started = time.perf_counter()
-    scores = dict(classifier(screenshot, goal, tuple(recent[-4:]), OPTIONS.copy()))
+    scores = dict(classifier(screenshot, goal, tuple(recent), OPTIONS.copy()))
     if scores.keys() != OPTIONS.keys() or any(
         not isinstance(score, (int, float)) or not math.isfinite(score)
         for score in scores.values()
@@ -68,13 +81,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--goal", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--classifier", required=True, metavar="MODULE:CALLABLE")
+    parser.add_argument("--context", type=Path, help="general controls supplied on every decision")
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
     args = parser.parse_args(argv)
     if min(args.steps, args.hold_frames, args.release_frames) < 1:
         parser.error("steps and frame counts must be positive")
-    classifier = load_classifier(args.classifier)
+    classifier = with_context(load_classifier(args.classifier), args.context.read_text() if args.context else "")
     args.output.mkdir(parents=True)
     recent: list[str] = []
     with GbaEmulator(args.rom, args.core) as emulator, (args.output / "decisions.jsonl").open("w") as log:
