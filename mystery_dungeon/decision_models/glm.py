@@ -32,10 +32,12 @@ class GlmDecisionModel:
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required for GLM-5.3-Flash")
+        self.last_response: dict | None = None
 
     def score(self, goal: str, guidance: str, current_frame: Frame,
               recent_steps: tuple[RecentStep, ...],
               button_options: Mapping[str, str]) -> DecisionScores:
+        self.last_response = None
         instructions = [f"Goal: {goal}"]
         if guidance:
             instructions.append(f"Guidance: {guidance}")
@@ -74,7 +76,7 @@ class GlmDecisionModel:
             },
             "provider": {"require_parameters": True},
             "reasoning": {"effort": "low"},
-            "max_tokens": 2048,
+            "max_tokens": 4096,
         }
         request = Request(URL, data=json.dumps(payload).encode(), headers={
             "Authorization": f"Bearer {self.api_key}",
@@ -82,6 +84,9 @@ class GlmDecisionModel:
         })
         with urlopen(request, timeout=120) as response:
             data = json.load(response)
+        self.last_response = data
+        if data["choices"][0].get("finish_reason") == "length":
+            raise ValueError("GLM exhausted max_tokens before finishing its decision")
         try:
             answer = json.loads(data["choices"][0]["message"]["content"])
             button, completion = answer["button"], answer["completion"]

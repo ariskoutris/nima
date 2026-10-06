@@ -20,8 +20,7 @@ ROM = Path("data/game/roms/red-rescue-team.gba")
 CORE = Path("data/engines/cores/mgba_libretro.dylib")
 CHECKPOINTS = Path("data/game/checkpoints")
 ROM_SHA1 = "9f4cfc5b5f4859d17169a485462e977c7aac2b89"
-HOLD, RELEASE, SECONDS = 8, 4, 180
-RECOGNITION_WINDOW = 3
+HOLD, RELEASE = 8, 4
 
 
 @dataclass(frozen=True)
@@ -35,17 +34,31 @@ class Case:
 
 CASES = (
     Case("square_down", "square", "Move one tile down", "down", 5),
-    Case("square_north_path", "square",
-         "Walk north until the central plaza is out of view", "north", 14),
+    Case("square_north_exit", "square",
+         "Walk out of Pokémon Square through the north exit", "north_exit", 26),
     Case("square_approach_granbull", "square",
          "Stand just above the purple Pokémon on the left side of the square", "approach", 12),
     Case("square_talk_granbull", "square",
          "Walk to Granbull in the square and start a conversation", "granbull", 16),
-    Case("face_npc_talk", "face-npc", "Start talking to the Pokémon in front of you", "granbull", 5),
+    Case("face_npc_talk", "face-lombre",
+         "Open dialogue with Lombre, the green Pokémon immediately to your right. "
+         "Stop when Lombre's first dialogue box appears; do not advance or finish the conversation",
+         "lombre", 5),
+    Case("face_lombre_finish", "face-lombre",
+         "Talk to Lombre, the green Pokémon immediately to your right, until the whole "
+         "conversation ends. Stop when the dialogue box closes and you are back in the square",
+         "finish_lombre", 16),
+    Case("face_npc_talk_overlap", "face-npc",
+         "Open dialogue with Granbull directly in front of you. "
+         "Stop when its first dialogue box appears; do not advance or finish the conversation",
+         "granbull", 5),
     Case("dialogue_finish", "npc-dialogue", "Finish the conversation with Granbull", "finish", 18),
     Case("face_npc_finish", "face-npc", "Talk to Granbull until the conversation ends", "finish", 22),
     Case("shop_talk", "shop-interact", "Talk to the shopkeeper in front of you", "wigglytuff", 5),
     Case("shop_friend_areas", "shop-interact", "Open the Friend Areas list at the shop", "shop_menu", 22),
+    Case("shop_check_pidgey", "shop-interact",
+         "Choose Check at Wigglytuff's shop, then select Pidgey from the Pokémon list",
+         "check_pidgey", 30),
 )
 
 
@@ -55,9 +68,9 @@ class Seed:
     save_ram: bytes
 
 
-def read_ss0(path: Path) -> Seed:
+def read_ss0(path: Path | bytes) -> Seed:
     """Extract the mGBA core state and battery RAM from its PNG save state."""
-    data = path.read_bytes()
+    data = path if isinstance(path, bytes) else path.read_bytes()
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("checkpoint is not a PNG/mGBA save state")
     state = save_ram = None
@@ -71,10 +84,13 @@ def read_ss0(path: Path) -> Seed:
         crc = struct.unpack_from(">I", data, end - 4)[0]
         if zlib.crc32(kind + payload) != crc:
             raise ValueError(f"bad {kind!r} checksum")
-        if kind == b"gbAs":
-            state = zlib.decompress(payload)
-        elif kind == b"gbAx" and payload[:4] == b"\x02\0\0\0":
-            save_ram = zlib.decompress(payload[8:])
+        try:
+            if kind == b"gbAs":
+                state = zlib.decompress(payload)
+            elif kind == b"gbAx" and payload[:4] == b"\x02\0\0\0":
+                save_ram = zlib.decompress(payload[8:])
+        except zlib.error as exc:
+            raise ValueError("invalid compressed mGBA save state") from exc
         offset = end
     if state is None or save_ram is None:
         raise ValueError("mGBA state or save RAM is missing")
@@ -110,6 +126,7 @@ class Grader:
             raise ValueError(f"player position unavailable in {case.start} checkpoint")
         self.initial_x, self.initial_y = position
         self.saw_granbull = self.dialogue() == (1, 235)
+        self.saw_lombre = self.dialogue() == (1, 296)
 
     def value(self, address: int, fmt: str) -> int:
         return struct.unpack(fmt, self.game.read_memory(address, struct.calcsize(fmt)))[0]
@@ -121,6 +138,11 @@ class Grader:
             return None
         x, y = struct.unpack("<ii", self.game.read_memory(lives + 0x144, 8))
         return x // 256, y // 256
+
+    def ground_map_id(self) -> int | None:
+        # gGroundMapAction -> groundMapId; 3 is Whiscash Pond beyond the north exit.
+        action = self.value(0x03001B6C, "<I")
+        return self.value(action + 0xE4, "<h") if 0x02000000 <= action < 0x02040000 else None
 
     def granbull_position(self) -> tuple[int, int] | None:
         lives = self.value(0x03001B84, "<I")
@@ -147,6 +169,13 @@ class Grader:
         shop = self.value(0x0203B290, "<I")
         return self.value(shop + 4, "<i") if 0x02000000 <= shop < 0x02040000 else None
 
+    def checked_species(self) -> int | None:
+        # WigglytuffShop3Work.state 24 displays chosenSpecies at +0x12.
+        shop = self.value(0x0203B290, "<I")
+        if 0x02000000 <= shop < 0x02040000 and self.value(shop + 4, "<i") == 24:
+            return self.value(shop + 0x12, "<h")
+        return None
+
     def observe(self, criterion: str) -> tuple[bool, list[str]]:
         position = self.player_position()
         if position is None:
@@ -154,18 +183,24 @@ class Grader:
         x, y = position
         dialogue, speaker = self.dialogue()
         granbull = dialogue == 1 and speaker == 235
+        lombre = dialogue == 1 and speaker == 296
         if granbull:
             self.saw_granbull = True
+        if lombre:
+            self.saw_lombre = True
         npc = self.granbull_position() if criterion == "approach" else None
         success = {
             "down": x == self.initial_x and y >= self.initial_y + 16,
-            "north": y <= self.initial_y - 128,
+            "north_exit": self.ground_map_id() == 3 if criterion == "north_exit" else False,
             "approach": (npc is not None and abs(x - npc[0]) <= 12 and
                          8 <= npc[1] - y <= 24 and dialogue == 0),
             "granbull": granbull,
+            "lombre": lombre,
             "finish": self.saw_granbull and dialogue == 0,
+            "finish_lombre": self.saw_lombre and dialogue == 0,
             "wigglytuff": dialogue == 4 and speaker == 40,
             "shop_menu": self.shop_state() in (9, 10) if criterion == "shop_menu" else False,
+            "check_pidgey": self.checked_species() == 16 if criterion == "check_pidgey" else False,
         }[criterion]
         return success, []
 
@@ -174,7 +209,7 @@ def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Seed]:
     if hashlib.sha1(game.rom.read_bytes()).hexdigest() != ROM_SHA1:
         raise ValueError("town RAM offsets require the matching Red Rescue Team ROM")
     seeds = {name: read_ss0(CHECKPOINTS / f"{name}.ss0")
-             for name in ("square", "face-npc", "npc-dialogue", "shop-interact")}
+             for name in ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")}
     folder = output / "references"
     folder.mkdir()
     for name, seed in seeds.items():
@@ -213,32 +248,25 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
     while True:
         success, new_events = grader.observe(case.criterion)
         events.extend(new_events)
-        if success and reached_at is None:
+        if case.criterion in ("finish", "finish_lombre") and not success:
+            reached_at = None  # A reopened the conversation after it had ended.
+        elif success and reached_at is None:
             reached_at = decisions
-        if time.monotonic() - started >= SECONDS:
-            reason = "time_limit"
-            break
-        if reached_at is None and actions >= case.limit:
+        if actions >= case.limit:
             reason = "budget"
             break
-        if reached_at is not None and decisions - reached_at >= RECOGNITION_WINDOW:
-            reason = "recognition_window"
-            break
-        turn = agent.step(session, deadline=started + SECONDS)
+        turn = agent.step(session)
         if turn.status == "model_error":
             reason, error = "model_error", turn.error
             break
         decisions += 1
-        if turn.status == "time_limit":
-            reason = "time_limit"
-            break
         if turn.status == "completed":
             reason = "recognized" if reached_at is not None else "false_completion"
             break
         if turn.status in ("stalled", "loop"):
             reason = turn.status
             break
-        if turn.status == "acted":
+        if turn.status in ("acted", "transition"):
             actions += 1
     final = session.current
     final.save_png(output / "frames/final.png")
@@ -246,7 +274,7 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
     (output / "states/final.state").write_bytes(game.save_state())
     (output / "states/final.sav").write_bytes(game.save_ram())
     public_reason = ("completion_claimed" if reason in ("recognized", "false_completion") else
-                     "benchmark_limit" if reason in ("budget", "time_limit", "recognition_window") else reason)
+                     "benchmark_limit" if reason == "budget" else reason)
     agent.record({"event": "run_stop", "reason": public_reason,
                   "screenshot": session.current_name})
     reached = reached_at is not None
@@ -296,18 +324,17 @@ def main() -> None:
     (args.output / "cases").mkdir()
     context = args.context.read_text() if args.context else ""
     files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in
-                                  ("square", "face-npc", "npc-dialogue", "shop-interact")),
+                                  ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")),
              *(args.model_file or ()),
              *((args.context,) if args.context else ()))
     hashes = {str(path): sha256(path) for path in files}
     hashes["decision_model"] = args.decision_model
     (args.output / "config.json").write_text(json.dumps({
-        "format_version": 3, "layout": "benchmark", "grader": "pmd-red-ram-v1",
+        "format_version": 4, "layout": "benchmark", "grader": "pmd-red-ram-v1",
         "cases": [asdict(c) for c in selected],
         "hashes": hashes, "context": str(args.context) if args.context else None,
         "history_frames": args.history_frames, "completion_votes": args.completion_votes,
-        "hold_frames": HOLD, "release_frames": RELEASE, "time_limit_seconds": SECONDS,
-        "recognition_window": RECOGNITION_WINDOW,
+        "hold_frames": HOLD, "release_frames": RELEASE,
     }, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game:
         seeds = build_fixtures(game, args.output)

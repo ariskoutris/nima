@@ -34,7 +34,8 @@ def main(argv: list[str] | None = None) -> None:
                   args.context.read_text() if args.context else "",
                   {"kind": "play", "rom": str(args.rom), "core": str(args.core),
                    "initial_state": str(args.state), "hold_frames": args.hold_frames,
-                   "release_frames": args.release_frames, "step_limit": args.steps})
+                   "release_frames": args.release_frames, "step_limit": args.steps},
+                  detect_cycles=True)
     agent.set_goal(args.goal)
     with GbaEmulator(args.rom, args.core) as emulator:
         emulator.load_state(args.state.read_bytes())

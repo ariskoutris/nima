@@ -10,13 +10,21 @@ from emulator import GbaEmulator
 from mystery_dungeon.agent import DecisionScores
 from mystery_dungeon import benchmark
 from mystery_dungeon.benchmark import (CASES, CHECKPOINTS, CORE, ROM, Case, Grader,
-                                       build_fixtures, press, restore, run_case)
+                                       build_fixtures, press, read_ss0, restore, run_case)
+from mystery_dungeon.session import GameplaySession
+
+
+def test_ss0_can_be_read_from_upload_bytes():
+    checkpoint = CHECKPOINTS / "square.ss0"
+    if not checkpoint.is_file():
+        pytest.skip("local mGBA checkpoint required")
+    assert read_ss0(checkpoint.read_bytes()) == read_ss0(checkpoint)
 
 
 @pytest.fixture(scope="module")
 def town(tmp_path_factory):
     paths = (ROM, CORE, *(CHECKPOINTS / f"{name}.ss0" for name in
-                          ("square", "face-npc", "npc-dialogue", "shop-interact")))
+                          ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")))
     if not all(path.is_file() for path in paths):
         pytest.skip("local ROM, core, and town checkpoints required")
     output = tmp_path_factory.mktemp("town")
@@ -27,14 +35,17 @@ def town(tmp_path_factory):
 
 ROUTES = {
     "square_down": ["DOWN"],
-    "square_north_path": ["UP"] * 8,
+    "square_north_exit": ["UP"] * 20,
     "square_approach_granbull": ["LEFT", "LEFT", "LEFT", "DOWN"],
     "square_talk_granbull": ["LEFT", "LEFT", "LEFT", "DOWN", "DOWN", "A"],
     "face_npc_talk": ["A"],
-    "dialogue_finish": ["A"] * 9,
-    "face_npc_finish": ["A"] * 16,
+    "face_lombre_finish": ["A"] * 9,
+    "face_npc_talk_overlap": ["A"],
+    "dialogue_finish": ["A"] * 2,
+    "face_npc_finish": ["A"] * 3,
     "shop_talk": ["A"],
     "shop_friend_areas": ["A"] * 20,
+    "shop_check_pidgey": ["A", "DOWN", "A", "A"] + ["DOWN"] * 4 + ["A"],
 }
 
 
@@ -48,13 +59,50 @@ def test_case_is_reachable_by_scripted_play(town, case):
             self.index = 0
 
         def score(self, goal, guidance, frame, history, options):
+            done = case.criterion in ("finish", "finish_lombre") and self.index == len(route)
             button = route[min(self.index, len(route) - 1)]
             self.index += 1
             return DecisionScores({name: float(name == button) for name in options},
-                                  {"complete": 0.0, "incomplete": 1.0, "uncertain": 0.0})
+                                  {"complete": float(done), "incomplete": float(not done),
+                                   "uncertain": 0.0})
 
     result = run_case(game, case, Scripted(), seeds, output / case.id)
     assert result["reached"], result
+    if case.criterion in ("finish", "finish_lombre"):
+        assert result["recognized"], result
+
+
+def test_lombre_finish_requires_closed_dialogue(town, tmp_path):
+    game, seeds, _ = town
+    restore(game, seeds["face-lombre"])
+    case = next(case for case in CASES if case.id == "face_lombre_finish")
+    grader = Grader(case, game)
+    session = GameplaySession(game, tmp_path)
+    session.capture()
+    for index in range(9):
+        session.apply("A")
+        session.wait_for_text()
+        assert grader.observe(case.criterion)[0] == (index == 8)
+    session.apply("A")
+    session.wait_for_text()
+    assert not grader.observe(case.criterion)[0]
+
+
+def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
+    game, seeds, output = town
+    case = Case("reopened_granbull", "face-npc", "Finish talking to Granbull", "finish", 14)
+
+    class ReopensDialogue:
+        def score(self, goal, guidance, frame, history, options):
+            return DecisionScores({name: float(name == "A") for name in options},
+                                  {"complete": 0.0, "incomplete": 1.0, "uncertain": 0.0})
+
+    result = run_case(game, case, ReopensDialogue(), seeds, output / case.id)
+    assert result["steps"] == 14
+    assert result["stop_reason"] == "budget"
+    assert not result["reached"]
+    assert not result["recognized"]
+    assert Grader(case, game).dialogue() == (1, 235)
 
 
 def test_standing_still_does_not_count_as_moving_down(town):
@@ -76,6 +124,21 @@ def test_moving_the_wrong_way_does_not_count(town):
     assert not grader.observe("down")[0]
 
 
+def test_north_exit_requires_leaving_pokemon_square(town):
+    game, seeds, _ = town
+    restore(game, seeds["square"])
+    case = next(case for case in CASES if case.id == "square_north_exit")
+    grader = Grader(case, game)
+    assert grader.ground_map_id() == 1
+    for _ in range(8):
+        press(game, "UP")
+    assert not grader.observe("north_exit")[0]
+    for _ in range(12):
+        press(game, "UP")
+    assert grader.ground_map_id() == 3
+    assert grader.observe("north_exit")[0]
+
+
 def test_shop_menu_requires_friend_area_selection(town):
     game, seeds, _ = town
     restore(game, seeds["shop-interact"])
@@ -92,9 +155,35 @@ def test_shop_menu_requires_friend_area_selection(town):
     assert not grader.observe("shop_menu")[0]
 
 
+def test_check_pidgey_requires_selecting_pidgey(town):
+    game, seeds, _ = town
+    case = next(case for case in CASES if case.id == "shop_check_pidgey")
+    route_to_list = ["A"] * 8 + ["DOWN", "A"] + ["A"] * 6
+
+    restore(game, seeds["shop-interact"])
+    grader = Grader(case, game)
+    for button in route_to_list:
+        press(game, button)
+    assert grader.shop_state() == 22
+    assert not grader.observe("check_pidgey")[0]
+    press(game, "A")  # Select the first entry, Squirtle.
+    assert grader.shop_state() == 24
+    assert grader.checked_species() == 7
+    assert not grader.observe("check_pidgey")[0]
+
+    restore(game, seeds["shop-interact"])
+    grader = Grader(case, game)
+    for button in route_to_list + ["DOWN"] * 4:
+        press(game, button)
+    assert not grader.observe("check_pidgey")[0]
+    press(game, "A")
+    assert grader.checked_species() == 16
+    assert grader.observe("check_pidgey")[0]
+
+
 @pytest.mark.parametrize("case_id,route", [
     ("square_down", ["DOWN"]),
-    ("square_north_path", ["UP"] * 8),
+    ("square_north_exit", ["UP"] * 20),
     ("square_approach_granbull", ["LEFT", "LEFT", "LEFT", "DOWN"]),
 ])
 def test_movement_grader_tolerates_waiting(town, case_id, route):
@@ -129,7 +218,7 @@ def test_dialogue_reach_and_completion_are_separate(town):
     assert finished["recognized"] and finished["steps"] == 1
 
 
-def test_inference_finishing_after_deadline_cannot_act_or_complete(town, monkeypatch):
+def test_slow_inference_still_acts_but_action_budget_stops_after_reach(town, monkeypatch):
     game, seeds, output = town
     clock = Mock(return_value=0)
 
@@ -137,25 +226,22 @@ def test_inference_finishing_after_deadline_cannot_act_or_complete(town, monkeyp
         def score(self, goal, guidance, frame, history, options):
             clock.return_value = 181
             return DecisionScores({name: float(name == "DOWN") for name in options},
-                                  {"complete": 1.0, "incomplete": 0.0, "uncertain": 0.0})
+                                  {"complete": 0.0, "incomplete": 1.0, "uncertain": 0.0})
 
-    case = next(case for case in CASES if case.id == "square_down")
+    case = Case("slow_one_action", "square", "Move one tile down", "down", 1)
     with monkeypatch.context() as patcher:
         patcher.setattr(benchmark.time, "monotonic", clock)
         result = run_case(game, case, LatePolicy(), seeds, output / "late_decision")
-    assert result["stop_reason"] == "time_limit"
-    assert result["steps"] == 0
-    assert not result["false_completion"]
-    rows = [json.loads(line) for line in
-            (output / "late_decision/decisions.jsonl").read_text().splitlines()]
-    discarded = next(row for row in rows if row["event"] == "discarded_decision")
-    assert discarded["reason"] == "time_limit"
+    assert result["stop_reason"] == "budget"
+    assert result["reached"] and result["missed"]
+    assert result["steps"] == result["decisions"] == 1
+    assert result["seconds"] == 181
 
 
 def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     rom, core, model_file = (tmp_path / name for name in ("game.gba", "core", "model.gguf"))
     for path in (rom, core, model_file, *(tmp_path / f"{name}.ss0" for name in
-                              ("square", "face-npc", "npc-dialogue", "shop-interact"))):
+                              ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact"))):
         path.write_bytes(b"test")
     models = [object(), object()]
     cases = (Case("one", "square", "Goal one", "down", 1),
@@ -180,4 +266,7 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
+    assert config["format_version"] == 4
+    assert "time_limit_seconds" not in config
+    assert "recognition_window" not in config
     assert config["hashes"][str(model_file)] == benchmark.sha256(model_file)

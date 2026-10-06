@@ -9,7 +9,7 @@
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body { margin: 0; min-width: 320px; }
-    button, textarea { font: inherit; }
+    button, textarea, select { font: inherit; }
     button { cursor: pointer; }
     .shell { max-width: 1440px; margin: auto; padding: 24px clamp(16px, 3vw, 42px) 50px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
@@ -20,16 +20,22 @@
     h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.02em; }
     .status { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #2b3d3e; border-radius: 999px; color: #b8c9c5; background: #152125; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a9b98; }
-    .status.running .dot, .status.thinking .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
-    .status.resetting .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
+    .status.running .dot, .status.thinking .dot, .status.waiting .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
+    .status.resetting .dot, .status.switching .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
     .status.error .dot { background: #ff938a; }
     .layout { display: grid; grid-template-columns: minmax(0, 1.38fr) minmax(310px, .9fr); gap: 18px; align-items: start; }
     .card { min-width: 0; border: 1px solid #2b3a3e; border-radius: 17px; background: #142026; overflow: hidden; box-shadow: 0 14px 40px #040a0d30; }
     .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 18px 20px 14px; }
     .muted { color: #91a7a5; font-size: .82rem; }
-    .screen-wrap { margin: 0 20px 18px; aspect-ratio: 3/2; display: grid; place-items: center; border: 1px solid #344843; border-radius: 12px; background: #070d10; overflow: hidden; }
+    .screen-wrap { position: relative; margin: 0 20px 18px; aspect-ratio: 3/2; display: grid; place-items: center; border: 1px solid #344843; border-radius: 12px; background: #070d10; overflow: hidden; }
     #screen { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
     .screen-empty { color: #78928a; font-size: .85rem; }
+    .screen-activity { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 10px; width: fit-content; max-width: calc(100% - 24px); padding: 9px 12px; border: 1px solid #719f8e; border-radius: 9px; background: #09171de8; color: #e7eee9; box-shadow: 0 4px 20px #0008; font-size: .82rem; pointer-events: none; }
+    .screen-activity strong { display: block; }
+    .screen-activity small { display: block; color: #a9c4b7; }
+    .spinner { flex: none; width: 15px; height: 15px; border: 2px solid #608b79; border-top-color: #b6f2c8; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
     .screen-foot { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid #28393b; padding: 12px 20px; color: #91a7a5; font-size: .78rem; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .controls { padding-bottom: 19px; }
@@ -39,6 +45,7 @@
     textarea { width: 100%; min-height: 88px; resize: vertical; padding: 11px 12px; border: 1px solid #39504d; border-radius: 9px; outline: none; background: #0b171b; color: #e7eee9; }
     textarea:focus { border-color: #8de3b0; box-shadow: 0 0 0 3px #8de3b01e; }
     textarea::placeholder { color: #6e8581; }
+    select { width: 100%; padding: 10px 12px; border: 1px solid #39504d; border-radius: 9px; background: #0b171b; color: #e7eee9; }
     #steering { min-height: 70px; }
     .recent-toggle { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: .84rem; }
     .recent-toggle input { accent-color: #9be8ba; }
@@ -90,13 +97,16 @@
     </header>
     <main class="layout">
       <section class="card">
-        <div class="card-head"><h2>Game screen</h2><span id="frame" class="muted mono">Frame —</span></div>
-        <div class="screen-wrap"><div id="screen-empty" class="screen-empty">Waiting for emulator…</div><img id="screen" alt="Current game screen" hidden></div>
-        <div class="screen-foot"><span>Current emulator frame</span><span>Updated after each action</span></div>
+        <div class="card-head"><h2>Live game</h2><span id="frame" class="muted mono">Frame —</span></div>
+        <div class="screen-wrap"><div id="screen-empty" class="screen-empty">Waiting for emulator…</div><img id="screen" alt="Live game screen" hidden><div id="screen-activity" class="screen-activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><span><strong id="activity-title"></strong><small id="activity-detail"></small></span></div></div>
+        <div class="screen-foot"><span>Latest game view</span><span id="screen-state">Connecting…</span></div>
       </section>
       <section class="card controls">
-        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Changes apply after the current action</span></div>
+        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Direction changes apply after the current action</span></div>
         <form id="control-form">
+          <label for="decision-model">Decision model</label>
+          <select id="decision-model"></select>
+          <p class="hint">Changing models pauses the agent. The local server starts when OneJev is selected.</p>
           <label for="goal">Goal</label>
           <textarea id="goal" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
           <label for="steering">Steering note</label>
@@ -109,6 +119,8 @@
             <button class="button" type="button" data-command="step">One decision</button>
             <button class="button" type="submit">Save direction</button>
             <button class="button" type="button" data-command="reset" title="Return to the starting checkpoint and pause">Reset game</button>
+            <button id="load-state-button" class="button" type="button">Load state / ss0</button>
+            <input id="state-file" type="file" accept=".state,.ss0" hidden>
           </div>
         </form>
         <div class="divider"></div>
@@ -134,12 +146,32 @@
   </div>
   <script>
     const $ = id => document.getElementById(id);
-    const goal = $('goal'), steering = $('steering'), useRecent = $('use-recent');
-    let screenRevision = 0, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
-    let goalDirty = false, steeringDirty = false, recentDirty = false, sending = false;
+    const goal = $('goal'), steering = $('steering'), useRecent = $('use-recent'), model = $('decision-model');
+    let screenRevision = 0, screenUrl = null, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
+    let goalDirty = false, steeringDirty = false, recentDirty = false, modelDirty = false, sending = false;
     goal.addEventListener('input', () => goalDirty = true);
     steering.addEventListener('input', () => steeringDirty = true);
     useRecent.addEventListener('change', () => { recentDirty = true; send(); });
+    model.addEventListener('change', async () => {
+      if (sending) return;
+      sending = modelDirty = true;
+      model.disabled = true;
+      try {
+        const response = await fetch('/api/model', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model: model.value})
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || 'Could not switch model');
+        render(state);
+        $('feedback').style.color = '#a9d9b8';
+        $('feedback').textContent = 'Switching decision model…';
+      } catch (error) {
+        model.value = currentState.decision_model;
+        $('feedback').style.color = '#ffb9ad';
+        $('feedback').textContent = error.message;
+      } finally { sending = modelDirty = false; model.disabled = false; }
+    });
 
     for (const button of ['UP', 'LEFT', 'DOWN', 'RIGHT', 'A', 'B', 'START', 'SELECT', 'L', 'R', 'WAIT']) {
       const element = document.createElement('button');
@@ -151,6 +183,33 @@
       button.addEventListener('click', () => send(button.dataset.command));
     }
     $('control-form').addEventListener('submit', event => { event.preventDefault(); send(); });
+    $('load-state-button').addEventListener('click', () => $('state-file').click());
+    $('state-file').addEventListener('change', async event => {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file || sending) return;
+      const format = file.name.split('.').pop().toLowerCase();
+      if (!['state', 'ss0'].includes(format)) {
+        $('feedback').style.color = '#ffb9ad';
+        $('feedback').textContent = 'Choose a .state or .ss0 file.';
+        return;
+      }
+      sending = true;
+      $('load-state-button').disabled = true;
+      try {
+        const response = await fetch(`/api/load-state?format=${format}`, {
+          method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || 'Could not load state');
+        render(state);
+        $('feedback').style.color = '#a9d9b8';
+        $('feedback').textContent = `Loading ${file.name}…`;
+      } catch (error) {
+        $('feedback').style.color = '#ffb9ad';
+        $('feedback').textContent = error.message;
+      } finally { sending = false; $('load-state-button').disabled = false; }
+    });
     $('latest-button').addEventListener('click', () => { selectedIndex = null; if (currentState) { renderHistory(currentState.history); renderDecision(currentState.history[0]); } });
 
     async function send(command, button) {
@@ -179,20 +238,33 @@
     function render(state) {
       currentState = state;
       $('status').className = `status ${state.status}`;
-      $('status-text').textContent = state.status;
-      $('frame').textContent = state.frame ? `Frame ${state.frame.toLocaleString()}` : 'Frame —';
+      $('status-text').textContent = [state.status, state.game_state?.mode,
+        state.game_state?.text_printing ? 'printing' : ''].filter(Boolean).join(' · ');
+      const activity = {
+        loading: ['Starting emulator', 'Preparing the game view'],
+        switching: ['Loading decision model', 'Waiting for the model server'],
+        thinking: ['Agent thinking', 'Preparing the next decision'],
+        waiting: ['Waiting for model response', `${state.models[state.decision_model]} is choosing an action`],
+        resetting: ['Restoring game', 'Loading the selected state']
+      }[state.status];
+      $('screen-activity').hidden = !activity;
+      if (activity) {
+        if ($('activity-title').textContent !== activity[0]) $('activity-title').textContent = activity[0];
+        if ($('activity-detail').textContent !== activity[1]) $('activity-detail').textContent = activity[1];
+      }
+      $('screen-state').textContent = state.status === 'waiting' ? 'Game paused while the model responds' :
+        state.status === 'paused' ? 'Paused' : state.status === 'error' ? 'Needs attention' :
+        state.status === 'running' ? 'Agent running' : activity?.[0] || '';
       $('output').textContent = `Decision model: ${state.decision_model} · Session: ${state.output}`;
+      if (!model.options.length) {
+        for (const [spec, name] of Object.entries(state.models)) model.add(new Option(name, spec));
+      }
+      if (!modelDirty) model.value = state.requested_model || state.decision_model;
       if (!goalDirty) goal.value = state.goal;
       if (!steeringDirty) steering.value = state.steering;
       if (!recentDirty) useRecent.checked = state.use_recent;
       if (state.error) { $('feedback').style.color = '#ffb9ad'; $('feedback').textContent = state.error; }
       else if (state.notice) { $('feedback').style.color = '#ebcf8c'; $('feedback').textContent = state.notice; }
-      if (state.screen_revision && state.screen_revision !== screenRevision) {
-        screenRevision = state.screen_revision;
-        $('screen').src = `/api/screen?revision=${screenRevision}`;
-        $('screen').hidden = false;
-        $('screen-empty').hidden = true;
-      }
       if (state.reset_count !== resetCount) {
         resetCount = state.reset_count;
         selectedIndex = null; shownIndex = -1; lastHistory = -1;
@@ -204,7 +276,7 @@
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('scores').textContent = 'Option scores will appear here.';
         $('history').textContent = 'No actions yet.';
-        $('feedback').style.color = '#a9d9b8'; $('feedback').textContent = 'Reset complete. Agent paused.';
+        $('feedback').style.color = '#a9d9b8'; $('feedback').textContent = state.notice || 'Reset complete. Agent paused.';
       }
       const latest = state.history[0];
       if (!latest) return;
@@ -260,6 +332,25 @@
       }
     }
 
+    async function watchScreen() {
+      let delay = 0;
+      try {
+        const response = await fetch(`/api/screen?after=${screenRevision}`, {cache: 'no-store'});
+        if (response.status === 204) return;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        screenRevision = Number(response.headers.get('X-Screen-Revision'));
+        const frame = Number(response.headers.get('X-Game-Frame'));
+        $('frame').textContent = frame ? `Frame ${frame.toLocaleString()}` : 'Frame —';
+        const url = URL.createObjectURL(await response.blob());
+        $('screen').src = url;
+        $('screen').hidden = false;
+        $('screen-empty').hidden = true;
+        if (screenUrl) URL.revokeObjectURL(screenUrl);
+        screenUrl = url;
+      } catch (error) { delay = 500; }
+      finally { setTimeout(watchScreen, delay); }
+    }
+
     async function poll() {
       try {
         const response = await fetch('/api/state', {cache: 'no-store'});
@@ -271,6 +362,7 @@
       } finally { setTimeout(poll, 400); }
     }
     poll();
+    watchScreen();
   </script>
 </body>
 </html>

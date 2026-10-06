@@ -9,6 +9,7 @@ import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from libretro import Session
 from libretro.api.input import JoypadState
@@ -69,6 +70,7 @@ class GbaEmulator:
         if not self.core_path.is_file():
             raise FileNotFoundError(f"Libretro core not found: {self.core_path}")
         self._buttons: set[str] = set()
+        self.on_frame: Callable[[Frame], None] | None = None
         self._video = ArrayVideoDriver()
         self._session = Session(self.core_path, self.rom, input=self._input(), video=self._video)
 
@@ -93,6 +95,8 @@ class GbaEmulator:
         try:
             for _ in range(frames):
                 self._session.run()
+                if self.on_frame:
+                    self.on_frame(self.screenshot())
         finally:
             self._buttons.clear()
 

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from mystery_dungeon.session import GameplaySession
 
 
 FRAME = Frame(4, 4, bytes(4 * 4 * 4))
+STILL_FRAME = Frame(16, 16, bytes(16 * 16 * 4))
 
 
 class FakeEmulator:
@@ -118,3 +120,93 @@ def test_zero_history_and_half_completion_do_not_stop(tmp_path):
     assert not model.calls[-1][3]
     agent.transition_wait(session.current_name)
     assert agent.streak == 0
+
+
+@pytest.mark.parametrize("mode,expected", [("dungeon", None), ("field", "stalled")])
+def test_repeated_a_only_stalls_outside_dungeon(tmp_path, mode, expected):
+    class Still(FakeEmulator):
+        def screenshot(self):
+            return STILL_FRAME
+
+    agent = Agent(FakeDecisionModel(), tmp_path, "fake:Model", detect_cycles=True)
+    agent.set_goal("Use A")
+    session = GameplaySession(Still(), tmp_path)
+    session.ram_state = lambda: SimpleNamespace(mode=mode, text_printing=False,
+                                                player_position=None)
+    session.capture()
+    for _ in range(8):
+        assert agent.step(session).status == "acted"
+    assert agent.pending_loop == expected
+    if mode == "dungeon":
+        for _ in range(4):
+            assert agent.step(session).status == "acted"
+    else:
+        assert agent.step(session).status == "stalled"
+
+
+def test_movement_with_changing_ram_position_is_not_a_loop(tmp_path):
+    class Walking(FakeEmulator):
+        position = 0
+
+        def screenshot(self):
+            return STILL_FRAME
+
+        def step(self, frames=1, buttons=()):
+            super().step(frames, buttons)
+            if buttons:
+                self.position += 1
+
+    class Move(FakeDecisionModel):
+        index = 0
+
+        def score(self, goal, guidance, frame, history, options):
+            button = ("RIGHT", "DOWN")[self.index % 2]
+            self.index += 1
+            return DecisionScores({key: float(key == button) for key in options},
+                                  {"complete": 0, "incomplete": 1, "uncertain": 0})
+
+    game = Walking()
+    session = GameplaySession(game, tmp_path)
+    session.ram_state = lambda: SimpleNamespace(mode="field", text_printing=False,
+                                                player_position=(game.position, 0))
+    session.capture()
+    agent = Agent(Move(), tmp_path, "fake:Model", detect_cycles=True)
+    agent.set_goal("Walk right")
+    for _ in range(10):
+        assert agent.step(session).status == "acted"
+    assert agent.pending_loop is None
+
+
+def test_repeated_movement_circle_is_detected(tmp_path):
+    class Circle(FakeEmulator):
+        x = y = 0
+
+        def step(self, frames=1, buttons=()):
+            super().step(frames, buttons)
+            if buttons:
+                direction = next(iter(buttons))
+                dx, dy = {"RIGHT": (1, 0), "DOWN": (0, 1),
+                          "LEFT": (-1, 0), "UP": (0, -1)}[direction]
+                self.x += dx
+                self.y += dy
+
+        def screenshot(self):
+            return Frame(16, 16, bytes((self.x * 60, self.y * 60, 0, 255)) * 256)
+
+    class Move(FakeDecisionModel):
+        index = 0
+
+        def score(self, goal, guidance, frame, history, options):
+            button = ("RIGHT", "DOWN", "LEFT", "UP")[self.index % 4]
+            self.index += 1
+            return DecisionScores({key: float(key == button) for key in options},
+                                  {"complete": 0, "incomplete": 1, "uncertain": 0})
+
+    session = GameplaySession(Circle(), tmp_path)
+    session.capture()
+    agent = Agent(Move(), tmp_path, "fake:Model", detect_cycles=True)
+    agent.set_goal("Move around")
+    for _ in range(12):
+        assert agent.step(session).status == "acted"
+    assert agent.pending_loop == "loop"
+    assert agent.step(session).status == "loop"

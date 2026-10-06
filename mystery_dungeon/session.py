@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 from emulator import Frame, GbaEmulator
+from mystery_dungeon.ram_state import ROM_SHA1, RamState, read_ram_state
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,32 @@ class GameplaySession:
         self.frame_count = 0
         self.current: Frame | None = None
         self.current_name = ""
+        self.ram_enabled = (isinstance(emulator, GbaEmulator) and
+                            hashlib.sha1(emulator.rom.read_bytes()).hexdigest() == ROM_SHA1)
+
+    def ram_state(self) -> RamState | None:
+        return read_ram_state(self.emulator) if self.ram_enabled else None
+
+    def wait_for_text(self, max_frames: int = 300) -> tuple[int, bool]:
+        """Advance silent frames until the current dialogue page is fully printed."""
+        if self.current is None:
+            raise RuntimeError("capture a frame before waiting")
+        state = self.ram_state()
+        waited = 0
+        while state is not None and state.text_printing and waited < max_frames:
+            frames = min(4, max_frames - waited)
+            self.emulator.step(frames)
+            self.frame_count += frames
+            waited += frames
+            state = self.ram_state()
+        if waited:
+            if state is not None and not state.text_printing:
+                # The shop opens its choice menu a few frames after the last glyph.
+                self.emulator.step(12)
+                self.frame_count += 12
+                waited += 12
+            self.capture()
+        return waited, state is None or not state.text_printing
 
     def capture(self) -> Frame:
         """Capture the current emulator frame after a restore or initial step."""
