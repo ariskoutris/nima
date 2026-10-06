@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, ContextManager, Mapping, Protocol
 
-from emulator import Frame, scene_distance
+from emulator import Frame
 
 if TYPE_CHECKING:
     from mystery_dungeon.session import GameplaySession, Transition
@@ -31,7 +31,16 @@ OPTIONS = {
     "WAIT": "press nothing and let the game advance",
 }
 COMPLETION = ("complete", "incomplete", "uncertain")
-MOVEMENT = frozenset(("UP", "DOWN", "LEFT", "RIGHT"))
+GLM_MODEL = "mystery_dungeon.decision_models.glm:GlmDecisionModel"
+
+
+def default_context_path(model_spec: str) -> Path | None:
+    return Path(__file__).parent / "prompts/control.md" if model_spec == GLM_MODEL else None
+
+
+def default_context(model_spec: str) -> str:
+    path = default_context_path(model_spec)
+    return path.read_text().strip() if path else ""
 
 
 @dataclass(frozen=True)
@@ -73,7 +82,6 @@ class Turn:
     decision: DecisionScores | None = None
     button: str | None = None
     error: str | None = None
-    needs_followup: bool = False
 
 
 class DecisionModel(Protocol):
@@ -114,32 +122,6 @@ def validate_scores(raw: DecisionScores) -> tuple[dict[str, float], dict[str, fl
     return buttons, {key: value / total for key, value in completion.items()}
 
 
-def is_cycle(recent: deque[tuple[Frame, str, tuple[int, int] | None]]) -> bool:
-    steps = list(recent)
-    for length in range(2, 7):
-        if len(steps) < 3 * length or len({step[1] for step in steps[-length:]}) < 2:
-            continue
-        for i in range(1, 2 * length + 1):
-            frame, button, position = steps[-i]
-            earlier, earlier_button, earlier_position = steps[-i - length]
-            if (button not in MOVEMENT or button != earlier_button or
-                    (position is not None and earlier_position is not None and
-                     position != earlier_position) or
-                    scene_distance(frame, earlier) >= 3):
-                break
-        else:
-            return True
-    return False
-
-
-def has_message_panel(frame: Frame) -> bool:
-    if frame.width <= 10 or frame.height <= 145:
-        return False
-    offset = (145 * frame.width + 10) * 4
-    red, green, blue = frame.rgba[offset:offset + 3]
-    return blue > 200 and green > red
-
-
 class Agent:
     """Pursue a game goal one observation and action at a time.
 
@@ -150,19 +132,19 @@ class Agent:
     """
 
     def __init__(self, model: DecisionModel, output: Path, model_spec: str,
-                 history_frames: int = 1, completion_votes: int = 1, context: str = "",
+                 history_frames: int = 1, completion_votes: int = 1, context: str | None = None,
                  run: Mapping[str, str | int] | None = None,
-                 detect_cycles: bool = False, transition_wait: bool = False):
-        if history_frames < 0 or completion_votes < 1:
-            raise ValueError("history frames must be non-negative and completion votes positive")
+                 image_scale: int = 1):
+        if history_frames < 0 or completion_votes < 1 or image_scale < 1:
+            raise ValueError("history frames must be non-negative; votes and image scale must be positive")
         self.model = model
         self.model_spec = model_spec
         self.output = output
         self.history_frames = history_frames
         self.completion_votes = completion_votes
-        self.context = context.strip()
-        self.detect_cycles = detect_cycles
-        self.wait_on_loop = transition_wait
+        self.image_scale = image_scale
+        self._context_override = context
+        self.context = (default_context(model_spec) if context is None else context).strip()
         self.goal = ""
         self.steering = ""
         self.use_recent = True
@@ -170,12 +152,6 @@ class Agent:
         self.completed = False
         self.history: deque[RecentStep] = deque(maxlen=history_frames or 1)
         self.events: deque[dict] = deque(maxlen=40)
-        self.recent_actions: deque[tuple[Frame, str, tuple[int, int] | None]] = deque(maxlen=18)
-        self.repeat_button: str | None = None
-        self.repeat_count = 0
-        self.pending_loop: str | None = None
-        self.low_visual_change_actions = 0
-        self.transition_waits = 0
         self.output.mkdir(parents=True, exist_ok=True)
         prompt = None
         prompt_bytes = getattr(model, "prompt_bytes", None)
@@ -192,7 +168,7 @@ class Agent:
         (self.output / "config.json").write_text(json.dumps({
             "format_version": 2, "decision_model": model_spec,
             "history_frames": history_frames, "completion_votes": completion_votes,
-            "detect_cycles": detect_cycles, "transition_wait": transition_wait,
+            "image_scale": image_scale,
             "button_options_sha256": hashlib.sha256(
                 json.dumps(OPTIONS, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest(),
             "prompt": prompt, "context": context_snapshot, "run": dict(run or {}),
@@ -232,21 +208,13 @@ class Agent:
         self.use_recent = enabled
         self.history.clear()
         self.streak = 0
-        self._clear_loop_state()
         self.record({"event": "history_setting", "enabled": enabled})
         return True
-
-    def _clear_loop_state(self) -> None:
-        self.recent_actions.clear()
-        self.repeat_button = None
-        self.repeat_count = 0
-        self.pending_loop = None
 
     def _clear_short_memory(self) -> None:
         self.history.clear()
         self.streak = 0
         self.completed = False
-        self._clear_loop_state()
 
     def reset(self, screenshot: str) -> None:
         self._clear_short_memory()
@@ -258,6 +226,11 @@ class Agent:
         self.model, self.model_spec = model, spec
         self._clear_short_memory()
         event = {"event": "model_change", "from": previous, "to": spec}
+        if self._context_override is None:
+            context = default_context(spec)
+            if context != self.context:
+                self.context = context
+                event["context"] = context
         if prompt_bytes := getattr(model, "prompt_bytes", None):
             digest = hashlib.sha256(prompt_bytes).hexdigest()
             path = self.output / "prompts" / f"{digest}.json"
@@ -266,10 +239,6 @@ class Agent:
             event["prompt"] = {"file": str(path.relative_to(self.output)),
                                "version": model.prompt_version, "sha256": digest}
         self.record(event)
-
-    def transition_wait(self, screenshot: str) -> None:
-        self._clear_short_memory()
-        self.record({"event": "transition_wait", "screenshot": screenshot})
 
     def resume(self) -> None:
         if self.completed:
@@ -285,8 +254,13 @@ class Agent:
     def _decide(self, current_frame: Frame,
                 context: DecisionContext) -> tuple[DecisionScores, bool]:
         started = time.perf_counter()
-        raw = self.model.score(context.goal, context.guidance, current_frame,
-                               context.history, OPTIONS.copy())
+        model_frame = current_frame.scaled_nearest(self.image_scale)
+        model_history = tuple(
+            RecentStep(step.frame.scaled_nearest(self.image_scale), step.action, step.screenshot)
+            for step in context.history
+        ) if self.image_scale > 1 else context.history
+        raw = self.model.score(context.goal, context.guidance, model_frame,
+                               model_history, OPTIONS.copy())
         buttons, completion = validate_scores(raw)
         result = DecisionScores(buttons, completion,
                                 round((time.perf_counter() - started) * 1000),
@@ -297,24 +271,17 @@ class Agent:
              cancel_reason: Callable[[], str | None] | None = None,
              on_model_waiting: Callable[[bool], None] | None = None) -> Turn:
         """Make one decision and either stop or execute its action."""
-        if session.current is None:
-            raise RuntimeError("capture a frame before stepping")
-        waited, ready = session.wait_for_text()
-        if waited:
-            self.record({"event": "text_wait", "frames": waited,
-                         "screenshot": session.current_name, "ready": ready})
-        if not ready:
-            return Turn("stalled", error="dialogue text did not finish printing")
         if cancel_reason and cancel_reason():
             return Turn("cancelled")
         context = self._decision_context()
         if not context.goal:
             raise ValueError("set a goal before running")
+        current_frame = session.observe()
         screenshot = session.current_name
         if on_model_waiting:
             on_model_waiting(True)
         try:
-            decision, stop = self._decide(session.current, context)
+            decision, stop = self._decide(current_frame, context)
         except Exception as exc:
             with action_lock or nullcontext():
                 cancelled = cancel_reason() if cancel_reason else None
@@ -332,34 +299,10 @@ class Agent:
             if stop:
                 self._stop(decision, screenshot)
                 return Turn("completed", decision)
-            if self.pending_loop:
-                reason = self.pending_loop
-                self._discard(decision, screenshot, reason)
-                if not self.wait_on_loop:
-                    self._clear_loop_state()
-                    self.record({"event": "loop_stop", "reason": reason,
-                                 "goal": self.goal, "screenshot": screenshot})
-                    return Turn(reason, decision)
-                transition = session.apply("WAIT", frames=60)
-                self._observe(transition, "WAIT", "transition_wait", None)
-                self.transition_wait(session.current_name)
-                if scene_distance(transition.before, transition.after) >= 10:
-                    self.transition_waits += 1
-                    return Turn("transition", decision)
-                self.record({"event": "loop_stop", "reason": reason,
-                             "goal": self.goal, "screenshot": session.current_name})
-                return Turn(reason, decision)
             button = decision.choice
-            before_state = session.ram_state()
             transition = session.apply(button)
-            after_state = session.ram_state()
-            moved = (before_state.player_position != after_state.player_position
-                     if before_state and after_state and before_state.player_position is not None
-                     and after_state.player_position is not None else None)
-            self._observe(transition, button, "agent", decision,
-                          after_state.mode if after_state else None, moved,
-                          after_state.player_position if after_state else None)
-            return Turn("acted", decision, button, needs_followup=bool(self.pending_loop))
+            self._observe(transition, button, "agent", decision)
+            return Turn("acted", decision, button)
 
     def manual_step(self, session: GameplaySession, button: str) -> Frame:
         """Apply an operator action while keeping the agent's history accurate."""
@@ -368,35 +311,14 @@ class Agent:
         return transition.after
 
     def _observe(self, transition: Transition, button: str, source: str,
-                decision: DecisionScores | None, mode: str | None = None,
-                moved: bool | None = None,
-                position: tuple[int, int] | None = None) -> dict:
+                decision: DecisionScores | None) -> dict:
         before, before_name = transition.before, transition.before_name
         after, after_name = transition.after, transition.after_name
         if source == "agent" and decision is not None:
             self.streak = self.streak + 1 if decision.positive else 0
         else:
             self.streak = 0
-        if source == "agent":
-            distance = scene_distance(before, after)
-            self.low_visual_change_actions += distance < 10
-            eligible = button in MOVEMENT or (button == "A" and mode != "dungeon")
-            if eligible and distance < 3 and moved is not True:
-                self.repeat_count = self.repeat_count + 1 if button == self.repeat_button else 1
-                self.repeat_button = button
-            else:
-                self.repeat_count = 0
-                self.repeat_button = None
-            self.recent_actions.append((after, button, position))
-            stalled = self.repeat_count >= 8
-            cycle = self.detect_cycles and is_cycle(self.recent_actions)
-            if (stalled or cycle) and not has_message_panel(after):
-                self.pending_loop = "stalled" if stalled else "loop"
-                self.repeat_count = 0
-                self.repeat_button = None
-        else:
-            self._clear_loop_state()
-        if self.use_recent and self.history_frames and source != "transition_wait":
+        if self.use_recent and self.history_frames:
             self.history.append(RecentStep(before, button, before_name))
         row = {"event": "action", "before": before_name, "after": after_name,
                "goal": self.goal, "steering": self.steering, "source": source,
@@ -407,7 +329,6 @@ class Agent:
                "guidance": decision.guidance if decision else self.guidance,
                "decision_model": self.model_spec, "button_options": OPTIONS if decision else {},
                "latency_ms": decision.latency_ms if decision else 0,
-               "stalled": source == "agent" and self.pending_loop == "stalled",
                "index": transition.index, "step": transition.step,
                "frame_before": transition.frame_before,
                "frame_after": transition.frame_after}
@@ -415,15 +336,11 @@ class Agent:
             row.update(self._model_response())
         self.record(row)
         self.events.append(row)
-        if source == "agent" and self.pending_loop:
-            self.record({"event": "suspected_loop", "reason": self.pending_loop,
-                         "goal": self.goal, "screenshot": after_name, "button": button})
         return row
 
     def _stop(self, decision: DecisionScores, screenshot: str) -> None:
         self.completed = True
         self.streak = 0
-        self._clear_loop_state()
         self.record({"event": "completion", **self._decision_fields(decision, screenshot)})
 
     def _discard(self, decision: DecisionScores, screenshot: str, reason: str) -> None:

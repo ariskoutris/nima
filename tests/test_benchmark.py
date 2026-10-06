@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from emulator import GbaEmulator
-from mystery_dungeon.agent import DecisionScores
+from mystery_dungeon.agent import GLM_MODEL, DecisionScores, default_context_path
 from mystery_dungeon import benchmark
 from mystery_dungeon.benchmark import (CASES, CHECKPOINTS, CORE, ROM, Case, Grader,
                                        build_fixtures, press, read_ss0, restore, run_case)
@@ -270,3 +270,27 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     assert "time_limit_seconds" not in config
     assert "recognition_window" not in config
     assert config["hashes"][str(model_file)] == benchmark.sha256(model_file)
+
+
+def test_glm_benchmark_default_context_can_be_disabled(tmp_path, monkeypatch):
+    rom, core = tmp_path / "game.gba", tmp_path / "core"
+    for path in (rom, core, *(tmp_path / f"{name}.ss0" for name in
+                              ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact"))):
+        path.write_bytes(b"test")
+    monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
+    monkeypatch.setattr(benchmark, "CASES", (Case("one", "square", "Move", "down", 1),))
+    monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
+    monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
+    monkeypatch.setattr(benchmark, "load_decision_model", Mock(return_value=object()))
+    run = Mock(return_value={"stop_reason": "budget", "steps": 0})
+    monkeypatch.setattr(benchmark, "run_case", run)
+    monkeypatch.setattr(benchmark, "report", Mock())
+    for name, extra in (("default", []), ("disabled", ["--no-context"])):
+        output = tmp_path / name
+        monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom),
+                                      "--core", str(core), "--output", str(output),
+                                      "--decision-model", GLM_MODEL, *extra])
+        benchmark.main()
+        config = json.loads((output / "config.json").read_text())
+        assert config["context"] == (str(default_context_path(GLM_MODEL)) if not extra else None)
+        assert run.call_args.args[7] == (default_context_path(GLM_MODEL).read_text() if not extra else "")

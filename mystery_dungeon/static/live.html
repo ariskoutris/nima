@@ -264,6 +264,7 @@
       if (!steeringDirty) steering.value = state.steering;
       if (!recentDirty) useRecent.checked = state.use_recent;
       if (state.error) { $('feedback').style.color = '#ffb9ad'; $('feedback').textContent = state.error; }
+      else if (state.status === 'running' && state.warning) { $('feedback').style.color = '#ebcf8c'; $('feedback').textContent = state.warning; }
       else if (state.notice) { $('feedback').style.color = '#ebcf8c'; $('feedback').textContent = state.notice; }
       if (state.reset_count !== resetCount) {
         resetCount = state.reset_count;
@@ -293,7 +294,7 @@
       $('choice').textContent = item.choice;
       $('choice').className = `choice ${item.source === 'manual' ? 'manual-choice' : ''}`;
       $('decision-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.latency_ms} ms · frame ${item.frame_before}`;
-      $('choice-detail').textContent = item.stalled ? `No visible progress after repeated ${item.choice}; agent paused.` : item.source === 'manual' ? 'Manual move' : (item.steering ? `Goal: ${item.goal} · Steering: ${item.steering}` : `Goal: ${item.goal}`);
+      $('choice-detail').textContent = item.source === 'manual' ? 'Manual move' : (item.steering ? `Goal: ${item.goal} · Steering: ${item.steering}` : `Goal: ${item.goal}`);
       $('observation').src = `/api/observation/${item.index}`;
       $('observation').hidden = false;
       $('observation-label').hidden = false;

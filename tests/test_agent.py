@@ -2,17 +2,16 @@
 
 import hashlib
 import json
-from types import SimpleNamespace
-
 import pytest
 
 from emulator import Frame
-from mystery_dungeon.agent import Agent, DecisionScores, OPTIONS, validate_scores
+from mystery_dungeon.agent import (GLM_MODEL, Agent, DecisionContext, DecisionScores,
+                                   OPTIONS, RecentStep, default_context_path,
+                                   validate_scores)
 from mystery_dungeon.session import GameplaySession
 
 
 FRAME = Frame(4, 4, bytes(4 * 4 * 4))
-STILL_FRAME = Frame(16, 16, bytes(16 * 16 * 4))
 
 
 class FakeEmulator:
@@ -77,6 +76,20 @@ def test_run_snapshots_prompt_and_guidance(tmp_path):
     assert (tmp_path / config["context"]["file"]).read_text() == "Use the map."
 
 
+def test_glm_defaults_to_controls_and_explicit_empty_context_disables_it(tmp_path):
+    guide = default_context_path(GLM_MODEL).read_text().strip()
+    agent = Agent(FakeDecisionModel(), tmp_path / "default", GLM_MODEL)
+    assert agent.guidance == guide
+    config = json.loads((agent.output / "config.json").read_text())
+    assert (agent.output / config["context"]["file"]).read_text() == guide
+    agent.change_model(FakeDecisionModel(), "fake:Model")
+    assert agent.guidance == ""
+    agent.change_model(FakeDecisionModel(), GLM_MODEL)
+    assert agent.guidance == guide
+    assert Agent(FakeDecisionModel(), tmp_path / "no_guide", GLM_MODEL,
+                 context="").guidance == ""
+
+
 def test_completion_stops_before_input_and_two_votes_continue(tmp_path):
     game = FakeEmulator()
     agent = Agent(FakeDecisionModel((0.6,)), tmp_path, "fake:Model")
@@ -109,6 +122,21 @@ def test_score_validation():
                                        {"complete": 1, "incomplete": 0, "uncertain": 0}))
 
 
+def test_image_scale_only_changes_model_input(tmp_path):
+    left, right = bytes((1, 2, 3, 4)), bytes((5, 6, 7, 8))
+    frame = Frame(2, 1, left + right)
+    assert frame.scaled_nearest(2) == Frame(4, 2, (left * 2 + right * 2) * 2)
+    model = FakeDecisionModel()
+    agent = Agent(model, tmp_path, "fake:Model", image_scale=2)
+    history = (RecentStep(frame, "LEFT", "previous.png"),)
+    decision, _ = agent._decide(frame, DecisionContext("Move", "", history, 0))
+    assert model.calls[0][2] == frame.scaled_nearest(2)
+    assert model.calls[0][3][0].frame == frame.scaled_nearest(2)
+    assert decision.history == history
+    assert list(model.calls[0][4]) == ["UP", "DOWN", "LEFT", "RIGHT", "A", "B", "SELECT", "WAIT"]
+    assert json.loads((tmp_path / "config.json").read_text())["image_scale"] == 2
+
+
 def test_zero_history_and_half_completion_do_not_stop(tmp_path):
     model = FakeDecisionModel((0.5, 0.5))
     agent = Agent(model, tmp_path, "fake:Model", history_frames=0)
@@ -118,95 +146,57 @@ def test_zero_history_and_half_completion_do_not_stop(tmp_path):
     assert agent.step(session).status == "acted"
     assert agent.step(session).status == "acted"
     assert not model.calls[-1][3]
-    agent.transition_wait(session.current_name)
-    assert agent.streak == 0
 
 
-@pytest.mark.parametrize("mode,expected", [("dungeon", None), ("field", "stalled")])
-def test_repeated_a_only_stalls_outside_dungeon(tmp_path, mode, expected):
+def test_repeated_actions_do_not_trigger_an_automatic_wait_or_stop(tmp_path):
     class Still(FakeEmulator):
         def screenshot(self):
-            return STILL_FRAME
+            return Frame(16, 16, bytes(16 * 16 * 4))
 
-    agent = Agent(FakeDecisionModel(), tmp_path, "fake:Model", detect_cycles=True)
-    agent.set_goal("Use A")
-    session = GameplaySession(Still(), tmp_path)
-    session.ram_state = lambda: SimpleNamespace(mode=mode, text_printing=False,
-                                                player_position=None)
-    session.capture()
-    for _ in range(8):
-        assert agent.step(session).status == "acted"
-    assert agent.pending_loop == expected
-    if mode == "dungeon":
-        for _ in range(4):
-            assert agent.step(session).status == "acted"
-    else:
-        assert agent.step(session).status == "stalled"
-
-
-def test_movement_with_changing_ram_position_is_not_a_loop(tmp_path):
-    class Walking(FakeEmulator):
-        position = 0
-
-        def screenshot(self):
-            return STILL_FRAME
-
-        def step(self, frames=1, buttons=()):
-            super().step(frames, buttons)
-            if buttons:
-                self.position += 1
-
-    class Move(FakeDecisionModel):
-        index = 0
-
-        def score(self, goal, guidance, frame, history, options):
-            button = ("RIGHT", "DOWN")[self.index % 2]
-            self.index += 1
-            return DecisionScores({key: float(key == button) for key in options},
-                                  {"complete": 0, "incomplete": 1, "uncertain": 0})
-
-    game = Walking()
+    game = Still()
+    model = FakeDecisionModel()
+    agent = Agent(model, tmp_path, "fake:Model")
+    agent.set_goal("Keep trying")
     session = GameplaySession(game, tmp_path)
-    session.ram_state = lambda: SimpleNamespace(mode="field", text_printing=False,
-                                                player_position=(game.position, 0))
     session.capture()
-    agent = Agent(Move(), tmp_path, "fake:Model", detect_cycles=True)
-    agent.set_goal("Walk right")
-    for _ in range(10):
-        assert agent.step(session).status == "acted"
-    assert agent.pending_loop is None
-
-
-def test_repeated_movement_circle_is_detected(tmp_path):
-    class Circle(FakeEmulator):
-        x = y = 0
-
-        def step(self, frames=1, buttons=()):
-            super().step(frames, buttons)
-            if buttons:
-                direction = next(iter(buttons))
-                dx, dy = {"RIGHT": (1, 0), "DOWN": (0, 1),
-                          "LEFT": (-1, 0), "UP": (0, -1)}[direction]
-                self.x += dx
-                self.y += dy
-
-        def screenshot(self):
-            return Frame(16, 16, bytes((self.x * 60, self.y * 60, 0, 255)) * 256)
-
-    class Move(FakeDecisionModel):
-        index = 0
-
-        def score(self, goal, guidance, frame, history, options):
-            button = ("RIGHT", "DOWN", "LEFT", "UP")[self.index % 4]
-            self.index += 1
-            return DecisionScores({key: float(key == button) for key in options},
-                                  {"complete": 0, "incomplete": 1, "uncertain": 0})
-
-    session = GameplaySession(Circle(), tmp_path)
-    session.capture()
-    agent = Agent(Move(), tmp_path, "fake:Model", detect_cycles=True)
-    agent.set_goal("Move around")
     for _ in range(12):
         assert agent.step(session).status == "acted"
-    assert agent.pending_loop == "loop"
-    assert agent.step(session).status == "loop"
+    assert len(model.calls) == 12
+    assert game.presses == [(8, ("A",)), (4, ())] * 12
+    assert session.warning == "Possible stall: little screen change after 12 A presses"
+
+
+def test_agent_only_needs_observe_and_button_press(tmp_path):
+    session = GameplaySession(FakeEmulator(), tmp_path)
+    session.capture()
+
+    class SessionPort:
+        @property
+        def current_name(self):
+            return session.current_name
+
+        def observe(self):
+            return session.observe()
+
+        def apply(self, button):
+            return session.apply(button)
+
+    agent = Agent(FakeDecisionModel(), tmp_path, "fake:Model")
+    agent.set_goal("Try")
+    assert agent.step(SessionPort()).status == "acted"
+
+
+def test_agent_can_choose_wait_without_an_automatic_stall_stop(tmp_path):
+    class WaitModel(FakeDecisionModel):
+        def score(self, goal, guidance, frame, history, options):
+            return DecisionScores({key: float(key == "WAIT") for key in options},
+                                  {"complete": 0, "incomplete": 1, "uncertain": 0})
+
+    game = FakeEmulator()
+    session = GameplaySession(game, tmp_path)
+    session.capture()
+    agent = Agent(WaitModel(), tmp_path, "fake:Model")
+    agent.set_goal("Watch")
+    assert agent.step(session).button == "WAIT"
+    assert game.presses == [(8, ()), (4, ())]
+    assert session.warning is None

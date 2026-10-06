@@ -26,6 +26,20 @@ class Frame:
     height: int
     rgba: bytes
 
+    def scaled_nearest(self, scale: int) -> Frame:
+        if scale < 1:
+            raise ValueError("image scale must be positive")
+        if scale == 1:
+            return self
+        stride = self.width * 4
+        rows = []
+        for start in range(0, len(self.rgba), stride):
+            row = self.rgba[start:start + stride]
+            enlarged = b"".join(row[index:index + 4] * scale
+                                for index in range(0, stride, 4))
+            rows.extend([enlarged] * scale)
+        return Frame(self.width * scale, self.height * scale, b"".join(rows))
+
     def png_bytes(self) -> bytes:
         """Encode an RGBA screenshot without an image dependency."""
         def chunk(kind: bytes, data: bytes) -> bytes:

@@ -4,7 +4,7 @@ import pytest
 
 from emulator import GbaEmulator
 from mystery_dungeon.agent import Agent, DecisionScores
-from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM, read_ss0, restore
+from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM, press, read_ss0, restore
 from mystery_dungeon.ram_state import read_ram_state
 from mystery_dungeon.session import GameplaySession
 
@@ -47,6 +47,55 @@ def test_field_menu_and_dungeon_modes():
         assert read_ram_state(game).mode == "menu"
         restore(game, read_ss0(CHECKPOINTS / "normal-maze.ss0"))
         assert read_ram_state(game).mode == "dungeon"
+
+
+def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
+    paths = (ROM, CORE, CHECKPOINTS / "shop-interact.ss0")
+    if not all(path.is_file() for path in paths):
+        pytest.skip("local ROM, core, and checkpoint required")
+
+    def light_pixels(frame, rect):
+        left, top, right, bottom = rect
+        return sum(min(frame.rgba[index:index + 3]) > 180
+                   for y in range(top, bottom) for x in range(left, right)
+                   for index in ((y * frame.width + x) * 4,))
+
+    with GbaEmulator(ROM, CORE) as game:
+        restore(game, read_ss0(CHECKPOINTS / "shop-interact.ss0"))
+        press(game, "A")
+        while read_ram_state(game).text_printing:
+            game.step(4)
+        game.step(12)
+        popup = game.save_state()
+
+        press(game, "DOWN")
+        press(game, "A")
+        while read_ram_state(game).text_printing:
+            game.step(4)
+        game.step(12)
+        press(game, "A")
+        game.step(12)
+        listing = game.save_state()
+        for _ in range(4):
+            press(game, "DOWN")
+        pidgey = game.save_state()
+
+        for name, state, rect, threshold in (
+            ("popup", popup, (182, 65, 193, 78), 8),
+            ("list", listing, (14, 30, 26, 44), 0),
+            ("pidgey", pidgey, (14, 78, 26, 91), 0),
+        ):
+            for phase in range(16):
+                game.load_state(state)
+                game.step(phase + 1)
+                session = GameplaySession(game, tmp_path / name / str(phase))
+                session.capture()
+                assert read_ram_state(game).mode == "menu"
+                observed = session.current_frame()
+                assert light_pixels(observed, rect) > threshold
+                assert session.action_count == 0
+                assert session.frame_count == 8
+                assert (session.output / session.current_name).is_file()
 
 
 def test_agent_scores_only_after_text_finishes(tmp_path):

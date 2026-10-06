@@ -141,6 +141,19 @@ def test_manual_action_enters_history_and_reset_keeps_goal(start_run):
     assert [row for row in rows if row["event"] == "action"][-1]["step"] == 1
 
 
+def test_session_stall_warning_is_shown_without_stopping_actions(start_run):
+    run = start_run(FakeDecisionModel())
+    for _ in range(8):
+        run.control({"command": "manual", "button": "DOWN"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: len(run.history) == 8, 2)
+    assert run.snapshot()["warning"] == "Possible stall: little screen change after 8 DOWN presses"
+    run.control({"command": "reset"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: run.reset_count == 1, 2)
+    assert run.snapshot()["warning"] is None
+
+
 def test_upload_state_and_ss0_from_live_view(start_run, monkeypatch):
     run = start_run(FakeDecisionModel())
     run.control({"goal": "Find exit", "command": "manual", "button": "RIGHT"})
@@ -220,6 +233,8 @@ def test_switch_model_cancels_decision_and_stops_local_server(start_run, monkeyp
     run.request_model(live.GLM)
     with run.condition:
         assert run.condition.wait_for(lambda: run.model_spec == live.GLM and not run.switching, 2)
+    assert run.agent.context == (Path(__file__).resolve().parents[1] /
+                                 "mystery_dungeon/prompts/control.md").read_text().strip()
     assert server.stopped
     rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
     assert [row["to"] for row in rows if row["event"] == "model_change"] == [live.ONEJEV, live.GLM]
@@ -305,25 +320,6 @@ def test_completion_stops_before_press(start_run):
         assert run.condition.wait_for(lambda: run.notice.startswith("Completed"), 2)
     assert not run.history
     assert run.agent.completed
-
-
-def test_stalled_eighth_action_gets_completion_check(start_run):
-    model = FakeDecisionModel(button="DOWN")
-    run = start_run(model)
-    run.control({"goal": "Move down", "command": "start"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: bool(run.notice), 2)
-    assert len(run.history) == 8
-    assert "stalled" in run.notice
-    assert len(model.calls) == 9
-    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    actions = [row for row in rows if row["event"] == "action"]
-    assert actions[-1] == run.history[-1]
-    assert actions[-1]["stalled"]
-    discarded = [row for row in rows if row["event"] == "discarded_decision"]
-    assert discarded[-1]["reason"] == "stalled"
-    assert discarded[-1]["screenshot"] == actions[-1]["after"]
-    assert discarded[-1]["history"][0]["action"] == "DOWN"
 
 
 def test_changed_goal_takes_effect_after_current_action(start_run):

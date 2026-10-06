@@ -9,10 +9,11 @@ import struct
 import time
 import zlib
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 from emulator import GbaEmulator
-from mystery_dungeon.agent import Agent, DecisionModel, load_decision_model
+from mystery_dungeon.agent import Agent, DecisionModel, default_context_path, load_decision_model
 from mystery_dungeon.session import GameplaySession
 
 
@@ -227,7 +228,8 @@ def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Seed]:
 def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
              seeds: dict[str, Seed], output: Path,
              history_frames: int = 1, completion_votes: int = 1,
-             context: str = "", model_spec: str = "injected") -> dict:
+             context: str | None = None, model_spec: str = "injected",
+             image_scale: int = 1) -> dict:
     output.mkdir(parents=True, exist_ok=False)
     restore(game, seeds[case.start])
     grader = Grader(case, game)
@@ -235,7 +237,7 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
                   {"kind": "benchmark_case", "case": case.id, "start": case.start,
                    "criterion": case.criterion, "action_limit": case.limit,
                    "hold_frames": HOLD, "release_frames": RELEASE},
-                  detect_cycles=True, transition_wait=True)
+                  image_scale=image_scale)
     agent.set_goal(case.goal)
     session = GameplaySession(game, output, HOLD, RELEASE)
     session.capture()
@@ -263,10 +265,7 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
         if turn.status == "completed":
             reason = "recognized" if reached_at is not None else "false_completion"
             break
-        if turn.status in ("stalled", "loop"):
-            reason = turn.status
-            break
-        if turn.status in ("acted", "transition"):
+        if turn.status == "acted":
             actions += 1
     final = session.current
     final.save_png(output / "frames/final.png")
@@ -283,8 +282,7 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
               "false_completion": reason == "false_completion", "success": reached,
               "reached_at": reached_at, "stop_reason": reason,
               "steps": actions, "decisions": decisions,
-              "low_visual_change_actions": agent.low_visual_change_actions,
-              "transition_waits": agent.transition_waits, "events": events,
+              "events": events,
               "seconds": round(time.monotonic() - started, 2), "error": error}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
@@ -308,32 +306,40 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom", type=Path, default=ROM)
     parser.add_argument("--core", type=Path, default=CORE)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path,
+                        default=Path("runs/benchmarks") / datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
+                        help="run directory (default: timestamped directory in runs/benchmarks)")
     parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.glm:GlmDecisionModel")
     parser.add_argument("--model-file", type=Path, action="append",
                         help="hash a local model artifact; repeat for weights and vision projector")
-    parser.add_argument("--context", type=Path)
+    context_group = parser.add_mutually_exclusive_group()
+    context_group.add_argument("--context", type=Path)
+    context_group.add_argument("--no-context", action="store_true",
+                               help="disable the model's default guidance")
     parser.add_argument("--history-frames", type=int, default=1)
+    parser.add_argument("--image-scale", type=int, default=1)
     parser.add_argument("--completion-votes", type=int, default=1)
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
-    if args.history_frames < 0 or args.completion_votes < 1:
-        parser.error("history frames must be non-negative and completion votes positive")
+    if args.history_frames < 0 or args.completion_votes < 1 or args.image_scale < 1:
+        parser.error("history frames must be non-negative; votes and image scale must be positive")
     selected = [case for case in CASES if args.case is None or case.id in args.case]
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
-    context = args.context.read_text() if args.context else ""
+    context_path = args.context or (None if args.no_context else default_context_path(args.decision_model))
+    context = context_path.read_text() if context_path else ""
     files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in
                                   ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")),
              *(args.model_file or ()),
-             *((args.context,) if args.context else ()))
+             *((context_path,) if context_path else ()))
     hashes = {str(path): sha256(path) for path in files}
     hashes["decision_model"] = args.decision_model
     (args.output / "config.json").write_text(json.dumps({
         "format_version": 4, "layout": "benchmark", "grader": "pmd-red-ram-v1",
         "cases": [asdict(c) for c in selected],
-        "hashes": hashes, "context": str(args.context) if args.context else None,
+        "hashes": hashes, "context": str(context_path) if context_path else None,
         "history_frames": args.history_frames, "completion_votes": args.completion_votes,
+        "image_scale": args.image_scale,
         "hold_frames": HOLD, "release_frames": RELEASE,
     }, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game:
@@ -344,7 +350,7 @@ def main() -> None:
             result = run_case(game, case, load_decision_model(args.decision_model), seeds,
                               args.output / "cases" / case.id,
                               args.history_frames, args.completion_votes, context,
-                              args.decision_model)
+                              args.decision_model, args.image_scale)
             results.append(result)
             report(results, args.output)
             print(f"  {result['stop_reason']} after {result['steps']} actions", flush=True)

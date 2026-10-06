@@ -99,7 +99,7 @@ class ModelServer:
 
 class LiveRun:
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 model_spec: str, hold_frames: int, release_frames: int, context: str = "",
+                 model_spec: str, hold_frames: int, release_frames: int, context: str | None = None,
                  history_frames: int = 1, completion_votes: int = 1,
                  model_server: ModelServer | None = None):
         if output.exists():
@@ -111,8 +111,8 @@ class LiveRun:
         self.agent = Agent(load_decision_model(model_spec), output, model_spec,
                            history_frames, completion_votes, context,
                            {"kind": "live", "rom": str(rom), "core": str(core),
-                            "initial_state": str(state), "hold_frames": hold_frames,
-                            "release_frames": release_frames}, detect_cycles=True)
+                   "initial_state": str(state), "hold_frames": hold_frames,
+                   "release_frames": release_frames})
         self.hold_frames, self.release_frames = hold_frames, release_frames
         self.condition = threading.Condition()
         self.screen_condition = threading.Condition()
@@ -134,6 +134,7 @@ class LiveRun:
         self.stream_frame = 0
         self.frame = 0
         self.game_state: dict | None = None
+        self.warning: str | None = None
         self.loaded = False
         self.busy = False
         self.waiting_for_model = False
@@ -168,7 +169,7 @@ class LiveRun:
                     "goal": self.goal, "steering": self.steering,
                     "use_recent": self.use_recent, "frame": self.frame,
                     "screen_revision": self.screen_revision, "reset_count": self.reset_count,
-                    "game_state": self.game_state,
+                    "game_state": self.game_state, "warning": self.warning,
                     "history": list(reversed(self.history)),
                     "decision_model": self.model_spec, "requested_model": self.pending_model,
                     "models": self.models, "output": str(self.output)}
@@ -374,9 +375,11 @@ class LiveRun:
                         session.save_latest()
                         self.agent.reset(session.current_name)
                         session.action_count = 0
+                        session.clear_warning()
                         self.frame = 1
                         state = session.ram_state()
                         self.game_state = asdict(state) if state else None
+                        self.warning = session.warning
                         self._publish_frame(session.current)
                         self.running = False
                         self.resetting = False
@@ -430,6 +433,7 @@ class LiveRun:
                         self.frame = session.frame_count
                         state = session.ram_state()
                         self.game_state = asdict(state) if state else None
+                        self.warning = session.warning
                         self._publish_frame(session.current)
                         self.busy = False
                         self.condition.notify_all()
@@ -445,13 +449,13 @@ class LiveRun:
                         self.frame = session.frame_count
                         state = session.ram_state()
                         self.game_state = asdict(state) if state else None
+                        self.warning = session.warning
                         self._publish_frame(session.current)
                     if turn.status == "cancelled":
                         self.condition.notify_all()
                         continue
-                    if turn.status in ("acted", "transition"):
-                        if (self.single_step and self.step_generation == active_step
-                                and not turn.needs_followup):
+                    if turn.status == "acted":
+                        if self.single_step and self.step_generation == active_step:
                             self.running = False
                             self.single_step = False
                     elif turn.status == "completed":
@@ -459,12 +463,6 @@ class LiveRun:
                             self.running = False
                             self.single_step = False
                             self.notice = f"Completed: {self.agent.goal}"
-                    elif turn.status in ("stalled", "loop"):
-                        if self.pending_goal == self.agent.goal:
-                            self.running = False
-                            self.single_step = False
-                            self.notice = (f"Paused: {turn.error}" if turn.error else
-                                           f"Paused: {turn.status} without visible progress. Revise the direction.")
                     elif turn.status == "model_error" and self.pending_goal == self.agent.goal:
                         self.error = f"DecisionModel failed: {turn.error}"
                         self.running = False
@@ -567,7 +565,10 @@ def main() -> None:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--decision-model", default=ONEJEV)
-    parser.add_argument("--context", type=Path, help="general controls supplied on every decision")
+    context_group = parser.add_mutually_exclusive_group()
+    context_group.add_argument("--context", type=Path, help="guidance supplied on every decision")
+    context_group.add_argument("--no-context", action="store_true",
+                               help="disable the model's default guidance")
     parser.add_argument("--url", help="OneJev server URL")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=8)
@@ -584,7 +585,8 @@ def main() -> None:
     model_server = (ModelServer(config["server"]["gguf"], config["server"]["mmproj"], output)
                     if not args.url else None)
     run = LiveRun(args.rom, args.core, args.state, output, args.decision_model,
-                  args.hold_frames, args.release_frames, args.context.read_text() if args.context else "",
+                  args.hold_frames, args.release_frames,
+                  "" if args.no_context else args.context.read_text() if args.context else None,
                   args.history_frames, args.completion_votes, model_server)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
     worker = threading.Thread(target=run.run, daemon=True)

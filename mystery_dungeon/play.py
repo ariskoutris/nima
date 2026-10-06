@@ -18,7 +18,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--goal", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
-    parser.add_argument("--context", type=Path)
+    context_group = parser.add_mutually_exclusive_group()
+    context_group.add_argument("--context", type=Path)
+    context_group.add_argument("--no-context", action="store_true",
+                               help="disable the model's default guidance")
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--history-frames", type=int, default=1)
     parser.add_argument("--completion-votes", type=int, default=1)
@@ -31,11 +34,10 @@ def main(argv: list[str] | None = None) -> None:
     args.output.mkdir(parents=True, exist_ok=False)
     agent = Agent(load_decision_model(args.decision_model), args.output, args.decision_model,
                   args.history_frames, args.completion_votes,
-                  args.context.read_text() if args.context else "",
+                  "" if args.no_context else args.context.read_text() if args.context else None,
                   {"kind": "play", "rom": str(args.rom), "core": str(args.core),
                    "initial_state": str(args.state), "hold_frames": args.hold_frames,
-                   "release_frames": args.release_frames, "step_limit": args.steps},
-                  detect_cycles=True)
+                   "release_frames": args.release_frames, "step_limit": args.steps})
     agent.set_goal(args.goal)
     with GbaEmulator(args.rom, args.core) as emulator:
         emulator.load_state(args.state.read_bytes())
@@ -51,11 +53,6 @@ def main(argv: list[str] | None = None) -> None:
                 break
             if turn.status == "model_error":
                 raise RuntimeError(turn.error)
-            if turn.status in ("stalled", "loop"):
-                agent.record({"event": "run_stop", "reason": turn.status,
-                              "screenshot": session.current_name})
-                print(f"{index}: {turn.status}")
-                break
             print(f"{index}: {turn.button} ({turn.decision.latency_ms} ms)")
         else:
             agent.record({"event": "run_stop", "reason": "step_limit",
