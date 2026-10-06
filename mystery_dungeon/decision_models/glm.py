@@ -20,7 +20,7 @@ SYSTEM_PROMPT = (
     "each named action happened after its screenshot. Judge goal completion from the "
     "visible evidence only. Use 'complete' only when the goal is clearly achieved, "
     "'incomplete' when it is clearly not achieved, and 'uncertain' otherwise. "
-    "Return the requested JSON object."
+    "Don't overthink it. Just return the requested JSON object."
 )
 
 
