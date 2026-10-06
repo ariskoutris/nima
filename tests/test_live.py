@@ -2,7 +2,9 @@
 
 import json
 import threading
+import tomllib
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -66,8 +68,8 @@ class FakeDecisionModel:
 def start_run(tmp_path, monkeypatch):
     active = []
 
-    def start(model):
-        state = tmp_path / "start.state"
+    def start(model, state_format="state"):
+        state = tmp_path / f"start.{state_format}"
         state.write_bytes(b"start")
         monkeypatch.setattr(live, "load_decision_model", lambda spec: model)
         monkeypatch.setattr(live, "GbaEmulator", FakeEmulator)
@@ -88,6 +90,25 @@ def start_run(tmp_path, monkeypatch):
             run.condition.notify_all()
         thread.join(2)
         assert not thread.is_alive()
+
+
+def test_default_checkpoint_is_square():
+    config = tomllib.loads((Path(__file__).resolve().parents[1] / "config.toml").read_text())
+    assert config["game"]["state"] == "data/game/checkpoints/square.ss0"
+
+
+def test_ss0_startup_and_reset_restore_save_ram(start_run, monkeypatch):
+    monkeypatch.setattr(live, "read_ss0", lambda path: live.Seed(b"ss0-state", b"new-ram"))
+    run = start_run(FakeDecisionModel(), "ss0")
+    emulator = FakeEmulator.instances[-1]
+    assert emulator.loaded_states == [b"ss0-state"]
+    assert emulator.ram == b"new-ram"
+    emulator.ram = b"changed-ram"
+    run.control({"command": "reset"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: run.reset_count == 1, 2)
+    assert emulator.loaded_states[-1] == b"ss0-state"
+    assert emulator.ram == b"new-ram"
 
 
 def test_manual_action_enters_history_and_reset_keeps_goal(start_run):
@@ -132,19 +153,33 @@ def test_upload_state_and_ss0_from_live_view(start_run, monkeypatch):
     assert run.goal == "Find exit"
     assert not run.history
     assert run.notice == "Loaded state. Agent paused."
+    run.control({"command": "reset"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: run.reset_count == 2, 2)
+    assert FakeEmulator.instances[-1].loaded_states[-1] == b"uploaded"
 
     monkeypatch.setattr(live, "read_ss0", lambda data: live.Seed(b"ss0-state", b"new-ram"))
     run.load_state_upload(b"png-data", "ss0")
     with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 2, 2)
+        assert run.condition.wait_for(lambda: run.reset_count == 3, 2)
+    assert FakeEmulator.instances[-1].loaded_states[-1] == b"ss0-state"
+    assert FakeEmulator.instances[-1].ram == b"new-ram"
+    FakeEmulator.instances[-1].ram = b"changed-ram"
+    run.control({"command": "reset"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: run.reset_count == 4, 2)
     assert FakeEmulator.instances[-1].loaded_states[-1] == b"ss0-state"
     assert FakeEmulator.instances[-1].ram == b"new-ram"
 
     run.load_state_upload(b"bad", "state")
     with run.condition:
         assert run.condition.wait_for(lambda: bool(run.error), 2)
-    assert run.reset_count == 2
+    assert run.reset_count == 4
     assert FakeEmulator.instances[-1].loaded_states[-1] == b"checkpoint"
+    run.control({"command": "reset"})
+    with run.condition:
+        assert run.condition.wait_for(lambda: run.reset_count == 5, 2)
+    assert FakeEmulator.instances[-1].loaded_states[-1] == b"ss0-state"
     with pytest.raises(ValueError, match="choose a"):
         run.load_state_upload(b"uploaded", "unknown")
 

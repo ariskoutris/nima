@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 from emulator import BUTTONS, Frame, GbaEmulator
 from mystery_dungeon.agent import Agent, load_decision_model
-from mystery_dungeon.benchmark import Seed, read_ss0
+from mystery_dungeon.benchmark import Seed, read_ss0, restore
 from mystery_dungeon.session import GameplaySession
 
 ONEJEV = "mystery_dungeon.decision_models.onejev:OneJevDecisionModel"
@@ -308,9 +308,12 @@ class LiveRun:
         self.output.mkdir(parents=True, exist_ok=True)
         with GbaEmulator(self.rom, self.core) as emulator:
             emulator.on_frame = self._live_frame
-            initial_state = self.state.read_bytes()
-            emulator.load_state(initial_state)
-            emulator.step()
+            checkpoint = read_ss0(self.state) if self.state.suffix.lower() == ".ss0" else self.state.read_bytes()
+            if isinstance(checkpoint, Seed):
+                restore(emulator, checkpoint)
+            else:
+                emulator.load_state(checkpoint)
+                emulator.step()
             session = GameplaySession(emulator, self.output,
                                       self.hold_frames, self.release_frames)
             session.frame_count = 1
@@ -346,16 +349,16 @@ class LiveRun:
                         previous = session.image_index
                         previous_state = emulator.save_state()
                         (self.output / "states" / f"before-reset-{previous:06d}.state").write_bytes(previous_state)
-                        previous_ram = emulator.save_ram() if isinstance(replacement, Seed) else None
+                        target = replacement if replacement is not None else checkpoint
+                        previous_ram = emulator.save_ram() if isinstance(target, Seed) else None
                         try:
                             with self.screen_condition:
                                 self.stream_frame = 0
-                            if isinstance(replacement, Seed):
-                                emulator.load_save_ram(replacement.save_ram)
-                                emulator.load_state(replacement.state)
+                            if isinstance(target, Seed):
+                                restore(emulator, target)
                             else:
-                                emulator.load_state(replacement if replacement is not None else initial_state)
-                            emulator.step()
+                                emulator.load_state(target)
+                                emulator.step()
                         except Exception as exc:
                             if previous_ram is not None:
                                 emulator.load_save_ram(previous_ram)
@@ -365,6 +368,7 @@ class LiveRun:
                             self.busy = False
                             self.condition.notify_all()
                             continue
+                        checkpoint = target
                         session.frame_count = 1
                         session.capture()
                         session.save_latest()
