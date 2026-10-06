@@ -1,145 +1,146 @@
-"""One-shot prompt ablations on fixed, labeled game screenshots."""
+"""Compare production decision models on the Pokémon Square game benchmark."""
+
+from __future__ import annotations
 
 import argparse
-import base64
-import io
 import json
-import time
+import os
+import statistics
+import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 
-from PIL import Image
-from qev import Choice, Client
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-ROOT = Path("runs/benchmark-20261004-4b-plain/references")
-CONTROLS = Path("mystery_dungeon/prompts/controls-v1.md").read_text().strip()
-QUESTION = "Which gamepad action should be taken next to make progress?"
-OPTIONS = {
-    "UP": "press up on the directional pad",
-    "DOWN": "press down on the directional pad",
-    "LEFT": "press left on the directional pad",
-    "RIGHT": "press right on the directional pad",
-    "A": "confirm, interact, or advance text",
-    "B": "cancel or go back",
-    "START": "press the Start button",
-    "SELECT": "press the Select button",
-    "L": "press the left shoulder button",
-    "R": "press the right shoulder button",
-    "WAIT": "press nothing and let the game advance",
+from mystery_dungeon.benchmark import CASES
+from mystery_dungeon.live import ModelServer
+
+
+CONTROL = ROOT / "mystery_dungeon/prompts/control.md"
+MODELS = {
+    "glm": ("mystery_dungeon.decision_models.glm:GlmDecisionModel", ()),
+    "jev-0.8b": ("mystery_dungeon.decision_models.onejev:OneJevDecisionModel", (
+        ROOT / "data/engines/models/onejev-0.8b-q4_k_m.gguf",
+        ROOT / "data/engines/models/onejev-0.8b-mmproj-q8_0.gguf",
+    )),
+    "jev-4b": ("mystery_dungeon.decision_models.onejev:OneJevDecisionModel", (
+        ROOT / "data/engines/models/OneJev-4B.Q4_K_M.gguf",
+        ROOT / "data/engines/models/OneJev-4B.mmproj-Q8_0.gguf",
+    )),
 }
-ORDERED = {key: OPTIONS[key] for key in
-           ("A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT", "L", "R", "WAIT")}
-SMALL = {key: OPTIONS[key] for key in ("A", "B", "UP", "DOWN", "LEFT", "RIGHT", "WAIT")}
-MANUAL = {
-    "UP": "move one step up in the world, or move the menu cursor up",
-    "DOWN": "move one step down in the world, or move the menu cursor down",
-    "LEFT": "move one step left in the world, or move the menu cursor left",
-    "RIGHT": "move one step right in the world, or move the menu cursor right",
-    "A": "press the A button to interact with or talk to what the character faces; confirm a menu choice; advance visible text or dialogue; attack in a dungeon",
-    "B": "press the B button to open the menu during play, cancel a command, or go back",
-    "START": "press START to change facing in a dungeon; unused in the field",
-    "SELECT": "press SELECT to show the dungeon map",
-    "L": "press the left shoulder button",
-    "R": "press the right shoulder button",
-    "WAIT": "press nothing and let the game advance",
+VARIANTS = {
+    "baseline": (1, 1, None),
+    "no_history": (0, 1, None),
+    "controls": (1, 1, CONTROL),
+    "image2x": (1, 2, None),
 }
-CASES = {
-    "room_down": ("inside.png", "Move one tile down toward the visible opening", "DOWN"),
-    "room_goal": ("inside.png", "Get out of the base", "DOWN"),
-    "room_literal": ("inside.png", "Press DOWN once", "DOWN"),
-    "npc_talk": ("npc_ready.png", "Talk to the Pokemon directly in front of you", "A"),
-    "mailbox_check": ("mailbox_front.png", "Check the mailbox in front of you", "A"),
-    "mailbox_literal": ("mailbox_front.png", "Press A once to check the mailbox", "A"),
-    "bridge_right": ("outside.png", "Move one tile right toward the wooden bridge", "RIGHT"),
-    "bridge_up": ("bridge.png", "Move one tile up", "UP"),
-}
-VARIANTS = (
-    "current", "canonical", "ordered", "small", "debias3", "debias11", "image3x",
-    "controls_field", "controls_inline", "current_guide", "current_3x", "current_guide_3x",
-    "manual_options", "manual_ordered", "manual_small", "manual_question",
-    "manual_small_2x", "manual_small_3x", "manual_ordered_3x",
-)
 
 
-def image_uri(path: Path, scale: int) -> str:
-    if scale > 1:
-        with Image.open(path) as picture:
-            picture = picture.resize((picture.width * scale, picture.height * scale), Image.Resampling.NEAREST)
-            buffer = io.BytesIO()
-            picture.save(buffer, format="PNG")
-            data = buffer.getvalue()
-    else:
-        data = path.read_bytes()
-    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -> list[dict]:
+    summaries = []
+    for variant in variants:
+        result_file = output / variant / "results.json"
+        if not result_file.is_file():
+            continue
+        rows = json.loads(result_file.read_text())
+        latencies = []
+        for row in rows:
+            journal = output / variant / "cases" / row["case"] / "decisions.jsonl"
+            for line in journal.read_text().splitlines():
+                decision = json.loads(line)
+                if decision["event"] in ("action", "completion"):
+                    latencies.append(decision["latency_ms"])
+        summaries.append({
+            "variant": variant, "cases": rows,
+            "reached": sum(row["reached"] for row in rows),
+            "recognized": sum(row["recognized"] for row in rows),
+            "missed": sum(row["missed"] for row in rows),
+            "false_completion": sum(row["false_completion"] for row in rows),
+            "model_errors": sum(row["stop_reason"] == "model_error" for row in rows),
+            "median_decision_ms": round(statistics.median(latencies)) if latencies else None,
+        })
+    (output / "summary.json").write_text(json.dumps({
+        "model": model, "selected_cases": cases, "variants": summaries,
+    }, indent=2) + "\n")
+    lines = ["# Probe comparison", "", f"Model: {model}", "",
+             "| Configuration | Cases | Reached | Recognized | Missed | False completion | Model errors | Median decision ms |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for item in summaries:
+        lines.append(f"| {item['variant']} | {len(item['cases'])}/{len(cases)} | "
+                     f"{item['reached']} | {item['recognized']} | {item['missed']} | "
+                     f"{item['false_completion']} | {item['model_errors']} | "
+                     f"{item['median_decision_ms'] if item['median_decision_ms'] is not None else '—'} |")
+    lines += ["", "## Case outcomes", "",
+              "| Configuration | Case | Reached | Recognized | Stop reason | Actions | Seconds |",
+              "|---|---|:---:|:---:|---|---:|---:|"]
+    for item in summaries:
+        for row in item["cases"]:
+            lines.append(f"| {item['variant']} | {row['case']} | {row['reached']} | "
+                         f"{row['recognized']} | {row['stop_reason']} | {row['steps']} | "
+                         f"{row['seconds']} |")
+    (output / "report.md").write_text("\n".join(lines) + "\n")
+    return summaries
 
 
-def request(client: Client, case: str, variant: str, cases: dict) -> dict:
-    filename, goal, expected = cases[case]
-    if variant in ("current", "current_guide", "current_3x", "current_guide_3x",
-                   "manual_options", "manual_ordered", "manual_small", "manual_question",
-                   "manual_small_2x", "manual_small_3x", "manual_ordered_3x"):
-        state = {"screen": "<image:1>", "task": {"instruction": goal}}
-    else:
-        state = {"task": goal, "screen": "<image:1>"}
-    if variant == "controls_field":
-        state["controls"] = CONTROLS
-    if variant == "controls_inline":
-        state["task"] = CONTROLS + "\n\nCurrent goal: " + goal
-    if variant in ("current_guide", "current_guide_3x"):
-        state["task"]["instruction"] = CONTROLS + "\n\nCurrent goal: " + goal
-    options = (ORDERED if variant in ("ordered", "image3x", "controls_field", "controls_inline")
-               else SMALL if variant == "small" else OPTIONS)
-    if variant in ("manual_options", "manual_question"):
-        options = MANUAL
-    elif variant in ("manual_ordered", "manual_ordered_3x"):
-        options = {key: MANUAL[key] for key in ORDERED}
-    elif variant in ("manual_small", "manual_small_2x", "manual_small_3x"):
-        options = {key: MANUAL[key] for key in SMALL}
-    question = ("Given the screenshot and task, which gamepad button should be pressed now? "
-                "The option letters are answer labels, not gamepad buttons."
-                if variant == "manual_question" else QUESTION)
-    started = time.perf_counter()
-    scale = (2 if variant == "manual_small_2x" else
-             3 if variant in ("image3x", "current_3x", "current_guide_3x",
-                              "manual_small_3x", "manual_ordered_3x") else 1)
-    answer = client.system_one(
-        state=state,
-        media=[{"type": "image", "data": image_uri(Path(filename), scale)}],
-        questions={"next": Choice(question, options)},
-        **({"debias": 3 if variant == "debias3" else 11} if variant in ("debias3", "debias11") else {}),
-    )
-    scores = dict(answer.answers["next"].probabilities)
-    choice = max(scores, key=scores.get)
-    return {"case": case, "variant": variant, "expected": expected, "choice": choice,
-            "correct": choice == expected, "expected_score": scores[expected],
-            "latency_s": round(time.perf_counter() - started, 2), "scores": scores}
-
-
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path, help="JSON manifest of held-out screenshots and labels")
-    parser.add_argument("--case", action="append")
+    parser.add_argument("--model", required=True, choices=MODELS)
+    parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     parser.add_argument("--variant", action="append", choices=VARIANTS)
-    args = parser.parse_args()
-    if args.manifest:
-        rows = json.loads(args.manifest.read_text())
-        cases = {key: (str(args.manifest.parent / row["image"]), row["goal"], row["expected"])
-                 for key, row in rows.items()}
-    else:
-        cases = {key: (str(ROOT / image), goal, expected)
-                 for key, (image, goal, expected) in CASES.items()}
-    if args.case and set(args.case) - cases.keys():
-        parser.error("unknown case: " + ", ".join(sorted(set(args.case) - cases.keys())))
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    client = Client()
-    with args.output.open("w") as output:
-        for variant in args.variant or VARIANTS:
-            for case in args.case or cases:
-                row = request(client, case, variant, cases)
-                output.write(json.dumps(row) + "\n")
-                output.flush()
-                print(variant, case, row["choice"], "OK" if row["correct"] else "FAIL",
-                      row["latency_s"], flush=True)
+    parser.add_argument("--output", type=Path, help="new run directory (default: timestamped under runs/experiments)")
+    args = parser.parse_args(argv)
+    model_spec, model_files = MODELS[args.model]
+    cases = [case.id for case in CASES if args.case is None or case.id in args.case]
+    variants = list(dict.fromkeys(args.variant or VARIANTS))
+    if args.model == "glm" and not os.getenv("OPENROUTER_API_KEY"):
+        parser.error("OPENROUTER_API_KEY is required for GLM")
+    for path in model_files:
+        if not path.is_file():
+            parser.error(f"local model file not found: {path}")
+    output = (args.output or ROOT / "runs/experiments" /
+              f"probe-{args.model}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}").resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "config.json").write_text(json.dumps({
+        "model": args.model, "decision_model": model_spec,
+        "model_files": [str(path) for path in model_files],
+        "cases": cases, "variants": variants,
+    }, indent=2) + "\n")
+    server = ModelServer(str(model_files[0]), str(model_files[1]), output) if model_files else None
+    environment = os.environ.copy()
+    try:
+        if server:
+            environment["QEV_BASE_URL"] = server.start()
+        for variant in variants:
+            history, scale, context = VARIANTS[variant]
+            command = [sys.executable, "-m", "mystery_dungeon.benchmark",
+                       "--output", str(output / variant),
+                       "--decision-model", model_spec,
+                       "--history-frames", str(history),
+                       "--image-scale", str(scale),
+                       "--completion-votes", "1"]
+            if context:
+                command += ["--context", str(context)]
+            else:
+                command += ["--no-context"]
+            for path in model_files:
+                command += ["--model-file", str(path)]
+            for case in cases:
+                command += ["--case", case]
+            print(f"{args.model}: {variant}", flush=True)
+            subprocess.run(command, cwd=ROOT, env=environment, check=True)
+            summaries = summarize(output, args.model, variants, cases)
+            if summaries[-1]["model_errors"]:
+                raise SystemExit(f"{variant} had model errors; see {output / 'report.md'}")
+    except subprocess.CalledProcessError as exc:
+        summarize(output, args.model, variants, cases)
+        raise SystemExit(exc.returncode) from exc
+    finally:
+        if server:
+            server.close()
+    print(f"Report: {output / 'report.md'}", flush=True)
 
 
 if __name__ == "__main__":
