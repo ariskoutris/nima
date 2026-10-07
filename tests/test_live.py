@@ -148,6 +148,7 @@ def test_operator_input_discards_the_turn_in_progress(start_run, interrupt, reas
     run, game = start_run(model, models={live.GLM: ScriptedModel()})
     run.control({"instructions": "Find exit", "command": "start"})
     assert model.entered.wait(2)
+    assert run.snapshot()["running"] is True
     interrupt(run)
     assert run.snapshot()["status"] == "cancelling"
     if reason == "instructions_changed":
@@ -180,7 +181,7 @@ def test_one_turn_runs_exactly_one_turn(start_run):
     model = ScriptedModel()
     run, game = start_run(model)
     run.control({"instructions": "Find exit", "command": "turn"})
-    wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
+    assert wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))["running"] is False
     time.sleep(0.05)
     assert len(run.snapshot()["history"]) == 1
     assert game.steps.count(AGENT_PRESS) == 1

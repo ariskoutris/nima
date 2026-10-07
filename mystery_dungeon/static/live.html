@@ -47,7 +47,10 @@
     textarea::placeholder { color: #6e8581; }
     select { width: 100%; padding: 10px 12px; border: 1px solid #39504d; border-radius: 9px; background: #0b171b; color: #e7eee9; }
     .hint { margin: 5px 0 0; color: #859a97; font-size: .76rem; }
-    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
+    .actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+    .actions .button { white-space: nowrap; }
+    #run-button { width: 7.5em; }  /* fits Resume, Pause and Pausing… so neighbours never shift */
+    .actions .push { margin-left: auto; }
     .button { border: 1px solid #405450; border-radius: 8px; padding: 9px 14px; background: #223239; color: #e3ebe6; font-weight: 700; }
     .button:hover { border-color: #8ad5ad; }
     .button:focus-visible { outline: 2px solid #b7f5d0; outline-offset: 2px; }
@@ -77,7 +80,7 @@
     .pill.manual { color: #f1daac; background: #5c482a; }
     .footer { margin-top: 17px; color: #728b85; font-size: .74rem; overflow-wrap: anywhere; }
     @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .latest, .history { grid-column: 1; } }
-    @media (max-width: 570px) { .shell { padding-top: 15px; } .history-row { grid-template-columns: 40px 68px minmax(0, 1fr) 63px; } .history-row .source { display: none; } }
+    @media (max-width: 570px) { .shell { padding-top: 15px; } .actions { flex-wrap: wrap; } .actions .push { margin-left: 0; } .history-row { grid-template-columns: 40px 68px minmax(0, 1fr) 63px; } .history-row .source { display: none; } }
   </style>
 </head>
 <body>
@@ -100,13 +103,12 @@
           <p class="hint">Changing models pauses the agent. The local server starts when OneJev is selected.</p>
           <label for="instructions">Instructions</label>
           <textarea id="instructions" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
+          <p class="hint">Press Enter to save. Shift+Enter starts a new line.</p>
           <div class="actions">
-            <button class="button primary" type="button" data-command="start">Start / resume</button>
-            <button id="pause-button" class="button" type="button" data-command="pause">Pause</button>
+            <button id="run-button" class="button primary" type="button">Resume</button>
             <button class="button" type="button" data-command="turn">One turn</button>
-            <button class="button" type="submit">Save instructions</button>
-            <button class="button" type="button" data-command="reset" title="Return to the current checkpoint and pause">Reset game</button>
-            <button id="load-state-button" class="button" type="button">Load checkpoint</button>
+            <button class="button push" type="button" data-command="reset" title="Return to the current checkpoint and pause">Reset</button>
+            <button id="load-state-button" class="button" type="button" title="Load a .state or .ss0 checkpoint">Load state</button>
             <input id="state-file" type="file" accept=".state,.ss0" hidden>
           </div>
         </form>
@@ -139,6 +141,12 @@
     let screenRevision = 0, screenUrl = null, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
     let instructionsDirty = false, modelDirty = false, sending = false;
     instructions.addEventListener('input', () => instructionsDirty = true);
+    instructions.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+      event.preventDefault();
+      send();
+    });
+    $('run-button').addEventListener('click', () => send(currentState?.running ? 'pause' : 'start'));
     model.addEventListener('change', async () => {
       if (sending) return;
       sending = modelDirty = true;
@@ -161,7 +169,6 @@
     for (const button of document.querySelectorAll('[data-command]')) {
       button.addEventListener('click', () => send(button.dataset.command));
     }
-    $('control-form').addEventListener('submit', event => { event.preventDefault(); send(); });
     $('load-state-button').addEventListener('click', () => $('state-file').click());
     $('state-file').addEventListener('change', async event => {
       const file = event.target.files[0];
@@ -204,7 +211,7 @@
         render(state);
         const sent = {manual: `${action} sent`, pause: state.status === 'cancelling' ? 'Pausing…' : 'Paused',
                       turn: 'One turn queued', start: 'Agent running', reset: 'Resetting game…'};
-        say(sent[command] ?? 'Settings saved', GOOD);
+        say(sent[command] ?? 'Instructions saved', GOOD);
       } catch (error) {
         say(error.message, BAD);
       } finally { sending = false; }
@@ -227,7 +234,7 @@
         if ($('activity-title').textContent !== activity[0]) $('activity-title').textContent = activity[0];
         if ($('activity-detail').textContent !== activity[1]) $('activity-detail').textContent = activity[1];
       }
-      $('pause-button').textContent = state.status === 'cancelling' ? 'Pausing…' : 'Pause';
+      $('run-button').textContent = state.running ? 'Pause' : state.status === 'cancelling' ? 'Pausing…' : 'Resume';
       $('screen-state').textContent = state.status === 'thinking' ? 'Game paused while the model responds' :
         state.status === 'paused' ? 'Paused' : state.status === 'error' ? 'Needs attention' :
         state.status === 'running' ? 'Agent running' : activity?.[0] || '';

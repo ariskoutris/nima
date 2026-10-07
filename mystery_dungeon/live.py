@@ -172,7 +172,8 @@ class LiveRun:
     def snapshot(self) -> dict:
         with self._condition:
             return {"status": self._status(), "error": self._error, "notice": self._notice,
-                    "instructions": self._instructions, "reset_count": self._reset_count,
+                    "instructions": self._instructions, "running": self._mode != "paused",
+                    "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
                     "history": self._log.recent(), "model": self._log.model_spec,
                     "requested_model": self._pending_model(), "models": self.models,
