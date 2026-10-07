@@ -1,4 +1,4 @@
-"""Local browser view and controls for a live screenshot model run."""
+"""Serve the live view and coordinate operator input with agent turns."""
 
 from __future__ import annotations
 
@@ -13,21 +13,28 @@ import threading
 import time
 import tomllib
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.request import urlopen
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
-from emulator import BUTTONS, Frame, GbaEmulator
-from mystery_dungeon.agent import Agent, load_decision_model
-from mystery_dungeon.benchmark import Seed, read_ss0, restore
-from mystery_dungeon.session import GameplaySession
+from emulator import Frame, GbaEmulator
+from mystery_dungeon.actions import ACTIONS, Action
+from mystery_dungeon.agent import Agent, Turn
+from mystery_dungeon.models import load_model
+from mystery_dungeon.run_log import RunLog
+from mystery_dungeon.session import Checkpoint, GameplaySession, read_checkpoint, read_ss0
 
-ONEJEV = "mystery_dungeon.decision_models.onejev:OneJevDecisionModel"
-GLM = "mystery_dungeon.decision_models.glm:GlmDecisionModel"
+ONEJEV = "mystery_dungeon.models.onejev:OneJevModel"
+GLM = "mystery_dungeon.models.glm:GlmModel"
 MODELS = {ONEJEV: "OneJev (local)", GLM: "GLM-5.3-Flash (OpenRouter)"}
+COMMANDS = ("start", "pause", "turn", "manual", "reset")
+MAX_INSTRUCTIONS = 1000
+SCREEN_WAIT_SECONDS = 15
+FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
+NO_MODEL = "choose a model first"
 
 
 class ModelServer:
@@ -97,377 +104,365 @@ class ModelServer:
         self.stop()
 
 
+@dataclass(frozen=True)
+class Manual:
+    action: Action
+
+
+@dataclass(frozen=True)
+class Load:
+    checkpoint: Checkpoint | None  # None reloads the current checkpoint
+
+
+@dataclass(frozen=True)
+class SwitchModel:
+    spec: str
+
+
+@dataclass(frozen=True)
+class TakeTurn:
+    instructions: str
+
+
+Request = Manual | Load | SwitchModel
+Work = Request | TakeTurn
+
+
 class LiveRun:
-    def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 model_spec: str, hold_frames: int, release_frames: int, context: str | None = None,
-                 history_frames: int = 1, completion_votes: int = 1,
-                 model_server: ModelServer | None = None):
+    """Run the emulator on a worker thread and apply operator input between agent turns.
+
+    Every operator input except Start and One turn interrupts a turn in progress:
+    its result is logged as discarded and nothing is applied. Requests run in order.
+    """
+
+    def __init__(self, rom: Path, core: Path, state: Path, output: Path, model_spec: str,
+                 hold_frames: int, release_frames: int, knowledge: str = "",
+                 model_server: ModelServer | None = None) -> None:
         if output.exists():
             raise FileExistsError(f"session output already exists: {output}")
-        self.rom, self.core, self.state, self.output = rom, core, state, output
-        self.model_spec = model_spec
-        self.model_server = model_server
+        self.output = output
         self.models = {**MODELS, model_spec: MODELS.get(model_spec, model_spec)}
-        self.agent = Agent(load_decision_model(model_spec), output, model_spec,
-                           history_frames, completion_votes, context,
+        self._rom, self._core = rom, core
+        self._checkpoint = read_checkpoint(state)
+        self._hold_frames, self._release_frames = hold_frames, release_frames
+        self._knowledge = knowledge
+        self._model_server = model_server
+        self._log = RunLog(output, model_spec,
                            {"kind": "live", "rom": str(rom), "core": str(core),
-                   "initial_state": str(state), "hold_frames": hold_frames,
-                   "release_frames": release_frames})
-        self.hold_frames, self.release_frames = hold_frames, release_frames
-        self.condition = threading.Condition()
-        self.screen_condition = threading.Condition()
-        self.pending_goal = ""
-        self.pending_steering = ""
-        self.pending_history = True
-        self.running = False
-        self.single_step = False
-        self.step_generation = 0
-        self.manual: deque[str] = deque()
-        self.reset_requested = False
-        self.resetting = False
-        self.pending_model = model_spec if model_server and model_spec == ONEJEV else None
-        self.switching = False
-        self.replacement: Seed | bytes | None = None
-        self.reset_count = 0
-        self.screen_revision = 0
-        self.screen = b""
-        self.stream_frame = 0
-        self.frame = 0
-        self.game_state: dict | None = None
-        self.warning: str | None = None
-        self.loaded = False
-        self.busy = False
-        self.waiting_for_model = False
-        self.error = ""
-        self.notice = ""
-        self.stopping = False
-
-    @property
-    def goal(self) -> str:
-        return self.pending_goal
-
-    @property
-    def steering(self) -> str:
-        return self.pending_steering
-
-    @property
-    def use_recent(self) -> bool:
-        return self.pending_history
-
-    @property
-    def history(self):
-        return self.agent.events
+                            "initial_state": str(state), "hold_frames": hold_frames,
+                            "release_frames": release_frames}, knowledge)
+        self._agent: Agent | None = None
+        self._condition = threading.Condition()
+        self._instructions = ""
+        self._mode = "paused"  # paused | running | one_turn
+        self._requests: deque[Request] = deque([SwitchModel(model_spec)])
+        self._current: Work | None = None
+        self._interrupted: str | None = None
+        self._error = self._notice = ""
+        self._loaded = self._stopping = False
+        self._reset_count = 0
+        self._published_image = -1
+        self._game_state: dict | None = None
+        self._warning: str | None = None
+        self._screen_condition = threading.Condition()
+        self._screen: Frame | None = None
+        self._screen_revision = 0
+        self._stream_frame = 0
 
     def snapshot(self) -> dict:
-        with self.condition:
-            status = ("error" if self.error else "loading" if not self.loaded else
-                      "waiting" if self.waiting_for_model else
-                      "switching" if self.pending_model or self.switching else
-                      "resetting" if self.reset_requested or self.resetting else
-                      "thinking" if self.busy else "running" if self.running else "paused")
-            return {"status": status, "error": self.error, "notice": self.notice,
-                    "goal": self.goal, "steering": self.steering,
-                    "use_recent": self.use_recent, "frame": self.frame,
-                    "screen_revision": self.screen_revision, "reset_count": self.reset_count,
-                    "game_state": self.game_state, "warning": self.warning,
-                    "history": list(reversed(self.history)),
-                    "decision_model": self.model_spec, "requested_model": self.pending_model,
-                    "models": self.models, "output": str(self.output)}
+        with self._condition:
+            return {"status": self._status(), "error": self._error, "notice": self._notice,
+                    "instructions": self._instructions, "reset_count": self._reset_count,
+                    "game_state": self._game_state, "warning": self._warning,
+                    "history": self._log.recent(), "model": self._log.model_spec,
+                    "requested_model": self._pending_model(), "models": self.models,
+                    "actions": list(ACTIONS), "output": str(self.output)}
 
-    def request_model(self, spec: str) -> None:
-        with self.condition:
-            if spec not in self.models:
-                raise ValueError("unknown decision model")
-            if not self.loaded:
-                raise ValueError("emulator is not ready")
-            if self.pending_model or self.switching or self.reset_requested or self.resetting:
-                raise ValueError("another change is in progress")
-            if spec == self.model_spec and not self.error:
-                return
-            self.running = False
-            self.single_step = False
-            self.manual.clear()
-            self.pending_model = spec
-            self.error = self.notice = ""
-            self.condition.notify_all()
+    def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
+        """Return the screen PNG, its revision and game frame once it is newer than ``after``.
+
+        Returns the current screen immediately when ``after`` is None, and after
+        SCREEN_WAIT_SECONDS at the latest.
+        """
+        with self._screen_condition:
+            if after is not None:
+                self._screen_condition.wait_for(
+                    lambda: self._screen_revision > after or self._stopping,
+                    timeout=SCREEN_WAIT_SECONDS)
+            screen, revision, frame = self._screen, self._screen_revision, self._stream_frame
+        return (screen.png_bytes() if screen else b""), revision, frame
 
     def control(self, data: dict) -> None:
-        if not isinstance(data, dict) or set(data) - {"goal", "steering", "use_recent", "command", "button"}:
+        """Apply operator input from the live view.
+
+        Raises:
+            ValueError: when the input is malformed or cannot run yet.
+        """
+        if not isinstance(data, dict) or set(data) - {"instructions", "command", "action"}:
             raise ValueError("unknown control field")
-        for key in ("goal", "steering"):
-            if key in data and (not isinstance(data[key], str) or len(data[key]) > 1000):
-                raise ValueError(f"{key} must be text of at most 1000 characters")
-        if "use_recent" in data and type(data["use_recent"]) is not bool:
-            raise ValueError("use_recent must be a boolean")
+        instructions = data.get("instructions")
+        if instructions is not None and (not isinstance(instructions, str)
+                                         or len(instructions) > MAX_INSTRUCTIONS):
+            raise ValueError(f"instructions must be text of at most {MAX_INSTRUCTIONS} characters")
         command = data.get("command")
-        if command not in (None, "start", "pause", "step", "manual", "reset"):
+        if command is not None and command not in COMMANDS:
             raise ValueError("unknown command")
-        button = data.get("button")
-        if command == "manual" and button not in BUTTONS | {"WAIT"}:
-            raise ValueError("invalid manual button")
-        if command != "manual" and button is not None:
-            raise ValueError("button requires the manual command")
-        with self.condition:
-            if self.error and not self.loaded:
-                raise ValueError(self.error)
-            if (self.reset_requested or self.resetting or self.pending_model or self.switching) and command in ("start", "step", "manual", "reset"):
-                raise ValueError("a change is still in progress")
-            goal = data.get("goal", self.goal).strip()
-            if command in ("start", "step") and not goal:
-                raise ValueError("set a goal before running")
-            if command in ("start", "step", "manual", "reset"):
-                self.error = ""
-                self.notice = ""
-            steering = data.get("steering", self.steering).strip()
-            history = data.get("use_recent", self.use_recent)
-            changed = (goal, steering, history) != (self.goal, self.steering, self.use_recent)
-            self.pending_goal, self.pending_steering, self.pending_history = goal, steering, history
-            if changed:
-                self.notice = ""
-            if command in ("start", "step"):
-                self.running = True
-                self.single_step = command == "step"
-                if command == "step":
-                    self.step_generation += 1
-            elif command == "pause":
-                self.running = False
-                self.single_step = False
-            elif command == "manual":
-                self.running = False
-                self.single_step = False
-                self.manual.append(button)
-            elif command == "reset":
-                self.running = False
-                self.single_step = False
-                self.manual.clear()
-                self.reset_requested = True
-            self.condition.notify_all()
+        action = data.get("action")
+        if command == "manual" and action not in ACTIONS:
+            raise ValueError("invalid manual action")
+        if command != "manual" and action is not None:
+            raise ValueError("action requires the manual command")
+        with self._condition:
+            self._require_loaded()
+            instructions = self._instructions if instructions is None else instructions.strip()
+            keeps_running = command is None and self._mode != "paused"
+            if not instructions and (command in ("start", "turn") or keeps_running):
+                raise ValueError("enter instructions before running the agent")
+            if command in ("start", "turn", "manual") and self._agent is None \
+                    and self._pending_model() is None:
+                raise ValueError(NO_MODEL)
+            if instructions != self._instructions:
+                self._instructions = instructions
+                self._interrupt("instructions_changed")
+            match command:
+                case "start" | "turn":
+                    self._error = self._notice = ""
+                    self._mode = "running" if command == "start" else "one_turn"
+                case "pause":
+                    self._pause("paused")
+                case "manual":
+                    self._queue("manual_control", Manual(ACTIONS[action]))
+                case "reset":
+                    self._queue("reset_requested", Load(None))
+            self._condition.notify_all()
+
+    def request_model(self, spec: str) -> None:
+        """Switch both model roles to ``spec`` after the current turn is discarded.
+
+        Raises:
+            ValueError: for an unknown model or before the emulator is ready.
+        """
+        with self._condition:
+            if spec not in self.models:
+                raise ValueError("unknown model")
+            self._require_loaded()
+            target = self._pending_model() or self._log.model_spec
+            if spec == target and self._agent is not None and not self._error:
+                return
+            self._queue("model_change", SwitchModel(spec))
+            self._condition.notify_all()
 
     def load_state_upload(self, data: bytes, format: str) -> None:
+        """Load an uploaded .state or .ss0 checkpoint and make it the reset target.
+
+        Raises:
+            ValueError: for an unknown format, unreadable data, or before the emulator is ready.
+        """
         if format not in ("state", "ss0"):
             raise ValueError("choose a .state or .ss0 file")
         if not data:
             raise ValueError("state file is empty")
-        replacement = read_ss0(data) if format == "ss0" else data
-        with self.condition:
-            if not self.loaded:
-                raise ValueError("emulator is not ready")
-            if self.reset_requested or self.resetting or self.pending_model or self.switching:
-                raise ValueError("another change is in progress")
-            self.running = False
-            self.single_step = False
-            self.manual.clear()
-            self.replacement = replacement
-            self.reset_requested = True
-            self.error = ""
-            self.notice = ""
-            self.condition.notify_all()
+        checkpoint = read_ss0(data) if format == "ss0" else Checkpoint(data)
+        with self._condition:
+            self._require_loaded()
+            self._queue("reset_requested", Load(checkpoint))
+            self._condition.notify_all()
 
-    def _cancel_reason(self) -> str | None:
-        if self.stopping:
-            return "stopping"
-        if self.reset_requested:
-            return "reset_requested"
-        if self.pending_model or self.switching:
-            return "model_change"
-        if self.manual:
-            return "manual_control"
-        if not self.running:
-            return "paused"
-        return None
-
-    def _model_waiting(self, waiting: bool) -> None:
-        with self.condition:
-            self.waiting_for_model = waiting
-            self.condition.notify_all()
-
-    def _publish_frame(self, frame: Frame, advanced: bool = False) -> None:
-        png = frame.png_bytes()
-        with self.screen_condition:
-            if advanced:
-                self.stream_frame += 1
-            if png != self.screen:
-                self.screen = png
-                self.screen_revision += 1
-                self.screen_condition.notify_all()
-
-    def _live_frame(self, frame: Frame) -> None:
-        self._publish_frame(frame, advanced=True)
-        time.sleep(1 / 60)
+    def stop(self) -> None:
+        with self._condition:
+            self._stopping = True
+            self._interrupt("stopping")
+            self._condition.notify_all()
+        with self._screen_condition:
+            self._screen_condition.notify_all()
 
     def run(self) -> None:
+        """Run the worker loop until stop(); failures end the loop and show as an error."""
         try:
             self._run()
         except Exception as exc:
-            with self.condition:
-                self.error = f"{type(exc).__name__}: {exc}"
-                self.busy = False
-                self.waiting_for_model = False
-                self.condition.notify_all()
+            self._fail(f"{type(exc).__name__}: {exc}")
 
     def _run(self) -> None:
-        self.output.mkdir(parents=True, exist_ok=True)
-        with GbaEmulator(self.rom, self.core) as emulator:
-            emulator.on_frame = self._live_frame
-            checkpoint = read_ss0(self.state) if self.state.suffix.lower() == ".ss0" else self.state.read_bytes()
-            if isinstance(checkpoint, Seed):
-                restore(emulator, checkpoint)
+        with GbaEmulator(self._rom, self._core) as emulator:
+            emulator.on_frame = self._stream
+            session = GameplaySession(emulator, self.output, self._hold_frames, self._release_frames)
+            session.load(self._checkpoint)
+            self._after_step(session)
+            with self._condition:
+                self._loaded = True
+                self._condition.notify_all()
+            while work := self._next():
+                try:
+                    match work:
+                        case Manual(action):
+                            self._manual(session, action)
+                        case Load(checkpoint):
+                            self._load(session, checkpoint)
+                        case SwitchModel(spec):
+                            self._switch_model(spec)
+                        case TakeTurn(instructions):
+                            self._turn(session, instructions)
+                finally:
+                    with self._condition:
+                        self._current = None
+                        self._condition.notify_all()
+
+    def _next(self) -> Work | None:
+        """Wait for the next request, or a turn when the agent should take one; None to stop."""
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._stopping or self._requests or self._mode != "paused")
+            if self._stopping:
+                return None
+            if self._requests:
+                self._current = self._requests.popleft()
             else:
-                emulator.load_state(checkpoint)
-                emulator.step()
-            session = GameplaySession(emulator, self.output,
-                                      self.hold_frames, self.release_frames)
-            session.frame_count = 1
-            session.capture()
-            session.save_latest()
-            with self.condition:
-                self._publish_frame(session.current)
-                self.frame = 1
-                state = session.ram_state()
-                self.game_state = asdict(state) if state else None
-                self.loaded = True
-                self.condition.notify_all()
+                self._interrupted = None
+                self._current = TakeTurn(self._instructions)
+            return self._current
 
-            while True:
-                with self.condition:
-                    self.busy = False
-                    self.condition.wait_for(lambda: self.stopping or self.reset_requested or self.pending_model or self.manual or self.running)
-                    if self.stopping:
-                        return
-                    if self.pending_model:
-                        spec = self.pending_model
-                        self.switching = True
-                        self.busy = False
-                        self.condition.notify_all()
-                    else:
-                        spec = None
-                    if spec is None and self.reset_requested:
-                        self.reset_requested = False
-                        self.resetting = True
-                        self.busy = True
-                        replacement = self.replacement
-                        self.replacement = None
-                        previous = session.image_index
-                        previous_state = emulator.save_state()
-                        (self.output / "states" / f"before-reset-{previous:06d}.state").write_bytes(previous_state)
-                        target = replacement if replacement is not None else checkpoint
-                        previous_ram = emulator.save_ram() if isinstance(target, Seed) else None
-                        try:
-                            with self.screen_condition:
-                                self.stream_frame = 0
-                            if isinstance(target, Seed):
-                                restore(emulator, target)
-                            else:
-                                emulator.load_state(target)
-                                emulator.step()
-                        except Exception as exc:
-                            if previous_ram is not None:
-                                emulator.load_save_ram(previous_ram)
-                            emulator.load_state(previous_state)
-                            self.error = f"Could not load state: {exc}"
-                            self.resetting = False
-                            self.busy = False
-                            self.condition.notify_all()
-                            continue
-                        checkpoint = target
-                        session.frame_count = 1
-                        session.capture()
-                        session.save_latest()
-                        self.agent.reset(session.current_name)
-                        session.action_count = 0
-                        session.clear_warning()
-                        self.frame = 1
-                        state = session.ram_state()
-                        self.game_state = asdict(state) if state else None
-                        self.warning = session.warning
-                        self._publish_frame(session.current)
-                        self.running = False
-                        self.resetting = False
-                        self.reset_count += 1
-                        self.busy = False
-                        self.error = ""
-                        self.notice = "Loaded state. Agent paused." if replacement is not None else "Reset complete. Agent paused."
-                        self.condition.notify_all()
-                        continue
-                    if spec is None:
-                        self.agent.set_goal(self.pending_goal)
-                        self.agent.set_steering(self.pending_steering)
-                        self.agent.set_history_enabled(self.pending_history)
-                        manual = self.manual.popleft() if self.manual else None
-                        if manual is None:
-                            self.agent.resume()
-                        active_step = self.step_generation
-                        self.busy = True
-                if spec is not None:
-                    try:
-                        if spec == ONEJEV and self.model_server:
-                            os.environ["QEV_BASE_URL"] = self.model_server.start()
-                        model = load_decision_model(spec)
-                    except Exception as exc:
-                        if spec == ONEJEV and self.model_server:
-                            self.model_server.stop()
-                        with self.condition:
-                            self.error = f"Could not switch model: {exc}"
-                            self.pending_model = None
-                            self.switching = False
-                            self.condition.notify_all()
-                    else:
-                        with self.condition:
-                            if spec == self.model_spec:
-                                self.agent.model = model
-                            else:
-                                self.agent.change_model(model, spec)
-                            self.model_spec = spec
-                            self.pending_model = None
-                            self.switching = False
-                            self.notice = f"Switched to {self.models[spec]}. Agent paused."
-                            self.condition.notify_all()
-                        if spec != ONEJEV and self.model_server:
-                            self.model_server.stop()
-                    continue
+    def _turn(self, session: GameplaySession, instructions: str) -> None:
+        self._agent.set_instructions(instructions)
+        turn = self._agent.propose(session.observe())
+        with self._condition:
+            if self._interrupted is not None:
+                self._log.record_discarded(turn, self._interrupted)
+            else:
+                self._log.record_turn(turn, self._agent.commit(session, turn))
+                self._settle(turn)
+        self._after_step(session)
 
-                if manual is not None:
-                    with self.condition:
-                        self.agent.manual_step(session, manual)
-                        session.save_latest()
-                        self.frame = session.frame_count
-                        state = session.ram_state()
-                        self.game_state = asdict(state) if state else None
-                        self.warning = session.warning
-                        self._publish_frame(session.current)
-                        self.busy = False
-                        self.condition.notify_all()
-                    continue
+    def _settle(self, turn: Turn) -> None:
+        match turn.status:
+            case "completion":
+                self._mode = "paused"
+                self._notice = f"Completed: {turn.task.description}"
+            case "model_error":
+                self._mode = "paused"
+                self._error = f"Model failed: {turn.error}"
+            case "action" if self._mode == "one_turn":
+                self._mode = "paused"
 
-                turn = self.agent.step(session, action_lock=self.condition,
-                                       cancel_reason=self._cancel_reason,
-                                       on_model_waiting=self._model_waiting)
-                with self.condition:
-                    self.busy = False
-                    if session.frame_count != self.frame:
-                        session.save_latest()
-                        self.frame = session.frame_count
-                        state = session.ram_state()
-                        self.game_state = asdict(state) if state else None
-                        self.warning = session.warning
-                        self._publish_frame(session.current)
-                    if turn.status == "cancelled":
-                        self.condition.notify_all()
-                        continue
-                    if turn.status == "acted":
-                        if self.single_step and self.step_generation == active_step:
-                            self.running = False
-                            self.single_step = False
-                    elif turn.status == "completed":
-                        if self.pending_goal == self.agent.goal:
-                            self.running = False
-                            self.single_step = False
-                            self.notice = f"Completed: {self.agent.goal}"
-                    elif turn.status == "model_error" and self.pending_goal == self.agent.goal:
-                        self.error = f"DecisionModel failed: {turn.error}"
-                        self.running = False
-                        self.single_step = False
-                    self.condition.notify_all()
+    def _manual(self, session: GameplaySession, action: Action) -> None:
+        if self._agent is None:
+            # Keep the failed model switch that left the agent missing visible.
+            self._fail(self._error or NO_MODEL)
+            return
+        transition = self._agent.manual(session, action)
+        with self._condition:
+            self._log.record_manual(action, transition)
+        self._after_step(session)
+
+    def _load(self, session: GameplaySession, checkpoint: Checkpoint | None) -> None:
+        session.save_state(f"before-reset-{session.image_index:06d}.state")
+        try:
+            session.load(checkpoint if checkpoint is not None else self._checkpoint)
+        except Exception as exc:
+            self._fail(f"Could not load state: {exc}")
+            return
+        if checkpoint is not None:
+            self._checkpoint = checkpoint
+        if self._agent is not None:
+            self._agent.clear_memory()
+        with self._condition:
+            self._log.record_reset(session.current_name)
+            self._reset_count += 1
+            self._error = ""
+            self._notice = "Loaded state." if checkpoint is not None else "Reset complete."
+        self._after_step(session)
+
+    def _switch_model(self, spec: str) -> None:
+        local = spec == ONEJEV and self._model_server is not None
+        try:
+            if local:
+                os.environ["QEV_BASE_URL"] = self._model_server.start()
+            model = self._log.watch(load_model(spec))
+        except Exception as exc:
+            if local:
+                self._model_server.stop()
+            self._fail(f"Could not switch model: {exc}")
+            return
+        if not local and self._model_server is not None:
+            self._model_server.stop()
+        first = self._agent is None
+        if first:
+            self._agent = Agent(model, model, self._knowledge)
+        else:
+            self._agent.set_models(model, model)
+        with self._condition:
+            self._log.record_model_change(spec)
+            if not first:
+                self._notice = f"Switched to {self.models[spec]}."
+
+    def _after_step(self, session: GameplaySession) -> None:
+        """Save and show the session's state if it captured a frame since the last call."""
+        if session.image_index == self._published_image:
+            return
+        self._published_image = session.image_index
+        session.save_state("latest.state")
+        state = session.ram_state()
+        with self._condition:
+            self._game_state = asdict(state) if state else None
+            self._warning = session.warning
+            self._condition.notify_all()
+        with self._screen_condition:
+            self._stream_frame = session.frame_count
+        self._show(session.current)
+
+    def _fail(self, message: str) -> None:
+        with self._condition:
+            self._error = message
+            self._mode = "paused"
+            self._condition.notify_all()
+
+    def _pending_model(self) -> str | None:
+        return next((work.spec for work in reversed((self._current, *self._requests))
+                     if isinstance(work, SwitchModel)), None)
+
+    def _require_loaded(self) -> None:
+        if not self._loaded:
+            raise ValueError(self._error or "emulator is not ready")
+
+    def _pause(self, reason: str) -> None:
+        self._mode = "paused"
+        self._interrupt(reason)
+
+    def _queue(self, reason: str, request: Request) -> None:
+        self._pause(reason)
+        self._error = self._notice = ""
+        self._requests.append(request)
+
+    def _interrupt(self, reason: str) -> None:
+        if self._interrupted is None:
+            self._interrupted = reason
+
+    def _status(self) -> str:
+        if self._error:
+            return "error"
+        if not self._loaded:
+            return "loading"
+        match self._current:
+            case TakeTurn():
+                return "cancelling" if self._interrupted is not None else "thinking"
+            case Load():
+                return "resetting"
+            case SwitchModel():
+                return "switching"
+        return "paused" if self._mode == "paused" else "running"
+
+    def _show(self, frame: Frame) -> None:
+        with self._screen_condition:
+            if self._screen is None or frame.rgba != self._screen.rgba:
+                self._screen = frame
+                self._screen_revision += 1
+                self._screen_condition.notify_all()
+
+    def _stream(self, frame: Frame) -> None:
+        with self._screen_condition:
+            self._stream_frame += 1
+        self._show(frame)
+        time.sleep(FRAME_SECONDS)
 
 
 def handler_for(run: LiveRun):
@@ -499,13 +494,7 @@ def handler_for(run: LiveRun):
                                       not after.isascii() or not after.isdecimal() or len(after) > 12):
                     self.respond(400, b"Invalid screen revision", "text/plain; charset=utf-8")
                     return
-                with run.screen_condition:
-                    if request.query:
-                        run.screen_condition.wait_for(
-                            lambda: run.screen_revision > int(after) or run.stopping, timeout=15)
-                    screen = run.screen
-                    revision = run.screen_revision
-                    frame = run.stream_frame or run.frame
+                screen, revision, frame = run.wait_for_screen(int(after) if request.query else None)
                 if screen and (not request.query or revision > int(after)):
                     self.respond(200, screen, "image/png", {
                         "X-Screen-Revision": str(revision), "X-Game-Frame": str(frame)})
@@ -515,12 +504,11 @@ def handler_for(run: LiveRun):
                     self.respond(404, b"Screen is loading", "text/plain; charset=utf-8")
             elif path.startswith("/api/observation/") and observation_number.isascii() \
                     and observation_number.isdecimal() and len(observation_number) <= 12:
-                index = int(observation_number)
-                screenshot = run.output / "frames" / f"{index:06d}.png"
+                screenshot = run.output / "frames" / f"{int(observation_number):06d}.png"
                 if screenshot.is_file():
                     self.respond(200, screenshot.read_bytes(), "image/png")
                 else:
-                    self.respond(404, b"No such decision", "text/plain; charset=utf-8")
+                    self.respond(404, b"No such observation", "text/plain; charset=utf-8")
             else:
                 self.respond(404, b"Not found", "text/plain; charset=utf-8")
 
@@ -540,7 +528,7 @@ def handler_for(run: LiveRun):
                     data = json.loads(self.rfile.read(length))
                     if request.path == "/api/model":
                         if not isinstance(data, dict) or set(data) != {"model"} or not isinstance(data["model"], str):
-                            raise ValueError("model must be a decision model name")
+                            raise ValueError("model must be a model name")
                         run.request_model(data["model"])
                     else:
                         run.control(data)
@@ -564,30 +552,24 @@ def main() -> None:
     parser.add_argument("--core", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--decision-model", default=ONEJEV)
-    context_group = parser.add_mutually_exclusive_group()
-    context_group.add_argument("--context", type=Path, help="guidance supplied on every decision")
-    context_group.add_argument("--no-context", action="store_true",
-                               help="disable the model's default guidance")
+    parser.add_argument("--model", default=ONEJEV)
+    parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--url", help="OneJev server URL")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
-    parser.add_argument("--history-frames", type=int, default=1)
-    parser.add_argument("--completion-votes", type=int, default=1)
     args = parser.parse_args()
-    if min(args.hold_frames, args.release_frames, args.completion_votes) < 1 or args.history_frames < 0:
-        parser.error("frame counts and completion votes must be positive; history frames may be zero")
+    if min(args.hold_frames, args.release_frames) < 1:
+        parser.error("frame counts must be positive")
     if args.url:
         os.environ["QEV_BASE_URL"] = args.url
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     config = tomllib.loads((Path(__file__).parents[1] / "config.toml").read_text())
     model_server = (ModelServer(config["server"]["gguf"], config["server"]["mmproj"], output)
                     if not args.url else None)
-    run = LiveRun(args.rom, args.core, args.state, output, args.decision_model,
+    run = LiveRun(args.rom, args.core, args.state, output, args.model,
                   args.hold_frames, args.release_frames,
-                  "" if args.no_context else args.context.read_text() if args.context else None,
-                  args.history_frames, args.completion_votes, model_server)
+                  args.knowledge.read_text() if args.knowledge else "", model_server)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
     worker = threading.Thread(target=run.run, daemon=True)
     try:
@@ -599,11 +581,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        with run.condition:
-            run.stopping = True
-            run.condition.notify_all()
-        with run.screen_condition:
-            run.screen_condition.notify_all()
+        run.stop()
         if model_server:
             model_server.close()
         server.server_close()

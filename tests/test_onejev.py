@@ -1,42 +1,49 @@
-"""OneJev receives ordered frames and separates guidance from completion."""
+"""OneJev asks shared prompts over ordered frames and returns typed answers."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
-from emulator import Frame
-from mystery_dungeon.agent import RecentStep, load_decision_model
-from mystery_dungeon.decision_models import onejev
+from fakes import FRAME
+from mystery_dungeon.actions import Press
+from mystery_dungeon.agent import MemoryEntry
+from mystery_dungeon.models import load_model, onejev
+from mystery_dungeon.prompts import ACT, COMPLETE
+
+MEMORY = (MemoryEntry(FRAME, "first.png", Press("DOWN")),)
 
 
-def test_joint_request_uses_history_and_goal(monkeypatch):
-    frame = Frame(4, 4, bytes(4 * 4 * 4))
-    response = SimpleNamespace(answers={
-        "action": SimpleNamespace(probabilities={"A": 1.0}),
-        "completion": SimpleNamespace(probabilities={
-            "complete": 0.2, "incomplete": 0.7, "uncertain": 0.1})})
+def client_answering(monkeypatch, answer):
     client = Mock()
-    client.system_one.return_value = response
-    monkeypatch.setenv("QEV_PROMPT_VERSION", "v1")
+    client.system_one.return_value = SimpleNamespace(
+        answers={"answer": SimpleNamespace(raw={"type": "test"}, **answer)}, usage={"tokens": 3})
     monkeypatch.setattr(onejev, "Client", lambda: client)
-    model = load_decision_model("mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
-    result = model.score("Find exit", "Use the D-pad", frame,
-                         (RecentStep(frame, "DOWN", "first.png"),),
-                         {"A": "press A"})
+    return client
+
+
+def test_action_question_carries_task_memory_and_knowledge(monkeypatch):
+    client = client_answering(monkeypatch, {"choice": "A"})
+    model = load_model("mystery_dungeon.models.onejev:OneJevModel")
+    assert model.choose_action("Find exit", "Use the D-pad", FRAME, MEMORY) == Press("A")
     kwargs = client.system_one.call_args.kwargs
     assert len(kwargs["media"]) == 2
+    assert kwargs["state"]["task"] == "Find exit"
     assert kwargs["state"]["observations"][0]["action_after"] == "DOWN"
-    assert kwargs["state"]["goal"] == "Find exit"
-    assert "Use the D-pad" not in str(kwargs["state"])
-    assert "Use the D-pad" in kwargs["questions"]["action"].instructions
-    assert "Use the D-pad" not in kwargs["questions"]["completion"].instructions
-    assert kwargs["questions"]["completion"].instructions == model.prompt["completion_question"]
-    assert model.prompt["version"] == "v1"
-    assert result.completion_scores["incomplete"] == 0.7
+    assert kwargs["questions"]["answer"].instructions == f"{ACT}\nUse the D-pad"
+    assert "WAIT" in kwargs["questions"]["answer"].criteria
+    assert model.last_response == {"answer": {"type": "test"}, "usage": {"tokens": 3}}
 
 
-def test_prompt_version_rejects_paths(monkeypatch):
-    monkeypatch.setenv("QEV_PROMPT_VERSION", "../v1")
-    with pytest.raises(ValueError):
-        onejev.OneJevDecisionModel()
+@pytest.mark.parametrize("p_yes,complete", [(0.8, True), (0.5, False)])
+def test_completion_is_a_yes_no_question(monkeypatch, p_yes, complete):
+    client = client_answering(monkeypatch, {"noul": p_yes})
+    assert onejev.OneJevModel().is_complete("Find exit", FRAME, MEMORY) is complete
+    question = client.system_one.call_args.kwargs["questions"]["answer"]
+    assert question.instructions == COMPLETE
+
+
+def test_unknown_action_raises(monkeypatch):
+    client_answering(monkeypatch, {"choice": "START"})
+    with pytest.raises(ValueError, match="unknown action"):
+        onejev.OneJevModel().choose_action("Find exit", "", FRAME, ())

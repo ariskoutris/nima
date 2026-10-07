@@ -1,13 +1,32 @@
-"""Emulator execution boundary shared by live play, replay, and benchmarks."""
+"""Emulator I/O: load checkpoints, observe frames, and apply actions."""
 
 from __future__ import annotations
 
 import hashlib
+import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import assert_never
 
 from emulator import Frame, GbaEmulator, scene_distance
+from mystery_dungeon.actions import Action, Press, Wait, name
 from mystery_dungeon.ram_state import ROM_SHA1, RamState, read_ram_state
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    """A core state, with the battery RAM it expects when the save state carries one."""
+
+    state: bytes
+    save_ram: bytes | None = None
+
+
+@dataclass(frozen=True)
+class Observation:
+    frame: Frame
+    screenshot: str
+    game_state: RamState | None
 
 
 @dataclass(frozen=True)
@@ -17,9 +36,67 @@ class Transition:
     after: Frame
     after_name: str
     index: int
-    step: int
+    action_number: int
     frame_before: int
     frame_after: int
+
+
+def read_ss0(path: Path | bytes) -> Checkpoint:
+    """Extract the mGBA core state and battery RAM from its PNG save state.
+
+    Raises:
+        ValueError: when the data is not a complete, intact mGBA save state.
+    """
+    data = path if isinstance(path, bytes) else path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("checkpoint is not a PNG/mGBA save state")
+    state = save_ram = None
+    offset = 8
+    while offset + 12 <= len(data):
+        size = struct.unpack_from(">I", data, offset)[0]
+        end = offset + 12 + size
+        if end > len(data):
+            raise ValueError("truncated mGBA save state")
+        kind, payload = data[offset + 4:offset + 8], data[offset + 8:offset + 8 + size]
+        crc = struct.unpack_from(">I", data, end - 4)[0]
+        if zlib.crc32(kind + payload) != crc:
+            raise ValueError(f"bad {kind!r} checksum")
+        try:
+            if kind == b"gbAs":
+                state = zlib.decompress(payload)
+            elif kind == b"gbAx" and payload[:4] == b"\x02\0\0\0":
+                save_ram = zlib.decompress(payload[8:])
+        except zlib.error as exc:
+            raise ValueError("invalid compressed mGBA save state") from exc
+        offset = end
+    if state is None or save_ram is None:
+        raise ValueError("mGBA state or save RAM is missing")
+    return Checkpoint(state, save_ram)
+
+
+def read_checkpoint(path: Path) -> Checkpoint:
+    """Read an mGBA .ss0 save state, or a raw core state from any other file."""
+    return read_ss0(path) if path.suffix.lower() == ".ss0" else Checkpoint(path.read_bytes())
+
+
+def restore(game: GbaEmulator, checkpoint: Checkpoint) -> None:
+    """Load a checkpoint and advance one frame so the core presents it."""
+    if checkpoint.save_ram is not None:
+        game.load_save_ram(checkpoint.save_ram)
+    game.load_state(checkpoint.state)
+    game.step()
+
+
+def perform(game: GbaEmulator, action: Action, hold_frames: int, release_frames: int) -> None:
+    """Hold the action's input for hold_frames, then release it for release_frames."""
+    match action:
+        case Press(button):
+            game.step(hold_frames, (button,))
+        case Wait():
+            game.step(hold_frames)
+        case _:
+            assert_never(action)
+    game.step(release_frames)
 
 
 def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
@@ -41,6 +118,8 @@ def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
 
 
 class GameplaySession:
+    """Run the emulator for the agent and save every observed frame under output."""
+
     def __init__(self, emulator: GbaEmulator, output: Path,
                  hold_frames: int = 8, release_frames: int = 4):
         if min(hold_frames, release_frames) < 1:
@@ -55,7 +134,7 @@ class GameplaySession:
         self.current: Frame | None = None
         self.current_name = ""
         self.warning: str | None = None
-        self._last_button: str | None = None
+        self._last_action: Action | None = None
         self._unchanged_count = 0
         self.ram_enabled = (isinstance(emulator, GbaEmulator) and
                             hashlib.sha1(emulator.rom.read_bytes()).hexdigest() == ROM_SHA1)
@@ -63,10 +142,28 @@ class GameplaySession:
     def ram_state(self) -> RamState | None:
         return read_ram_state(self.emulator) if self.ram_enabled else None
 
-    def clear_warning(self) -> None:
+    def load(self, checkpoint: Checkpoint) -> None:
+        """Restore a checkpoint and start counting frames and actions again.
+
+        Raises:
+            Exception: the core's error for an unusable checkpoint, after the
+                previous game state has been restored.
+        """
+        previous_state = self.emulator.save_state()
+        previous_ram = self.emulator.save_ram() if checkpoint.save_ram is not None else None
+        try:
+            restore(self.emulator, checkpoint)
+        except Exception:
+            if previous_ram is not None:
+                self.emulator.load_save_ram(previous_ram)
+            self.emulator.load_state(previous_state)
+            raise
+        self.frame_count = 1
+        self.action_count = 0
         self.warning = None
-        self._last_button = None
+        self._last_action = None
         self._unchanged_count = 0
+        self.capture()
 
     def wait_for_text(self, max_frames: int = 300) -> tuple[int, bool]:
         """Advance silent frames until the current dialogue page is fully printed."""
@@ -113,40 +210,34 @@ class GameplaySession:
             return self.capture(second)
         return self.capture(_visible_cursor_frame(first, second))
 
-    def observe(self) -> Frame:
+    def observe(self) -> Observation:
         """Return a readable frame without skipping cutscenes or advancing dialogue."""
         self.wait_for_text()
-        return self.current_frame()
+        return Observation(self.current_frame(), self.current_name, self.ram_state())
 
-    def apply(self, button: str, frames: int | None = None) -> Transition:
+    def apply(self, action: Action) -> Transition:
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
         before, before_name, frame_before = self.current, self.current_name, self.frame_count
-        if frames is None:
-            self.emulator.step(self.hold_frames, () if button == "WAIT" else (button,))
-            self.emulator.step(self.release_frames)
-            self.frame_count += self.hold_frames + self.release_frames
-        else:
-            if button != "WAIT" or frames < 1:
-                raise ValueError("frame override requires a positive WAIT")
-            self.emulator.step(frames)
-            self.frame_count += frames
+        perform(self.emulator, action, self.hold_frames, self.release_frames)
+        self.frame_count += self.hold_frames + self.release_frames
         after = self.capture()
         self.action_count += 1
-        if button != "WAIT" and scene_distance(before, after) < 3:
-            self._unchanged_count = self._unchanged_count + 1 if button == self._last_button else 1
+        if isinstance(action, Press) and scene_distance(before, after) < 3:
+            self._unchanged_count = self._unchanged_count + 1 if action == self._last_action else 1
         else:
             self._unchanged_count = 0
-        self._last_button = button
-        self.warning = (f"Possible stall: little screen change after {self._unchanged_count} {button} presses"
-                        if self._unchanged_count >= 8 else None)
+        self._last_action = action
+        self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
+                        f"{name(action)} presses" if self._unchanged_count >= 8 else None)
         return Transition(before, before_name, after, self.current_name,
                           self.image_index - 1, self.action_count,
                           frame_before, self.frame_count)
 
-    def save_latest(self) -> None:
+    def save_state(self, filename: str) -> None:
+        """Write the core state to states/<filename>, replacing any earlier file atomically."""
         states = self.output / "states"
         states.mkdir(parents=True, exist_ok=True)
-        temporary = states / "latest.state.tmp"
+        temporary = states / f"{filename}.tmp"
         temporary.write_bytes(self.emulator.save_state())
-        temporary.replace(states / "latest.state")
+        temporary.replace(states / filename)

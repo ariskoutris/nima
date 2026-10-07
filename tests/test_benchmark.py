@@ -1,4 +1,4 @@
-"""Check that the town goals can be reached and do not pass at their starts."""
+"""Check that the town tasks can be reached and do not pass at their starts."""
 
 import json
 import sys
@@ -7,11 +7,12 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from emulator import GbaEmulator
-from mystery_dungeon.agent import GLM_MODEL, DecisionScores, default_context_path
 from mystery_dungeon import benchmark
+from mystery_dungeon.actions import Press
+from fakes import ScriptedModel, press, votes
 from mystery_dungeon.benchmark import (CASES, CHECKPOINTS, CORE, ROM, Case, Grader,
-                                       build_fixtures, press, read_ss0, restore, run_case)
-from mystery_dungeon.session import GameplaySession
+                                       build_fixtures, run_case)
+from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
 
 def test_ss0_can_be_read_from_upload_bytes():
@@ -54,19 +55,12 @@ def test_case_is_reachable_by_scripted_play(town, case):
     game, seeds, output = town
     route = ROUTES[case.id]
 
-    class Scripted:
-        def __init__(self):
-            self.index = 0
+    def done():
+        actions = sum(call[0] == "choose_action" for call in model.calls)
+        return case.criterion in ("finish", "finish_lombre") and actions == len(route)
 
-        def score(self, goal, guidance, frame, history, options):
-            done = case.criterion in ("finish", "finish_lombre") and self.index == len(route)
-            button = route[min(self.index, len(route) - 1)]
-            self.index += 1
-            return DecisionScores({name: float(name == button) for name in options},
-                                  {"complete": float(done), "incomplete": float(not done),
-                                   "uncertain": 0.0})
-
-    result = run_case(game, case, Scripted(), seeds, output / case.id)
+    model = ScriptedModel(route, done)
+    result = run_case(game, case, model, seeds, output / case.id)
     assert result["reached"], result
     if case.criterion in ("finish", "finish_lombre"):
         assert result["recognized"], result
@@ -80,10 +74,10 @@ def test_lombre_finish_requires_closed_dialogue(town, tmp_path):
     session = GameplaySession(game, tmp_path)
     session.capture()
     for index in range(9):
-        session.apply("A")
+        session.apply(Press("A"))
         session.wait_for_text()
         assert grader.observe(case.criterion)[0] == (index == 8)
-    session.apply("A")
+    session.apply(Press("A"))
     session.wait_for_text()
     assert not grader.observe(case.criterion)[0]
 
@@ -92,13 +86,8 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     game, seeds, output = town
     case = Case("reopened_granbull", "face-npc", "Finish talking to Granbull", "finish", 14)
 
-    class ReopensDialogue:
-        def score(self, goal, guidance, frame, history, options):
-            return DecisionScores({name: float(name == "A") for name in options},
-                                  {"complete": 0.0, "incomplete": 1.0, "uncertain": 0.0})
-
-    result = run_case(game, case, ReopensDialogue(), seeds, output / case.id)
-    assert result["steps"] == 14
+    result = run_case(game, case, ScriptedModel(["A"]), seeds, output / case.id)
+    assert result["actions"] == 14
     assert result["stop_reason"] == "budget"
     assert not result["reached"]
     assert not result["recognized"]
@@ -200,41 +189,30 @@ def test_dialogue_reach_and_completion_are_separate(town):
     game, seeds, output = town
     case = next(case for case in CASES if case.id == "face_npc_talk")
 
-    class Policy:
-        def __init__(self, complete_at):
-            self.calls = 0
-            self.complete_at = complete_at
-
-        def score(self, goal, guidance, frame, history, options):
-            self.calls += 1
-            done = self.calls >= self.complete_at
-            return DecisionScores({name: float(name == "A") for name in options},
-                                  {"complete": float(done), "incomplete": float(not done),
-                                   "uncertain": 0.0})
-
-    early = run_case(game, case, Policy(1), seeds, output / "premature_completion")
+    early = run_case(game, case, ScriptedModel(["A"], votes(True)), seeds,
+                     output / "premature_completion")
     assert early["false_completion"] and not early["reached"]
-    finished = run_case(game, case, Policy(2), seeds, output / "correct_completion")
-    assert finished["recognized"] and finished["steps"] == 1
+    finished = run_case(game, case, ScriptedModel(["A"], votes(False, True)), seeds,
+                        output / "correct_completion")
+    assert finished["recognized"] and finished["actions"] == 1
 
 
 def test_slow_inference_still_acts_but_action_budget_stops_after_reach(town, monkeypatch):
     game, seeds, output = town
     clock = Mock(return_value=0)
 
-    class LatePolicy:
-        def score(self, goal, guidance, frame, history, options):
-            clock.return_value = 181
-            return DecisionScores({name: float(name == "DOWN") for name in options},
-                                  {"complete": 0.0, "incomplete": 1.0, "uncertain": 0.0})
+    def slow_check():
+        clock.return_value = 181
+        return False
 
     case = Case("slow_one_action", "square", "Move one tile down", "down", 1)
     with monkeypatch.context() as patcher:
         patcher.setattr(benchmark.time, "monotonic", clock)
-        result = run_case(game, case, LatePolicy(), seeds, output / "late_decision")
+        result = run_case(game, case, ScriptedModel(["DOWN"], slow_check), seeds,
+                          output / "late_turn")
     assert result["stop_reason"] == "budget"
     assert result["reached"] and result["missed"]
-    assert result["steps"] == result["decisions"] == 1
+    assert result["actions"] == result["turns"] == 1
     assert result["seconds"] == 181
 
 
@@ -244,19 +222,19 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
                               ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact"))):
         path.write_bytes(b"test")
     models = [object(), object()]
-    cases = (Case("one", "square", "Goal one", "down", 1),
-             Case("two", "square", "Goal two", "down", 1))
+    cases = (Case("one", "square", "Task one", "down", 1),
+             Case("two", "square", "Task two", "down", 1))
     monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
                                   "--output", str(tmp_path / "run"),
                                   "--model-file", str(model_file),
-                                  "--decision-model", "fake:Model"])
+                                  "--model", "fake:Model"])
     monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
     monkeypatch.setattr(benchmark, "CASES", cases)
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
     load = Mock(side_effect=models)
-    run = Mock(return_value={"stop_reason": "budget", "steps": 0})
-    monkeypatch.setattr(benchmark, "load_decision_model", load)
+    run = Mock(return_value={"stop_reason": "budget", "actions": 0})
+    monkeypatch.setattr(benchmark, "load_model", load)
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     benchmark.main()
@@ -266,14 +244,15 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
-    assert config["format_version"] == 4
+    assert config["format_version"] == 5
     assert "time_limit_seconds" not in config
     assert "recognition_window" not in config
     assert config["hashes"][str(model_file)] == benchmark.sha256(model_file)
 
 
-def test_glm_benchmark_default_context_can_be_disabled(tmp_path, monkeypatch):
-    rom, core = tmp_path / "game.gba", tmp_path / "core"
+def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
+    rom, core, knowledge = tmp_path / "game.gba", tmp_path / "core", tmp_path / "controls.md"
+    knowledge.write_text("A talks.")
     for path in (rom, core, *(tmp_path / f"{name}.ss0" for name in
                               ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact"))):
         path.write_bytes(b"test")
@@ -281,16 +260,15 @@ def test_glm_benchmark_default_context_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "CASES", (Case("one", "square", "Move", "down", 1),))
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
-    monkeypatch.setattr(benchmark, "load_decision_model", Mock(return_value=object()))
-    run = Mock(return_value={"stop_reason": "budget", "steps": 0})
+    monkeypatch.setattr(benchmark, "load_model", Mock(return_value=object()))
+    run = Mock(return_value={"stop_reason": "budget", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
-    for name, extra in (("default", []), ("disabled", ["--no-context"])):
+    for name, extra in (("none", []), ("controls", ["--knowledge", str(knowledge)])):
         output = tmp_path / name
         monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom),
-                                      "--core", str(core), "--output", str(output),
-                                      "--decision-model", GLM_MODEL, *extra])
+                                      "--core", str(core), "--output", str(output), *extra])
         benchmark.main()
         config = json.loads((output / "config.json").read_text())
-        assert config["context"] == (str(default_context_path(GLM_MODEL)) if not extra else None)
-        assert run.call_args.args[7] == (default_context_path(GLM_MODEL).read_text() if not extra else "")
+        assert config["knowledge"] == (str(knowledge) if extra else None)
+        assert run.call_args.args[5] == ("A talks." if extra else "")

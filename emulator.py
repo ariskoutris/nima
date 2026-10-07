@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import hashlib
 import struct
 import zlib
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Callable
 
@@ -26,19 +28,10 @@ class Frame:
     height: int
     rgba: bytes
 
-    def scaled_nearest(self, scale: int) -> Frame:
-        if scale < 1:
-            raise ValueError("image scale must be positive")
-        if scale == 1:
-            return self
-        stride = self.width * 4
-        rows = []
-        for start in range(0, len(self.rgba), stride):
-            row = self.rgba[start:start + stride]
-            enlarged = b"".join(row[index:index + 4] * scale
-                                for index in range(0, stride, 4))
-            rows.extend([enlarged] * scale)
-        return Frame(self.width * scale, self.height * scale, b"".join(rows))
+    @cached_property
+    def data_url(self) -> str:
+        """The PNG as a base64 data URL, encoded once per frame for model requests."""
+        return "data:image/png;base64," + base64.b64encode(self.png_bytes()).decode("ascii")
 
     def png_bytes(self) -> bytes:
         """Encode an RGBA screenshot without an image dependency."""

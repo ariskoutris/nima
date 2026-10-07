@@ -1,4 +1,4 @@
-"""Run short Pokémon Square goals with hidden game-state grading."""
+"""Run short Pokémon Square tasks with hidden game-state grading."""
 
 from __future__ import annotations
 
@@ -7,14 +7,15 @@ import hashlib
 import json
 import struct
 import time
-import zlib
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
 from emulator import GbaEmulator
-from mystery_dungeon.agent import Agent, DecisionModel, default_context_path, load_decision_model
-from mystery_dungeon.session import GameplaySession
+from mystery_dungeon.agent import Agent
+from mystery_dungeon.models import Model, load_model
+from mystery_dungeon.run_log import RunLog
+from mystery_dungeon.session import Checkpoint, GameplaySession, read_ss0, restore
 
 
 ROM = Path("data/game/roms/red-rescue-team.gba")
@@ -28,7 +29,7 @@ HOLD, RELEASE = 8, 4
 class Case:
     id: str
     start: str
-    goal: str
+    task: str
     criterion: str
     limit: int
 
@@ -63,58 +64,12 @@ CASES = (
 )
 
 
-@dataclass(frozen=True)
-class Seed:
-    state: bytes
-    save_ram: bytes
-
-
-def read_ss0(path: Path | bytes) -> Seed:
-    """Extract the mGBA core state and battery RAM from its PNG save state."""
-    data = path if isinstance(path, bytes) else path.read_bytes()
-    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("checkpoint is not a PNG/mGBA save state")
-    state = save_ram = None
-    offset = 8
-    while offset + 12 <= len(data):
-        size = struct.unpack_from(">I", data, offset)[0]
-        end = offset + 12 + size
-        if end > len(data):
-            raise ValueError("truncated mGBA save state")
-        kind, payload = data[offset + 4:offset + 8], data[offset + 8:offset + 8 + size]
-        crc = struct.unpack_from(">I", data, end - 4)[0]
-        if zlib.crc32(kind + payload) != crc:
-            raise ValueError(f"bad {kind!r} checksum")
-        try:
-            if kind == b"gbAs":
-                state = zlib.decompress(payload)
-            elif kind == b"gbAx" and payload[:4] == b"\x02\0\0\0":
-                save_ram = zlib.decompress(payload[8:])
-        except zlib.error as exc:
-            raise ValueError("invalid compressed mGBA save state") from exc
-        offset = end
-    if state is None or save_ram is None:
-        raise ValueError("mGBA state or save RAM is missing")
-    return Seed(state, save_ram)
-
-
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def restore(game: GbaEmulator, seed: Seed) -> None:
-    game.load_save_ram(seed.save_ram)
-    game.load_state(seed.state)
-    game.step()
-
-
-def press(game: GbaEmulator, button: str) -> None:
-    game.step(HOLD, () if button == "WAIT" else (button,))
-    game.step(RELEASE)
 
 
 class Grader:
@@ -206,46 +161,45 @@ class Grader:
         return success, []
 
 
-def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Seed]:
+def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
     if hashlib.sha1(game.rom.read_bytes()).hexdigest() != ROM_SHA1:
         raise ValueError("town RAM offsets require the matching Red Rescue Team ROM")
-    seeds = {name: read_ss0(CHECKPOINTS / f"{name}.ss0")
+    checkpoints = {name: read_ss0(CHECKPOINTS / f"{name}.ss0")
              for name in ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")}
     folder = output / "references"
     folder.mkdir()
-    for name, seed in seeds.items():
-        (folder / f"{name}.state").write_bytes(seed.state)
-        (folder / f"{name}.sav").write_bytes(seed.save_ram)
-        restore(game, seed)
+    for name, checkpoint in checkpoints.items():
+        (folder / f"{name}.state").write_bytes(checkpoint.state)
+        (folder / f"{name}.sav").write_bytes(checkpoint.save_ram)
+        restore(game, checkpoint)
         game.screenshot().save_png(folder / f"{name}.png")
         for case in (case for case in CASES if case.start == name):
             grader = Grader(case, game)
             if grader.observe(case.criterion)[0]:
                 raise ValueError(f"{case.id} already passes at its checkpoint")
-    return seeds
+    return checkpoints
 
 
-def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
-             seeds: dict[str, Seed], output: Path,
-             history_frames: int = 1, completion_votes: int = 1,
-             context: str | None = None, model_spec: str = "injected",
-             image_scale: int = 1) -> dict:
+def run_case(game: GbaEmulator, case: Case, model: Model,
+             checkpoints: dict[str, Checkpoint], output: Path,
+             knowledge: str = "", model_spec: str = "injected") -> dict:
     output.mkdir(parents=True, exist_ok=False)
-    restore(game, seeds[case.start])
-    grader = Grader(case, game)
-    agent = Agent(model, output, model_spec, history_frames, completion_votes, context,
-                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
-                   "criterion": case.criterion, "action_limit": case.limit,
-                   "hold_frames": HOLD, "release_frames": RELEASE},
-                  image_scale=image_scale)
-    agent.set_goal(case.goal)
+    log = RunLog(output, model_spec,
+                 {"kind": "benchmark_case", "case": case.id, "start": case.start,
+                  "criterion": case.criterion, "action_limit": case.limit,
+                  "hold_frames": HOLD, "release_frames": RELEASE},
+                 knowledge)
+    watched = log.watch(model)
+    agent = Agent(watched, watched, knowledge)
+    agent.set_instructions(case.task)
     session = GameplaySession(game, output, HOLD, RELEASE)
-    session.capture()
+    session.load(checkpoints[case.start])
+    grader = Grader(case, game)
     events: list[str] = []
     started = time.monotonic()
     reason = "budget"
     error = None
-    actions = decisions = 0
+    turns = 0
     reached_at = None
     while True:
         success, new_events = grader.observe(case.criterion)
@@ -253,20 +207,19 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
         if case.criterion in ("finish", "finish_lombre") and not success:
             reached_at = None  # A reopened the conversation after it had ended.
         elif success and reached_at is None:
-            reached_at = decisions
-        if actions >= case.limit:
+            reached_at = turns
+        if session.action_count >= case.limit:
             reason = "budget"
             break
-        turn = agent.step(session)
+        turn, transition = agent.take_turn(session)
+        log.record_turn(turn, transition)
         if turn.status == "model_error":
             reason, error = "model_error", turn.error
             break
-        decisions += 1
-        if turn.status == "completed":
+        turns += 1
+        if turn.status == "completion":
             reason = "recognized" if reached_at is not None else "false_completion"
             break
-        if turn.status == "acted":
-            actions += 1
     final = session.current
     final.save_png(output / "frames/final.png")
     (output / "states").mkdir(exist_ok=True)
@@ -274,14 +227,13 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
     (output / "states/final.sav").write_bytes(game.save_ram())
     public_reason = ("completion_claimed" if reason in ("recognized", "false_completion") else
                      "benchmark_limit" if reason == "budget" else reason)
-    agent.record({"event": "run_stop", "reason": public_reason,
-                  "screenshot": session.current_name})
+    log.record_run_stop(public_reason, session.current_name)
     reached = reached_at is not None
-    result = {"case": case.id, "goal": case.goal, "reached": reached,
+    result = {"case": case.id, "task": case.task, "reached": reached,
               "recognized": reason == "recognized", "missed": reached and reason != "recognized",
               "false_completion": reason == "false_completion", "success": reached,
               "reached_at": reached_at, "stop_reason": reason,
-              "steps": actions, "decisions": decisions,
+              "actions": session.action_count, "turns": turns,
               "events": events,
               "seconds": round(time.monotonic() - started, 2), "error": error}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -290,15 +242,15 @@ def run_case(game: GbaEmulator, case: Case, model: DecisionModel,
 
 def report(results: list[dict], output: Path) -> None:
     (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
-    lines = ["# Game goal benchmark", "",
+    lines = ["# Game task benchmark", "",
              "| Case | Reached | Recognized | Missed | False completion | Actions | Seconds |",
              "|---|:---:|:---:|:---:|:---:|---:|---:|"]
     for row in results:
         lines.append(f"| {row['case']} | {row['reached']} | {row['recognized']} | "
-                     f"{row['missed']} | {row['false_completion']} | {row['steps']} | {row['seconds']} |")
+                     f"{row['missed']} | {row['false_completion']} | {row['actions']} | {row['seconds']} |")
     lines += ["", "The hidden grader measures reach independently from model completion.",
-              "Joint action/completion requests and frame history change prompts and latency; "
-              "these runs are not directly comparable with earlier benchmark reports.", ""]
+              "Each turn makes separate completion and action requests, so latency is not "
+              "comparable with earlier benchmark reports.", ""]
     (output / "report.md").write_text("\n".join(lines))
 
 
@@ -309,51 +261,38 @@ def main() -> None:
     parser.add_argument("--output", type=Path,
                         default=Path("runs/benchmarks") / datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
                         help="run directory (default: timestamped directory in runs/benchmarks)")
-    parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.glm:GlmDecisionModel")
+    parser.add_argument("--model", default="mystery_dungeon.models.glm:GlmModel")
     parser.add_argument("--model-file", type=Path, action="append",
                         help="hash a local model artifact; repeat for weights and vision projector")
-    context_group = parser.add_mutually_exclusive_group()
-    context_group.add_argument("--context", type=Path)
-    context_group.add_argument("--no-context", action="store_true",
-                               help="disable the model's default guidance")
-    parser.add_argument("--history-frames", type=int, default=1)
-    parser.add_argument("--image-scale", type=int, default=1)
-    parser.add_argument("--completion-votes", type=int, default=1)
+    parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
-    if args.history_frames < 0 or args.completion_votes < 1 or args.image_scale < 1:
-        parser.error("history frames must be non-negative; votes and image scale must be positive")
     selected = [case for case in CASES if args.case is None or case.id in args.case]
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
-    context_path = args.context or (None if args.no_context else default_context_path(args.decision_model))
-    context = context_path.read_text() if context_path else ""
+    knowledge = args.knowledge.read_text() if args.knowledge else ""
     files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in
                                   ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")),
              *(args.model_file or ()),
-             *((context_path,) if context_path else ()))
+             *((args.knowledge,) if args.knowledge else ()))
     hashes = {str(path): sha256(path) for path in files}
-    hashes["decision_model"] = args.decision_model
+    hashes["model"] = args.model
     (args.output / "config.json").write_text(json.dumps({
-        "format_version": 4, "layout": "benchmark", "grader": "pmd-red-ram-v1",
+        "format_version": 5, "layout": "benchmark", "grader": "pmd-red-ram-v1",
         "cases": [asdict(c) for c in selected],
-        "hashes": hashes, "context": str(context_path) if context_path else None,
-        "history_frames": args.history_frames, "completion_votes": args.completion_votes,
-        "image_scale": args.image_scale,
+        "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_frames": HOLD, "release_frames": RELEASE,
     }, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game:
-        seeds = build_fixtures(game, args.output)
+        checkpoints = build_fixtures(game, args.output)
         results = []
         for case in selected:
             print(case.id, flush=True)
-            result = run_case(game, case, load_decision_model(args.decision_model), seeds,
-                              args.output / "cases" / case.id,
-                              args.history_frames, args.completion_votes, context,
-                              args.decision_model, args.image_scale)
+            result = run_case(game, case, load_model(args.model), checkpoints,
+                              args.output / "cases" / case.id, knowledge, args.model)
             results.append(result)
             report(results, args.output)
-            print(f"  {result['stop_reason']} after {result['steps']} actions", flush=True)
+            print(f"  {result['stop_reason']} after {result['actions']} actions", flush=True)
 
 
 if __name__ == "__main__":

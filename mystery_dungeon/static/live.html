@@ -20,8 +20,8 @@
     h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.02em; }
     .status { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #2b3d3e; border-radius: 999px; color: #b8c9c5; background: #152125; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a9b98; }
-    .status.running .dot, .status.thinking .dot, .status.waiting .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
-    .status.resetting .dot, .status.switching .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
+    .status.running .dot, .status.thinking .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
+    .status.resetting .dot, .status.switching .dot, .status.cancelling .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
     .status.error .dot { background: #ff938a; }
     .layout { display: grid; grid-template-columns: minmax(0, 1.38fr) minmax(310px, .9fr); gap: 18px; align-items: start; }
     .card { min-width: 0; border: 1px solid #2b3a3e; border-radius: 17px; background: #142026; overflow: hidden; box-shadow: 0 14px 40px #040a0d30; }
@@ -46,9 +46,6 @@
     textarea:focus { border-color: #8de3b0; box-shadow: 0 0 0 3px #8de3b01e; }
     textarea::placeholder { color: #6e8581; }
     select { width: 100%; padding: 10px 12px; border: 1px solid #39504d; border-radius: 9px; background: #0b171b; color: #e7eee9; }
-    #steering { min-height: 70px; }
-    .recent-toggle { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: .84rem; }
-    .recent-toggle input { accent-color: #9be8ba; }
     .hint { margin: 5px 0 0; color: #859a97; font-size: .76rem; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
     .button { border: 1px solid #405450; border-radius: 8px; padding: 9px 14px; background: #223239; color: #e3ebe6; font-weight: 700; }
@@ -63,30 +60,24 @@
     .pad { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
     .pad .button { min-width: 43px; padding: 7px 9px; font-size: .78rem; }
     .feedback { min-height: 18px; margin: 12px 20px 0; color: #ffb9ad; font-size: .78rem; }
-    .decision, .history { grid-column: 1 / -1; }
-    .decision-body { display: grid; grid-template-columns: minmax(200px, .65fr) minmax(0, 1.35fr); gap: 26px; padding: 1px 20px 22px; }
+    .latest, .history { grid-column: 1 / -1; }
+    .latest-body { padding: 1px 20px 22px; }
     .choice { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1; margin: 16px 0 7px; font-weight: 800; letter-spacing: -.06em; color: #adf0c3; }
     .choice.manual-choice { color: #ebcf8c; }
     .detail { color: #a4b9b2; font-size: .85rem; }
     .observation { display: block; width: min(100%, 240px); margin-top: 16px; border: 1px solid #39504d; border-radius: 6px; image-rendering: pixelated; }
-    .scores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; align-content: start; }
-    .score { display: grid; grid-template-columns: 54px minmax(0, 1fr) 50px; align-items: center; gap: 8px; color: #adbfba; font-size: .76rem; }
-    .score.selected { color: #b9f2cd; font-weight: 800; }
-    .track { height: 7px; border-radius: 999px; background: #263940; overflow: hidden; }
-    .fill { height: 100%; border-radius: inherit; background: #668d83; }
-    .selected .fill { background: #9be8ba; }
     .history-list { padding: 0 20px 18px; max-height: 290px; overflow: auto; }
     .history-row { display: grid; grid-template-columns: 52px 85px 95px minmax(0, 1fr) 90px; gap: 10px; align-items: center; border-top: 1px solid #2a3a3c; padding: 10px 0; font-size: .79rem; }
     .history-row:first-child { border-top: 0; }
     button.history-row { width: 100%; background: transparent; color: inherit; text-align: left; border-right: 0; border-bottom: 0; border-left: 0; }
     button.history-row:hover, button.history-row.selected { background: #1d3030; }
     button.history-row:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
-    .history-row .goal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a3b7ae; }
+    .history-row .task { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a3b7ae; }
     .pill { width: fit-content; padding: 3px 7px; border-radius: 5px; color: #c6f4d6; background: #234d3c; font-size: .73rem; font-weight: 800; }
     .pill.manual { color: #f1daac; background: #5c482a; }
     .footer { margin-top: 17px; color: #728b85; font-size: .74rem; overflow-wrap: anywhere; }
-    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .decision, .history { grid-column: 1; } }
-    @media (max-width: 570px) { .shell { padding-top: 15px; } .decision-body { grid-template-columns: 1fr; gap: 16px; } .scores { grid-template-columns: 1fr; } .history-row { grid-template-columns: 40px 68px minmax(0, 1fr) 63px; } .history-row .source { display: none; } }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .latest, .history { grid-column: 1; } }
+    @media (max-width: 570px) { .shell { padding-top: 15px; } .history-row { grid-template-columns: 40px 68px minmax(0, 1fr) 63px; } .history-row .source { display: none; } }
   </style>
 </head>
 <body>
@@ -102,22 +93,18 @@
         <div class="screen-foot"><span>Latest game view</span><span id="screen-state">Connecting…</span></div>
       </section>
       <section class="card controls">
-        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Direction changes apply after the current action</span></div>
+        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Changes discard the action in progress</span></div>
         <form id="control-form">
-          <label for="decision-model">Decision model</label>
-          <select id="decision-model"></select>
+          <label for="model">Model</label>
+          <select id="model"></select>
           <p class="hint">Changing models pauses the agent. The local server starts when OneJev is selected.</p>
-          <label for="goal">Goal</label>
-          <textarea id="goal" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
-          <label for="steering">Steering note</label>
-          <textarea id="steering" maxlength="1000" placeholder="e.g. Open the menu first; avoid entering a dungeon yet"></textarea>
-          <p class="hint">The note stays active until you clear it.</p>
-          <label class="recent-toggle" for="use-recent"><input id="use-recent" type="checkbox" checked>Use recent frames and actions</label>
+          <label for="instructions">Instructions</label>
+          <textarea id="instructions" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
           <div class="actions">
             <button class="button primary" type="button" data-command="start">Start / resume</button>
-            <button class="button" type="button" data-command="pause">Pause</button>
-            <button class="button" type="button" data-command="step">One decision</button>
-            <button class="button" type="submit">Save direction</button>
+            <button id="pause-button" class="button" type="button" data-command="pause">Pause</button>
+            <button class="button" type="button" data-command="turn">One turn</button>
+            <button class="button" type="submit">Save instructions</button>
             <button class="button" type="button" data-command="reset" title="Return to the current checkpoint and pause">Reset game</button>
             <button id="load-state-button" class="button" type="button">Load checkpoint</button>
             <input id="state-file" type="file" accept=".state,.ss0" hidden>
@@ -130,15 +117,14 @@
         </div>
         <div id="feedback" class="feedback" role="status"></div>
       </section>
-      <section class="card decision">
-        <div class="card-head"><h2 id="decision-title">Latest decision</h2><div><button id="latest-button" class="button" type="button" hidden>Back to latest</button> <span id="decision-meta" class="muted">Waiting for first action</span></div></div>
-        <div class="decision-body">
-          <div><div id="choice" class="choice">—</div><div id="choice-detail" class="detail">The agent's selected button will appear here.</div><img id="observation" class="observation" alt="Screen used for the latest decision" hidden><div id="observation-label" class="hint" hidden>Screen used for this decision</div></div>
-          <div id="scores" class="scores"><span class="muted">Option scores will appear here.</span></div>
+      <section class="card latest">
+        <div class="card-head"><h2 id="action-title">Latest action</h2><div><button id="latest-button" class="button" type="button" hidden>Back to latest</button> <span id="action-meta" class="muted">Waiting for first action</span></div></div>
+        <div class="latest-body">
+          <div><div id="choice" class="choice">—</div><div id="choice-detail" class="detail">The agent's chosen action will appear here.</div><img id="observation" class="observation" alt="Screen the latest action was chosen from" hidden><div id="observation-label" class="hint" hidden>Screen the action was chosen from</div></div>
         </div>
       </section>
       <section class="card history">
-        <div class="card-head"><h2>Decision history</h2><span class="muted">Latest 40 actions</span></div>
+        <div class="card-head"><h2>Action history</h2><span class="muted">Latest 40 actions</span></div>
         <div id="history" class="history-list"><span class="muted">No actions yet.</span></div>
       </section>
     </main>
@@ -146,12 +132,13 @@
   </div>
   <script>
     const $ = id => document.getElementById(id);
-    const goal = $('goal'), steering = $('steering'), useRecent = $('use-recent'), model = $('decision-model');
+    const instructions = $('instructions'), model = $('model');
+    const actionName = action => action.type === 'press' ? action.button : action.type.toUpperCase();
+    const GOOD = '#a9d9b8', BAD = '#ffb9ad', NOTE = '#ebcf8c';
+    const say = (text, color) => { $('feedback').style.color = color; $('feedback').textContent = text; };
     let screenRevision = 0, screenUrl = null, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
-    let goalDirty = false, steeringDirty = false, recentDirty = false, modelDirty = false, sending = false;
-    goal.addEventListener('input', () => goalDirty = true);
-    steering.addEventListener('input', () => steeringDirty = true);
-    useRecent.addEventListener('change', () => { recentDirty = true; send(); });
+    let instructionsDirty = false, modelDirty = false, sending = false;
+    instructions.addEventListener('input', () => instructionsDirty = true);
     model.addEventListener('change', async () => {
       if (sending) return;
       sending = modelDirty = true;
@@ -164,21 +151,13 @@
         const state = await response.json();
         if (!response.ok) throw new Error(state.error || 'Could not switch model');
         render(state);
-        $('feedback').style.color = '#a9d9b8';
-        $('feedback').textContent = 'Switching decision model…';
+        say('Switching model…', GOOD);
       } catch (error) {
-        model.value = currentState.decision_model;
-        $('feedback').style.color = '#ffb9ad';
-        $('feedback').textContent = error.message;
+        model.value = currentState.model;
+        say(error.message, BAD);
       } finally { sending = modelDirty = false; model.disabled = false; }
     });
 
-    for (const button of ['UP', 'LEFT', 'DOWN', 'RIGHT', 'A', 'B', 'START', 'SELECT', 'L', 'R', 'WAIT']) {
-      const element = document.createElement('button');
-      element.type = 'button'; element.className = 'button'; element.textContent = button;
-      element.addEventListener('click', () => send('manual', button));
-      $('pad').append(element);
-    }
     for (const button of document.querySelectorAll('[data-command]')) {
       button.addEventListener('click', () => send(button.dataset.command));
     }
@@ -190,8 +169,7 @@
       if (!file || sending) return;
       const format = file.name.split('.').pop().toLowerCase();
       if (!['state', 'ss0'].includes(format)) {
-        $('feedback').style.color = '#ffb9ad';
-        $('feedback').textContent = 'Choose a .state or .ss0 file.';
+        say('Choose a .state or .ss0 file.', BAD);
         return;
       }
       sending = true;
@@ -203,36 +181,33 @@
         const state = await response.json();
         if (!response.ok) throw new Error(state.error || 'Could not load state');
         render(state);
-        $('feedback').style.color = '#a9d9b8';
-        $('feedback').textContent = `Loading ${file.name}…`;
+        say(`Loading ${file.name}…`, GOOD);
       } catch (error) {
-        $('feedback').style.color = '#ffb9ad';
-        $('feedback').textContent = error.message;
+        say(error.message, BAD);
       } finally { sending = false; $('load-state-button').disabled = false; }
     });
-    $('latest-button').addEventListener('click', () => { selectedIndex = null; if (currentState) { renderHistory(currentState.history); renderDecision(currentState.history[0]); } });
+    $('latest-button').addEventListener('click', () => { selectedIndex = null; if (currentState) { renderHistory(currentState.history); renderAction(currentState.history[0]); } });
 
-    async function send(command, button) {
+    async function send(command, action) {
       if (sending) return;
       sending = true;
-      useRecent.disabled = true;
       $('feedback').textContent = '';
       try {
         const response = await fetch('/api/control', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({goal: goal.value, steering: steering.value, use_recent: useRecent.checked,
-                                ...(command && {command}), ...(button && {button})})
+          body: JSON.stringify({instructions: instructions.value,
+                                ...(command && {command}), ...(action && {action})})
         });
         const state = await response.json();
         if (!response.ok) throw new Error(state.error || 'Control failed');
-        goalDirty = steeringDirty = recentDirty = false;
+        instructionsDirty = false;
         render(state);
-        $('feedback').style.color = '#a9d9b8';
-        $('feedback').textContent = command === 'manual' ? `${button} sent` : command === 'pause' ? 'Paused' : command === 'step' ? 'One decision queued' : command === 'start' ? 'Agent running' : command === 'reset' ? 'Resetting game…' : 'Settings saved';
+        const sent = {manual: `${action} sent`, pause: state.status === 'cancelling' ? 'Pausing…' : 'Paused',
+                      turn: 'One turn queued', start: 'Agent running', reset: 'Resetting game…'};
+        say(sent[command] ?? 'Settings saved', GOOD);
       } catch (error) {
-        $('feedback').style.color = '#ffb9ad';
-        $('feedback').textContent = error.message;
-      } finally { sending = false; useRecent.disabled = false; }
+        say(error.message, BAD);
+      } finally { sending = false; }
     }
 
     function render(state) {
@@ -242,9 +217,9 @@
         state.game_state?.text_printing ? 'printing' : ''].filter(Boolean).join(' · ');
       const activity = {
         loading: ['Starting emulator', 'Preparing the game view'],
-        switching: ['Loading decision model', 'Waiting for the model server'],
-        thinking: ['Agent thinking', 'Preparing the next decision'],
-        waiting: ['Waiting for model response', `${state.models[state.decision_model]} is choosing an action`],
+        switching: ['Loading model', 'Waiting for the model server'],
+        thinking: ['Waiting for the model', `${state.models[state.model]} is planning and choosing an action`],
+        cancelling: ['Discarding the turn in progress', 'Waiting for the model to answer'],
         resetting: ['Restoring game', 'Loading the selected state']
       }[state.status];
       $('screen-activity').hidden = !activity;
@@ -252,84 +227,70 @@
         if ($('activity-title').textContent !== activity[0]) $('activity-title').textContent = activity[0];
         if ($('activity-detail').textContent !== activity[1]) $('activity-detail').textContent = activity[1];
       }
-      $('screen-state').textContent = state.status === 'waiting' ? 'Game paused while the model responds' :
+      $('pause-button').textContent = state.status === 'cancelling' ? 'Pausing…' : 'Pause';
+      $('screen-state').textContent = state.status === 'thinking' ? 'Game paused while the model responds' :
         state.status === 'paused' ? 'Paused' : state.status === 'error' ? 'Needs attention' :
         state.status === 'running' ? 'Agent running' : activity?.[0] || '';
-      $('output').textContent = `Decision model: ${state.decision_model} · Session: ${state.output}`;
+      $('output').textContent = `Model: ${state.model} · Session: ${state.output}`;
+      if (!$('pad').childElementCount) {
+        for (const action of state.actions) {
+          const element = document.createElement('button');
+          element.type = 'button'; element.className = 'button'; element.textContent = action;
+          element.addEventListener('click', () => send('manual', action));
+          $('pad').append(element);
+        }
+      }
       if (!model.options.length) {
         for (const [spec, name] of Object.entries(state.models)) model.add(new Option(name, spec));
       }
-      if (!modelDirty) model.value = state.requested_model || state.decision_model;
-      if (!goalDirty) goal.value = state.goal;
-      if (!steeringDirty) steering.value = state.steering;
-      if (!recentDirty) useRecent.checked = state.use_recent;
-      if (state.error) { $('feedback').style.color = '#ffb9ad'; $('feedback').textContent = state.error; }
-      else if (state.status === 'running' && state.warning) { $('feedback').style.color = '#ebcf8c'; $('feedback').textContent = state.warning; }
-      else if (state.notice) { $('feedback').style.color = '#ebcf8c'; $('feedback').textContent = state.notice; }
+      if (!modelDirty) model.value = state.requested_model || state.model;
+      if (!instructionsDirty) instructions.value = state.instructions;
+      if (state.error) say(state.error, BAD);
+      else if (state.status === 'running' && state.warning) say(state.warning, NOTE);
+      else if (state.notice) say(state.notice, NOTE);
       if (state.reset_count !== resetCount) {
         resetCount = state.reset_count;
         selectedIndex = null; shownIndex = -1; lastHistory = -1;
-        $('decision-title').textContent = 'Latest decision';
+        $('action-title').textContent = 'Latest action';
         $('latest-button').hidden = true;
-        $('decision-meta').textContent = 'Waiting for first action';
+        $('action-meta').textContent = 'Waiting for first action';
         $('choice').textContent = '—'; $('choice').className = 'choice';
-        $('choice-detail').textContent = 'The agent\'s selected button will appear here.';
+        $('choice-detail').textContent = 'The agent\'s chosen action will appear here.';
         $('observation').hidden = true; $('observation-label').hidden = true;
-        $('scores').textContent = 'Option scores will appear here.';
         $('history').textContent = 'No actions yet.';
-        $('feedback').style.color = '#a9d9b8'; $('feedback').textContent = state.notice || 'Reset complete. Agent paused.';
       }
       const latest = state.history[0];
       if (!latest) return;
       if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
       let chosen = selectedIndex === null ? latest : state.history.find(item => item.index === selectedIndex);
       if (!chosen) { selectedIndex = null; chosen = latest; renderHistory(state.history); }
-      if (chosen.index !== shownIndex) renderDecision(chosen);
+      if (chosen.index !== shownIndex) renderAction(chosen);
     }
 
-    function renderDecision(item) {
+    function renderAction(item) {
       shownIndex = item.index;
-      $('decision-title').textContent = selectedIndex === null ? 'Latest decision' : `Decision #${item.step}`;
+      $('action-title').textContent = selectedIndex === null ? 'Latest action' : `Action #${item.action_number}`;
       $('latest-button').hidden = selectedIndex === null;
-      $('choice').textContent = item.choice;
+      $('choice').textContent = actionName(item.action);
       $('choice').className = `choice ${item.source === 'manual' ? 'manual-choice' : ''}`;
-      $('decision-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.latency_ms} ms · frame ${item.frame_before}`;
-      $('choice-detail').textContent = item.source === 'manual' ? 'Manual move' : (item.steering ? `Goal: ${item.goal} · Steering: ${item.steering}` : `Goal: ${item.goal}`);
+      $('action-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms · frame ${item.frame_before}`;
+      $('choice-detail').textContent = item.source === 'manual' ? 'Manual move' : `Task: ${item.task}`;
       $('observation').src = `/api/observation/${item.index}`;
       $('observation').hidden = false;
       $('observation-label').hidden = false;
-      renderScores(item);
-    }
-
-    function renderScores(latest) {
-      const container = $('scores'); container.replaceChildren();
-      const entries = Object.entries(latest.scores).sort((a, b) => b[1] - a[1]);
-      if (!entries.length) { const note = document.createElement('span'); note.className = 'muted'; note.textContent = 'Manual action; no model scores.'; container.append(note); return; }
-      const values = entries.map(([, score]) => score);
-      const min = Math.min(...values), max = Math.max(...values);
-      for (const [button, score] of entries) {
-        const row = document.createElement('div'); row.className = `score ${button === latest.choice ? 'selected' : ''}`;
-        const label = document.createElement('span'); label.textContent = button;
-        const track = document.createElement('div'); track.className = 'track';
-        const fill = document.createElement('div'); fill.className = 'fill';
-        fill.style.width = `${max === min ? 100 : (score - min) / (max - min) * 100}%`;
-        track.append(fill);
-        const value = document.createElement('span'); value.className = 'mono'; value.textContent = score.toFixed(3);
-        row.append(label, track, value); container.append(row);
-      }
     }
 
     function renderHistory(rows) {
       const container = $('history'); container.replaceChildren();
       for (const item of rows) {
         const row = document.createElement('button'); row.type = 'button'; row.className = `history-row ${item.index === selectedIndex ? 'selected' : ''}`;
-        row.addEventListener('click', () => { selectedIndex = item.index; renderHistory(currentState.history); renderDecision(item); });
-        const number = document.createElement('span'); number.className = 'muted mono'; number.textContent = `#${item.step}`;
-        const action = document.createElement('span'); action.className = `pill ${item.source === 'manual' ? 'manual' : ''}`; action.textContent = item.choice;
+        row.addEventListener('click', () => { selectedIndex = item.index; renderHistory(currentState.history); renderAction(item); });
+        const number = document.createElement('span'); number.className = 'muted mono'; number.textContent = `#${item.action_number}`;
+        const action = document.createElement('span'); action.className = `pill ${item.source === 'manual' ? 'manual' : ''}`; action.textContent = actionName(item.action);
         const source = document.createElement('span'); source.className = 'source muted'; source.textContent = item.source;
-        const direction = document.createElement('span'); direction.className = 'goal'; direction.textContent = item.steering ? `${item.goal} · ${item.steering}` : item.goal;
-        const latency = document.createElement('span'); latency.className = 'muted mono'; latency.textContent = `${item.latency_ms} ms`;
-        row.append(number, action, source, direction, latency); container.append(row);
+        const task = document.createElement('span'); task.className = 'task'; task.textContent = item.task || '';
+        const latency = document.createElement('span'); latency.className = 'muted mono'; latency.textContent = `${item.model_ms} ms`;
+        row.append(number, action, source, task, latency); container.append(row);
       }
     }
 

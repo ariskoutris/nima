@@ -16,10 +16,11 @@ def write_result(command, reason="recognized"):
     row = {"case": case, "reached": reason == "recognized",
            "recognized": reason == "recognized", "missed": False,
            "false_completion": False, "stop_reason": reason,
-           "steps": 1, "seconds": 2.0}
+           "actions": 1, "seconds": 2.0}
     (output / "results.json").write_text(json.dumps([row]))
-    (folder / "decisions.jsonl").write_text(
-        json.dumps({"event": "action", "latency_ms": 100}) + "\n" if reason != "model_error"
+    (folder / "events.jsonl").write_text(
+        json.dumps({"event": "action", "source": "agent",
+                    "model_calls": [{"ms": 40}, {"ms": 60}]}) + "\n" if reason != "model_error"
         else json.dumps({"event": "model_error"}) + "\n")
 
 
@@ -34,20 +35,17 @@ def test_glm_variants_and_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(probe.subprocess, "run", run)
     output = tmp_path / "probe"
     probe.main(["--model", "glm", "--case", "square_down", "--variant", "baseline",
-                "--variant", "no_history", "--variant", "controls",
-                "--variant", "image2x", "--output", str(output)])
-    assert len(calls) == 4
-    assert calls[0][0][calls[0][0].index("--image-scale") + 1] == "1"
-    assert "--no-context" in calls[0][0]
-    assert calls[1][0][calls[1][0].index("--history-frames") + 1] == "0"
-    assert calls[2][0][calls[2][0].index("--context") + 1] == str(probe.CONTROL)
-    assert "--no-context" not in calls[2][0]
-    assert calls[3][0][calls[3][0].index("--image-scale") + 1] == "2"
+                "--variant", "controls", "--output", str(output)])
+    assert len(calls) == 2
+    assert calls[0][0][calls[0][0].index("--model") + 1] == "mystery_dungeon.models.glm:GlmModel"
+    assert "--knowledge" not in calls[0][0]
+    assert calls[1][0][calls[1][0].index("--knowledge") + 1] == str(probe.CONTROLS)
+    assert probe.CONTROLS.is_file()
     assert all(call[1]["check"] for call in calls)
     summary = json.loads((output / "summary.json").read_text())
     assert [item["variant"] for item in summary["variants"]] == list(probe.VARIANTS)
     assert all(item["reached"] == item["recognized"] == 1 and
-               item["median_decision_ms"] == 100 for item in summary["variants"])
+               item["median_turn_ms"] == 100 for item in summary["variants"])
 
 
 def test_local_server_closes_and_stops_after_model_error(tmp_path, monkeypatch):

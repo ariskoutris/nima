@@ -1,4 +1,4 @@
-"""Replay a checkpoint toward one manually supplied short-term goal."""
+"""Replay a checkpoint toward one task given on the command line."""
 
 from __future__ import annotations
 
@@ -6,8 +6,11 @@ import argparse
 from pathlib import Path
 
 from emulator import GbaEmulator
-from mystery_dungeon.agent import Agent, load_decision_model
-from mystery_dungeon.session import GameplaySession
+from mystery_dungeon.actions import name
+from mystery_dungeon.agent import Agent
+from mystery_dungeon.models import load_model
+from mystery_dungeon.run_log import RunLog
+from mystery_dungeon.session import GameplaySession, read_checkpoint
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -15,48 +18,40 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("rom", type=Path)
     parser.add_argument("--core", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
-    parser.add_argument("--goal", required=True)
+    parser.add_argument("--task", required=True)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--decision-model", default="mystery_dungeon.decision_models.onejev:OneJevDecisionModel")
-    context_group = parser.add_mutually_exclusive_group()
-    context_group.add_argument("--context", type=Path)
-    context_group.add_argument("--no-context", action="store_true",
-                               help="disable the model's default guidance")
-    parser.add_argument("--steps", type=int, default=1)
-    parser.add_argument("--history-frames", type=int, default=1)
-    parser.add_argument("--completion-votes", type=int, default=1)
+    parser.add_argument("--model", default="mystery_dungeon.models.onejev:OneJevModel")
+    parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
+    parser.add_argument("--turns", type=int, default=1)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
     args = parser.parse_args(argv)
-    if min(args.steps, args.hold_frames, args.release_frames, args.completion_votes) < 1 \
-            or args.history_frames < 0:
-        parser.error("steps and frame counts must be positive; history frames may be zero")
+    if min(args.turns, args.hold_frames, args.release_frames) < 1:
+        parser.error("turns and frame counts must be positive")
     args.output.mkdir(parents=True, exist_ok=False)
-    agent = Agent(load_decision_model(args.decision_model), args.output, args.decision_model,
-                  args.history_frames, args.completion_votes,
-                  "" if args.no_context else args.context.read_text() if args.context else None,
-                  {"kind": "play", "rom": str(args.rom), "core": str(args.core),
-                   "initial_state": str(args.state), "hold_frames": args.hold_frames,
-                   "release_frames": args.release_frames, "step_limit": args.steps})
-    agent.set_goal(args.goal)
+    knowledge = args.knowledge.read_text() if args.knowledge else ""
+    log = RunLog(args.output, args.model,
+                 {"kind": "play", "rom": str(args.rom), "core": str(args.core),
+                  "initial_state": str(args.state), "hold_frames": args.hold_frames,
+                  "release_frames": args.release_frames, "turn_limit": args.turns},
+                 knowledge)
+    model = log.watch(load_model(args.model))
+    agent = Agent(model, model, knowledge)
+    agent.set_instructions(args.task)
     with GbaEmulator(args.rom, args.core) as emulator:
-        emulator.load_state(args.state.read_bytes())
-        emulator.step()
-        session = GameplaySession(emulator, args.output,
-                                  args.hold_frames, args.release_frames)
-        session.frame_count = 1
-        session.capture()
-        for index in range(args.steps):
-            turn = agent.step(session)
-            if turn.status == "completed":
-                print(f"{index}: goal complete")
-                break
+        session = GameplaySession(emulator, args.output, args.hold_frames, args.release_frames)
+        session.load(read_checkpoint(args.state))
+        for index in range(args.turns):
+            turn, transition = agent.take_turn(session)
+            log.record_turn(turn, transition)
             if turn.status == "model_error":
                 raise RuntimeError(turn.error)
-            print(f"{index}: {turn.button} ({turn.decision.latency_ms} ms)")
+            if turn.status == "completion":
+                print(f"{index}: task complete")
+                break
+            print(f"{index}: {name(turn.action)}")
         else:
-            agent.record({"event": "run_stop", "reason": "step_limit",
-                          "screenshot": session.current_name})
+            log.record_run_stop("turn_limit", session.current_name)
         session.current.save_png(args.output / "frames/final.png")
         (args.output / "states").mkdir(exist_ok=True)
         (args.output / "states/final.state").write_bytes(emulator.save_state())

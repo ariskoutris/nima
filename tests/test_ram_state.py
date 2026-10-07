@@ -3,10 +3,12 @@
 import pytest
 
 from emulator import GbaEmulator
-from mystery_dungeon.agent import Agent, DecisionScores
-from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM, press, read_ss0, restore
+from mystery_dungeon.actions import Press
+from mystery_dungeon.agent import Agent
+from fakes import ScriptedModel, press
+from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
 from mystery_dungeon.ram_state import read_ram_state
-from mystery_dungeon.session import GameplaySession
+from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
 
 @pytest.mark.parametrize("checkpoint,ready_mode", [
@@ -21,7 +23,7 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         session = GameplaySession(game, tmp_path)
         session.capture()
         assert read_ram_state(game).mode == "field"
-        session.apply("A")
+        session.apply(Press("A"))
         initial = read_ram_state(game)
         assert initial.mode == "dialogue" and initial.text_printing
         partial = session.current.rgba
@@ -98,7 +100,7 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
                 assert (session.output / session.current_name).is_file()
 
 
-def test_agent_scores_only_after_text_finishes(tmp_path):
+def test_agent_plans_only_after_text_finishes(tmp_path):
     paths = (ROM, CORE, CHECKPOINTS / "face-npc.ss0")
     if not all(path.is_file() for path in paths):
         pytest.skip("local ROM, core, and checkpoint required")
@@ -107,22 +109,21 @@ def test_agent_scores_only_after_text_finishes(tmp_path):
         restore(game, read_ss0(CHECKPOINTS / "face-npc.ss0"))
         session = GameplaySession(game, tmp_path)
         session.capture()
-        session.apply("A")
+        session.apply(Press("A"))
         assert read_ram_state(game).text_printing
 
-        class Model:
-            def score(self, goal, guidance, frame, history, options):
-                assert not read_ram_state(game).text_printing
-                return DecisionScores({key: 0.0 for key in options},
-                                      {"complete": 1.0, "incomplete": 0.0, "uncertain": 0.0})
+        def complete():
+            assert not read_ram_state(game).text_printing
+            return True
 
-        agent = Agent(Model(), tmp_path, "test:Model")
-        agent.set_goal("Read Granbull's line")
-        assert agent.step(session).status == "completed"
+        model = ScriptedModel(complete=complete)
+        agent = Agent(model, model)
+        agent.set_instructions("Read Granbull's line")
+        assert agent.take_turn(session)[0].status == "completion"
         assert session.action_count == 1
 
 
-def test_agent_waits_before_each_lombre_dialogue_decision(tmp_path):
+def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
     paths = (ROM, CORE, CHECKPOINTS / "face-lombre.ss0")
     if not all(path.is_file() for path in paths):
         pytest.skip("local ROM, core, and checkpoint required")
@@ -132,19 +133,16 @@ def test_agent_waits_before_each_lombre_dialogue_decision(tmp_path):
         session = GameplaySession(game, tmp_path)
         session.capture()
 
-        class Model:
-            def score(self, goal, guidance, frame, history, options):
-                state = read_ram_state(game)
-                assert not state.text_printing
-                assert frame.rgba == game.screenshot().rgba
-                done = state.mode == "field" and session.action_count > 0
-                return DecisionScores({key: float(key == "A") for key in options},
-                                      {"complete": float(done), "incomplete": float(not done),
-                                       "uncertain": 0.0})
+        def complete():
+            state = read_ram_state(game)
+            assert not state.text_printing
+            assert model.calls[-1][2].rgba == game.screenshot().rgba
+            return state.mode == "field" and session.action_count > 0
 
-        agent = Agent(Model(), tmp_path, "test:Model")
-        agent.set_goal("Finish talking to Lombre")
+        model = ScriptedModel(["A"], complete)
+        agent = Agent(model, model)
+        agent.set_instructions("Finish talking to Lombre")
         for _ in range(9):
-            assert agent.step(session).status == "acted"
-        assert agent.step(session).status == "completed"
+            assert agent.take_turn(session)[0].status == "action"
+        assert agent.take_turn(session)[0].status == "completion"
         assert session.action_count == 9

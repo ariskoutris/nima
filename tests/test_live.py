@@ -1,94 +1,61 @@
-"""Live controls queue goal changes and record manual actions."""
+"""Live operator input interrupts agent turns and runs in order."""
 
 import json
 import threading
+import time
 import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
-from emulator import Frame, GbaEmulator
-from mystery_dungeon.agent import DecisionScores
+from fakes import Game, ScriptedModel, events, votes
 from mystery_dungeon import live
+from mystery_dungeon.session import Checkpoint
+
+AGENT_PRESS = (8, ("A",))
 
 
-class FakeEmulator:
-    frame = Frame(16, 16, bytes(16 * 16 * 4))
-    instances = []
-
-    def __init__(self, *args):
-        self.buttons = []
-        self.loaded_states = []
-        self.ram = b"original-ram"
-        self.instances.append(self)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-    def load_state(self, data):
-        if data == b"bad":
-            raise RuntimeError("invalid core state")
-        assert data in (b"start", b"uploaded", b"ss0-state", b"checkpoint")
-        self.loaded_states.append(data)
-
-    def save_ram(self):
-        return self.ram
-
-    def load_save_ram(self, data):
-        self.ram = data
-
-    def step(self, frames=1, buttons=()):
-        self.buttons.append(tuple(buttons))
-
-    def screenshot(self):
-        return self.frame
-
-    def save_state(self):
-        return b"checkpoint"
+def wait_until(run, predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = run.snapshot()
+        if predicate(state):
+            return state
+        time.sleep(0.01)
+    raise AssertionError(f"timed out; last state: {run.snapshot()}")
 
 
-class FakeDecisionModel:
-    def __init__(self, button="A", complete=0.0):
-        self.button = button
-        self.complete = complete
-        self.calls = []
-
-    def score(self, goal, guidance, frame, history, options):
-        self.calls.append((goal, guidance, history))
-        return DecisionScores({key: float(key == self.button) for key in options},
-                              {"complete": self.complete,
-                               "incomplete": 1 - self.complete, "uncertain": 0})
+def idle(state):
+    return state["status"] in ("paused", "error")
 
 
 @pytest.fixture
 def start_run(tmp_path, monkeypatch):
-    active = []
+    """Start a LiveRun over a fake game; ``load`` replaces model loading, ``ready`` waits for it."""
+    threads = []
+    monkeypatch.setattr(live, "FRAME_SECONDS", 0)
 
-    def start(model, state_format="state"):
-        state = tmp_path / f"start.{state_format}"
-        state.write_bytes(b"start")
-        monkeypatch.setattr(live, "load_decision_model", lambda spec: model)
-        monkeypatch.setattr(live, "GbaEmulator", FakeEmulator)
-        run = live.LiveRun(tmp_path / "game.gba", tmp_path / "core", state,
-                           tmp_path / "output", "fake:Model", 8, 4)
-        live.handler_for(run)  # The static page must resolve from its new location.
+    def start(model=None, *, models=None, load=None, ready=True, server=None, spec="fake:Model"):
+        game = Game()
+        state_file = tmp_path / "start.state"
+        state_file.write_bytes(b"start")
+        models = {spec: model, **(models or {})}
+        monkeypatch.setattr(live, "load_model", load or models.__getitem__)
+        monkeypatch.setattr(live, "GbaEmulator", lambda rom, core: game)
+        run = live.LiveRun(tmp_path / "game.gba", tmp_path / "core", state_file,
+                           tmp_path / "output", spec, 8, 4, model_server=server)
         thread = threading.Thread(target=run.run)
-        active.append((run, thread))
+        threads.append((run, thread))
         thread.start()
-        with run.condition:
-            assert run.condition.wait_for(lambda: run.loaded or run.error, 2), run.error
-        return run
+        wait_until(run, lambda state: state["status"] != "loading" and
+                   (not ready or not state["requested_model"]))
+        return run, game
 
     yield start
-    for run, thread in active:
-        with run.condition:
-            run.stopping = True
-            run.condition.notify_all()
-        thread.join(2)
+    for run, thread in threads:
+        run.stop()
+        thread.join(3)
         assert not thread.is_alive()
 
 
@@ -98,146 +65,205 @@ def test_default_checkpoint_is_square():
 
 
 def test_ss0_startup_and_reset_restore_save_ram(start_run, monkeypatch):
-    monkeypatch.setattr(live, "read_ss0", lambda path: live.Seed(b"ss0-state", b"new-ram"))
-    run = start_run(FakeDecisionModel(), "ss0")
-    emulator = FakeEmulator.instances[-1]
-    assert emulator.loaded_states == [b"ss0-state"]
-    assert emulator.ram == b"new-ram"
-    emulator.ram = b"changed-ram"
+    monkeypatch.setattr(live, "read_checkpoint", lambda path: Checkpoint(b"ss0-state", b"new-ram"))
+    run, game = start_run(ScriptedModel())
+    assert (game.state, game.ram) == (b"ss0-state", b"new-ram")
+    game.ram = b"changed-ram"
     run.control({"command": "reset"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 1, 2)
-    assert emulator.loaded_states[-1] == b"ss0-state"
-    assert emulator.ram == b"new-ram"
+    wait_until(run, lambda state: state["reset_count"] == 1)
+    assert (game.state, game.ram) == (b"ss0-state", b"new-ram")
 
 
-def test_manual_action_enters_history_and_reset_keeps_goal(start_run):
-    model = FakeDecisionModel()
-    run = start_run(model)
-    run.control({"goal": "Find exit", "command": "manual", "button": "RIGHT"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 1, 2)
-    run.control({"command": "step"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 2, 2)
-    assert model.calls[0][2][0].action == "RIGHT"
-    assert run.history[0]["source"] == "manual"
-    assert (run.output / run.history[0]["before"]).is_file()
-    assert (run.output / "states/latest.state").read_bytes() == b"checkpoint"
-    config = json.loads((run.output / "config.json").read_text())
-    assert config["run"]["kind"] == "live"
-    assert config["run"]["hold_frames"] == 8
+def test_manual_action_enters_memory_and_reset_keeps_instructions(start_run):
+    model = ScriptedModel()
+    run, game = start_run(model)
+    run.control({"instructions": "Find exit", "command": "manual", "action": "RIGHT"})
+    wait_until(run, lambda state: len(state["history"]) == 1)
+    run.control({"command": "turn"})
+    state = wait_until(run, lambda state: len(state["history"]) == 2 and idle(state))
+    assert model.calls[-1][4][0].action.button == "RIGHT"
+    assert [row["source"] for row in state["history"]] == ["agent", "manual"]
+    assert (run.output / state["history"][1]["screenshot"]).is_file()
+    assert (run.output / "states/latest.state").read_bytes() == game.state
+    assert json.loads((run.output / "config.json").read_text())["run"]["kind"] == "live"
     run.control({"command": "reset"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 1, 2)
-    assert run.goal == "Find exit"
-    assert not run.agent.history
-    assert not run.history
-    run.control({"command": "step"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 1, 2)
-    assert run.history[0]["step"] == 1
-    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    assert [row for row in rows if row["event"] == "action"][-1]["step"] == 1
+    state = wait_until(run, lambda state: state["reset_count"] == 1)
+    assert state["instructions"] == "Find exit" and state["history"] == []
+    assert state["notice"] == "Reset complete."
+    run.control({"command": "turn"})
+    state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
+    assert state["history"][0]["action_number"] == 1
+    assert model.calls[-1][4] == ()  # reset cleared memory
 
 
-def test_session_stall_warning_is_shown_without_stopping_actions(start_run):
-    run = start_run(FakeDecisionModel())
+def test_stall_warning_shows_until_reset(start_run):
+    run, _ = start_run(ScriptedModel())
     for _ in range(8):
-        run.control({"command": "manual", "button": "DOWN"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 8, 2)
-    assert run.snapshot()["warning"] == "Possible stall: little screen change after 8 DOWN presses"
+        run.control({"command": "manual", "action": "DOWN"})
+    state = wait_until(run, lambda state: len(state["history"]) == 8)
+    assert state["warning"] == "Possible stall: little screen change after 8 DOWN presses"
     run.control({"command": "reset"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 1, 2)
-    assert run.snapshot()["warning"] is None
+    assert wait_until(run, lambda state: state["reset_count"] == 1)["warning"] is None
 
 
-def test_upload_state_and_ss0_from_live_view(start_run, monkeypatch):
-    run = start_run(FakeDecisionModel())
-    run.control({"goal": "Find exit", "command": "manual", "button": "RIGHT"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 1, 2)
+def test_upload_state_and_ss0(start_run, monkeypatch):
+    run, game = start_run(ScriptedModel())
     run.load_state_upload(b"uploaded", "state")
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 1, 2)
-    assert FakeEmulator.instances[-1].loaded_states[-1] == b"uploaded"
-    assert run.goal == "Find exit"
-    assert not run.history
-    assert run.notice == "Loaded state. Agent paused."
+    state = wait_until(run, lambda state: state["reset_count"] == 1)
+    assert game.state == b"uploaded" and state["notice"] == "Loaded state."
     run.control({"command": "reset"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 2, 2)
-    assert FakeEmulator.instances[-1].loaded_states[-1] == b"uploaded"
+    wait_until(run, lambda state: state["reset_count"] == 2)
+    assert game.state == b"uploaded"
 
-    monkeypatch.setattr(live, "read_ss0", lambda data: live.Seed(b"ss0-state", b"new-ram"))
+    monkeypatch.setattr(live, "read_ss0", lambda data: Checkpoint(b"ss0-state", b"new-ram"))
     run.load_state_upload(b"png-data", "ss0")
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 3, 2)
-    assert FakeEmulator.instances[-1].loaded_states[-1] == b"ss0-state"
-    assert FakeEmulator.instances[-1].ram == b"new-ram"
-    FakeEmulator.instances[-1].ram = b"changed-ram"
-    run.control({"command": "reset"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 4, 2)
-    assert FakeEmulator.instances[-1].loaded_states[-1] == b"ss0-state"
-    assert FakeEmulator.instances[-1].ram == b"new-ram"
+    wait_until(run, lambda state: state["reset_count"] == 3)
+    assert (game.state, game.ram) == (b"ss0-state", b"new-ram")
 
     run.load_state_upload(b"bad", "state")
-    with run.condition:
-        assert run.condition.wait_for(lambda: bool(run.error), 2)
-    assert run.reset_count == 4
-    assert FakeEmulator.instances[-1].loaded_states[-1] == b"checkpoint"
+    state = wait_until(run, lambda state: state["status"] == "error")
+    assert state["reset_count"] == 3 and game.state == b"ss0-state"
     run.control({"command": "reset"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.reset_count == 5, 2)
-    assert FakeEmulator.instances[-1].loaded_states[-1] == b"ss0-state"
+    wait_until(run, lambda state: state["reset_count"] == 4)
     with pytest.raises(ValueError, match="choose a"):
         run.load_state_upload(b"uploaded", "unknown")
 
 
-def test_switch_model_cancels_decision_and_stops_local_server(start_run, monkeypatch):
-    entered, release = threading.Event(), threading.Event()
+@pytest.mark.parametrize("interrupt,reason,took_effect", [
+    (lambda run: run.control({"command": "pause"}), "paused", lambda state: True),
+    (lambda run: run.control({"command": "manual", "action": "B"}), "manual_control",
+     lambda state: [row["action"]["button"] for row in state["history"]] == ["B"]),
+    (lambda run: run.control({"command": "reset"}), "reset_requested",
+     lambda state: state["reset_count"] == 1),
+    (lambda run: run.load_state_upload(b"uploaded", "state"), "reset_requested",
+     lambda state: state["reset_count"] == 1),
+    (lambda run: run.request_model(live.GLM), "model_change",
+     lambda state: state["model"] == live.GLM),
+    (lambda run: run.control({"instructions": "Something else"}), "instructions_changed",
+     lambda state: state["instructions"] == "Something else"),
+])
+def test_operator_input_discards_the_turn_in_progress(start_run, interrupt, reason, took_effect):
+    gate = threading.Event()
+    model = ScriptedModel(gate=gate)
+    run, game = start_run(model, models={live.GLM: ScriptedModel()})
+    run.control({"instructions": "Find exit", "command": "start"})
+    assert model.entered.wait(2)
+    interrupt(run)
+    assert run.snapshot()["status"] == "cancelling"
+    if reason == "instructions_changed":
+        run.control({"command": "pause"})
+    gate.set()
+    wait_until(run, lambda state: any(row["event"] == "discarded" for row in events(run.output)))
+    discarded = next(row for row in events(run.output) if row["event"] == "discarded")
+    assert discarded["reason"] == reason and discarded["action"]["button"] == "A"
+    wait_until(run, lambda state: idle(state) and took_effect(state))
+    assert AGENT_PRESS not in game.steps
 
-    class Blocking(FakeDecisionModel):
-        def score(self, goal, guidance, frame, history, options):
-            entered.set()
-            assert release.wait(2)
-            return super().score(goal, guidance, frame, history, options)
 
+def test_pause_then_start_in_one_call_still_discards(start_run):
+    gate = threading.Event()
+    model = ScriptedModel(gate=gate)
+    run, game = start_run(model)
+    run.control({"instructions": "Find exit", "command": "start"})
+    assert model.entered.wait(2)
+    run.control({"command": "pause"})
+    run.control({"command": "start"})
+    gate.set()
+    state = wait_until(run, lambda state: len(state["history"]) >= 1)
+    run.control({"command": "pause"})
+    names = [row["event"] for row in events(run.output)]
+    assert names.index("discarded") < names.index("action")
+    assert state["history"][-1]["source"] == "agent"
+
+
+def test_one_turn_runs_exactly_one_turn(start_run):
+    model = ScriptedModel()
+    run, game = start_run(model)
+    run.control({"instructions": "Find exit", "command": "turn"})
+    wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
+    time.sleep(0.05)
+    assert len(run.snapshot()["history"]) == 1
+    assert game.steps.count(AGENT_PRESS) == 1
+
+
+def test_completion_pauses_without_pressing(start_run):
+    run, game = start_run(ScriptedModel(complete=votes(True)))
+    run.control({"instructions": "Done", "command": "start"})
+    state = wait_until(run, lambda state: state["notice"] == "Completed: Done")
+    assert state["status"] == "paused" and state["history"] == []
+    assert AGENT_PRESS not in game.steps
+
+
+def test_model_error_pauses_with_the_error(start_run):
+    run, _ = start_run(ScriptedModel(error=RuntimeError("model down")))
+    run.control({"instructions": "Find exit", "command": "start"})
+    state = wait_until(run, lambda state: state["status"] == "error")
+    assert state["error"] == "Model failed: RuntimeError: model down"
+    run.control({"command": "pause"})
+    assert run.snapshot()["status"] == "error"  # errors clear only on the next run, manual or reset
+
+
+def test_manual_queued_behind_a_failed_first_model_keeps_its_error(start_run):
+    gate = threading.Event()
+
+    def load(spec):
+        assert gate.wait(2)
+        raise RuntimeError("no server")
+
+    run, _ = start_run(load=load, ready=False)
+    wait_until(run, lambda state: state["status"] == "switching")
+    run.control({"command": "manual", "action": "A"})
+    gate.set()
+    wait_until(run, lambda state: state["status"] == "error" and not state["requested_model"])
+    time.sleep(0.05)
+    assert run.snapshot()["error"] == "Could not switch model: no server"
+
+
+def test_control_validation(start_run):
+    run, _ = start_run(ScriptedModel())
+    live.handler_for(run)  # the static page resolves from its package location
+    with pytest.raises(ValueError, match="instructions"):
+        run.control({"command": "start"})
+    with pytest.raises(ValueError, match="invalid manual action"):
+        run.control({"command": "manual", "action": "START"})
+    with pytest.raises(ValueError, match="unknown control field"):
+        run.control({"goal": "Find exit"})
+    with pytest.raises(ValueError, match="unknown model"):
+        run.request_model("missing:Model")
+
+
+def test_frames_stream_during_emulator_steps(start_run):
+    run, game = start_run(ScriptedModel())
+    before = run.wait_for_screen(None)[2]
+    run.control({"command": "manual", "action": "WAIT"})
+    wait_until(run, lambda state: len(state["history"]) == 1)
+    screen, revision, frame = run.wait_for_screen(None)
+    assert screen == game.frame.png_bytes() and revision >= 1
+    assert frame == before + 12
+
+
+def test_model_switch_manages_the_local_server(start_run, monkeypatch):
     class Server:
-        stopped = False
+        def __init__(self):
+            self.starts = self.stops = 0
 
         def start(self):
+            self.starts += 1
             return "http://127.0.0.1:9999"
 
         def stop(self):
-            self.stopped = True
+            self.stops += 1
 
-    run = start_run(Blocking())
+    monkeypatch.setenv("QEV_BASE_URL", "")
     server = Server()
-    run.model_server = server
-    replacement = FakeDecisionModel(button="B")
-    monkeypatch.setattr(live, "load_decision_model", lambda spec: replacement)
-    run.control({"goal": "Move", "command": "step"})
-    assert entered.wait(2)
-    run.request_model(live.ONEJEV)
-    release.set()
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.model_spec == live.ONEJEV and not run.switching, 2)
-    assert not run.history
-    assert run.agent.model is replacement
-    assert run.agent.model_spec == live.ONEJEV
-    assert not run.running
+    run, _ = start_run(ScriptedModel(), models={live.GLM: ScriptedModel()},
+                       server=server, spec=live.ONEJEV)
+    assert server.starts == 1 and live.os.environ["QEV_BASE_URL"] == "http://127.0.0.1:9999"
     run.request_model(live.GLM)
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.model_spec == live.GLM and not run.switching, 2)
-    assert run.agent.context == (Path(__file__).resolve().parents[1] /
-                                 "mystery_dungeon/prompts/control.md").read_text().strip()
-    assert server.stopped
-    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    assert [row["to"] for row in rows if row["event"] == "model_change"] == [live.ONEJEV, live.GLM]
+    state = wait_until(run, lambda state: state["model"] == live.GLM)
+    assert server.stops == 1
+    assert state["notice"] == "Switched to GLM-5.3-Flash (OpenRouter)."
+    assert [row["to"] for row in events(run.output) if row["event"] == "model_change"] == [live.GLM]
 
 
 def test_model_server_owns_process_group(tmp_path, monkeypatch):
@@ -279,144 +305,3 @@ def test_model_server_owns_process_group(tmp_path, monkeypatch):
     assert calls[0][1]["start_new_session"] is True
     server.close()
     assert calls[-1] == (1234, live.signal.SIGTERM)
-
-
-def test_live_frames_publish_during_emulator_steps(start_run):
-    run = start_run(FakeDecisionModel())
-    game = object.__new__(GbaEmulator)
-
-    class Session:
-        count = 0
-
-        def run(self):
-            self.count += 1
-
-    game._session = Session()
-    game._buttons = set()
-    game.on_frame = lambda frame: run._publish_frame(frame, advanced=True)
-    game.screenshot = lambda: Frame(1, 1, bytes((game._session.count, 0, 0, 255)))
-    with run.condition:
-        thread = threading.Thread(target=lambda: game.step(3))
-        thread.start()
-        thread.join(1)
-        assert not thread.is_alive(), "live frames must not wait for the action lock"
-    assert game._session.count == 3
-    assert run.stream_frame == 3
-    assert run.screen_revision == 4
-    assert run.screen == game.screenshot().png_bytes()
-    handler = object.__new__(live.handler_for(run))
-    handler.path = "/api/screen?after=3"
-    responses = []
-    handler.respond = lambda *args: responses.append(args)
-    handler.do_GET()
-    assert responses[0][0:3] == (200, run.screen, "image/png")
-    assert responses[0][3] == {"X-Screen-Revision": "4", "X-Game-Frame": "3"}
-
-
-def test_completion_stops_before_press(start_run):
-    run = start_run(FakeDecisionModel(complete=0.9))
-    run.control({"goal": "Done", "command": "step"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.notice.startswith("Completed"), 2)
-    assert not run.history
-    assert run.agent.completed
-
-
-def test_changed_goal_takes_effect_after_current_action(start_run):
-    entered, release = threading.Event(), threading.Event()
-
-    class Blocking(FakeDecisionModel):
-        def score(self, goal, guidance, frame, history, options):
-            if not self.calls:
-                entered.set()
-                assert release.wait(2)
-            return super().score(goal, guidance, frame, history, options)
-
-    model = Blocking()
-    run = start_run(model)
-    run.control({"goal": "Old", "command": "step"})
-    assert entered.wait(2)
-    run.control({"goal": "New"})
-    release.set()
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 1, 2)
-        assert run.history[0]["goal"] == "Old"
-        run.control({"command": "step"})
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 2, 2)
-    assert [call[0] for call in model.calls] == ["Old", "New"]
-    assert run.history[-1]["goal"] == "New"
-    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    assert not any(row["event"] == "discarded_decision" for row in rows)
-
-
-def test_running_agent_applies_queued_goal_on_next_decision(start_run):
-    entered, release = threading.Event(), threading.Event()
-
-    class Blocking(FakeDecisionModel):
-        def score(self, goal, guidance, frame, history, options):
-            if goal == "Old":
-                entered.set()
-                assert release.wait(2)
-            self.complete = float(goal == "New")
-            return super().score(goal, guidance, frame, history, options)
-
-    model = Blocking()
-    run = start_run(model)
-    run.control({"goal": "Old", "command": "start"})
-    assert entered.wait(2)
-    run.control({"goal": "New"})
-    release.set()
-    with run.condition:
-        assert run.condition.wait_for(lambda: run.notice == "Completed: New", 2)
-    assert [call[0] for call in model.calls] == ["Old", "New"]
-    assert [row["goal"] for row in run.history] == ["Old"]
-
-
-def test_pause_during_inference_prevents_press(start_run):
-    entered, release = threading.Event(), threading.Event()
-
-    class Blocking(FakeDecisionModel):
-        def score(self, goal, guidance, frame, history, options):
-            entered.set()
-            assert release.wait(2)
-            return super().score(goal, guidance, frame, history, options)
-
-    run = start_run(Blocking())
-    run.control({"goal": "Move", "command": "start"})
-    assert entered.wait(2)
-    assert run.snapshot()["status"] == "waiting"
-    run.control({"command": "pause"})
-    release.set()
-    with run.condition:
-        assert run.condition.wait_for(lambda: not run.busy, 2)
-    assert run.snapshot()["status"] == "paused"
-    assert not run.history
-    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    assert rows[-1]["event"] == "discarded_decision"
-    assert rows[-1]["reason"] == "paused"
-
-
-def test_changed_goal_retries_after_current_model_error(start_run):
-    entered, release = threading.Event(), threading.Event()
-
-    class FailingOldGoal(FakeDecisionModel):
-        def score(self, goal, guidance, frame, history, options):
-            if goal == "Old":
-                entered.set()
-                assert release.wait(2)
-                raise RuntimeError("old goal failed")
-            return super().score(goal, guidance, frame, history, options)
-
-    run = start_run(FailingOldGoal())
-    run.control({"goal": "Old", "command": "step"})
-    assert entered.wait(2)
-    run.control({"goal": "New"})
-    release.set()
-    with run.condition:
-        assert run.condition.wait_for(lambda: len(run.history) == 1, 2)
-    assert run.history[0]["goal"] == "New"
-    assert not run.error
-    rows = [json.loads(line) for line in (run.output / "decisions.jsonl").read_text().splitlines()]
-    errors = [row for row in rows if row["event"] == "model_error"]
-    assert errors[0]["goal"] == "Old"

@@ -1,4 +1,4 @@
-"""Compare production decision models on the Pokémon Square game benchmark."""
+"""Compare production models on the Pokémon Square game benchmark."""
 
 from __future__ import annotations
 
@@ -19,24 +19,19 @@ from mystery_dungeon.benchmark import CASES
 from mystery_dungeon.live import ModelServer
 
 
-CONTROL = ROOT / "mystery_dungeon/prompts/control.md"
+CONTROLS = ROOT / "mystery_dungeon/knowledge/controls.md"
 MODELS = {
-    "glm": ("mystery_dungeon.decision_models.glm:GlmDecisionModel", ()),
-    "jev-0.8b": ("mystery_dungeon.decision_models.onejev:OneJevDecisionModel", (
+    "glm": ("mystery_dungeon.models.glm:GlmModel", ()),
+    "jev-0.8b": ("mystery_dungeon.models.onejev:OneJevModel", (
         ROOT / "data/engines/models/onejev-0.8b-q4_k_m.gguf",
         ROOT / "data/engines/models/onejev-0.8b-mmproj-q8_0.gguf",
     )),
-    "jev-4b": ("mystery_dungeon.decision_models.onejev:OneJevDecisionModel", (
+    "jev-4b": ("mystery_dungeon.models.onejev:OneJevModel", (
         ROOT / "data/engines/models/OneJev-4B.Q4_K_M.gguf",
         ROOT / "data/engines/models/OneJev-4B.mmproj-Q8_0.gguf",
     )),
 }
-VARIANTS = {
-    "baseline": (1, 1, None),
-    "no_history": (0, 1, None),
-    "controls": (1, 1, CONTROL),
-    "image2x": (1, 2, None),
-}
+VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge file
 
 
 def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -> list[dict]:
@@ -48,11 +43,11 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         rows = json.loads(result_file.read_text())
         latencies = []
         for row in rows:
-            journal = output / variant / "cases" / row["case"] / "decisions.jsonl"
-            for line in journal.read_text().splitlines():
-                decision = json.loads(line)
-                if decision["event"] in ("action", "completion"):
-                    latencies.append(decision["latency_ms"])
+            events = output / variant / "cases" / row["case"] / "events.jsonl"
+            for line in events.read_text().splitlines():
+                event = json.loads(line)
+                if event["event"] in ("action", "completion") and event["source"] == "agent":
+                    latencies.append(sum(call["ms"] for call in event["model_calls"]))
         summaries.append({
             "variant": variant, "cases": rows,
             "reached": sum(row["reached"] for row in rows),
@@ -60,26 +55,26 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
             "missed": sum(row["missed"] for row in rows),
             "false_completion": sum(row["false_completion"] for row in rows),
             "model_errors": sum(row["stop_reason"] == "model_error" for row in rows),
-            "median_decision_ms": round(statistics.median(latencies)) if latencies else None,
+            "median_turn_ms": round(statistics.median(latencies)) if latencies else None,
         })
     (output / "summary.json").write_text(json.dumps({
         "model": model, "selected_cases": cases, "variants": summaries,
     }, indent=2) + "\n")
     lines = ["# Probe comparison", "", f"Model: {model}", "",
-             "| Configuration | Cases | Reached | Recognized | Missed | False completion | Model errors | Median decision ms |",
+             "| Configuration | Cases | Reached | Recognized | Missed | False completion | Model errors | Median turn ms |",
              "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for item in summaries:
         lines.append(f"| {item['variant']} | {len(item['cases'])}/{len(cases)} | "
                      f"{item['reached']} | {item['recognized']} | {item['missed']} | "
                      f"{item['false_completion']} | {item['model_errors']} | "
-                     f"{item['median_decision_ms'] if item['median_decision_ms'] is not None else '—'} |")
+                     f"{item['median_turn_ms'] if item['median_turn_ms'] is not None else '—'} |")
     lines += ["", "## Case outcomes", "",
               "| Configuration | Case | Reached | Recognized | Stop reason | Actions | Seconds |",
               "|---|---|:---:|:---:|---|---:|---:|"]
     for item in summaries:
         for row in item["cases"]:
             lines.append(f"| {item['variant']} | {row['case']} | {row['reached']} | "
-                         f"{row['recognized']} | {row['stop_reason']} | {row['steps']} | "
+                         f"{row['recognized']} | {row['stop_reason']} | {row['actions']} | "
                          f"{row['seconds']} |")
     (output / "report.md").write_text("\n".join(lines) + "\n")
     return summaries
@@ -104,7 +99,7 @@ def main(argv: list[str] | None = None) -> None:
               f"probe-{args.model}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}").resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "config.json").write_text(json.dumps({
-        "model": args.model, "decision_model": model_spec,
+        "model": args.model, "model_spec": model_spec,
         "model_files": [str(path) for path in model_files],
         "cases": cases, "variants": variants,
     }, indent=2) + "\n")
@@ -114,17 +109,11 @@ def main(argv: list[str] | None = None) -> None:
         if server:
             environment["QEV_BASE_URL"] = server.start()
         for variant in variants:
-            history, scale, context = VARIANTS[variant]
+            knowledge = VARIANTS[variant]
             command = [sys.executable, "-m", "mystery_dungeon.benchmark",
-                       "--output", str(output / variant),
-                       "--decision-model", model_spec,
-                       "--history-frames", str(history),
-                       "--image-scale", str(scale),
-                       "--completion-votes", "1"]
-            if context:
-                command += ["--context", str(context)]
-            else:
-                command += ["--no-context"]
+                       "--output", str(output / variant), "--model", model_spec]
+            if knowledge:
+                command += ["--knowledge", str(knowledge)]
             for path in model_files:
                 command += ["--model-file", str(path)]
             for case in cases:
