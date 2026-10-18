@@ -27,6 +27,12 @@ serve = ["{python}", "-m", "qev.cli", "serve", "--host", "127.0.0.1", "--port", 
 ready = "/v1/models"
 files = ["data/engines/models/OneJev-4B.Q4_K_M.gguf", "data/engines/models/OneJev-4B.mmproj-Q8_0.gguf"]
 
+[models.d1]
+label = "d1-3B (local)"
+spec = "mystery_dungeon.models.d1:D1Model"
+serve = ["llama-server", "-hf", "LiquidAI/d1-3B-GGUF:Q4_K_M", "--host", "127.0.0.1", "--port", "{port}"]
+ready = "/health"
+
 [models.glm]
 label = "GLM-5.3-Flash (OpenRouter)"
 spec = "mystery_dungeon.models.glm:GlmModel"

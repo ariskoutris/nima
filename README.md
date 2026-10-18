@@ -30,7 +30,7 @@ Pass `--model NAME` to start with another configured model, or switch in the bro
 uv run --extra onejev --env-file .env -m mystery_dungeon play --model glm
 ```
 
-Add `--knowledge mystery_dungeon/knowledge/controls.md` to provide the game controls.
+`d1` (Liquid AI's d1-3B) downloads about 1.7 GB on its first start. Add `--knowledge mystery_dungeon/knowledge/controls.md` to provide the game controls.
 
 ## How it works
 
