@@ -9,6 +9,7 @@ import pytest
 from emulator import GbaEmulator
 from mystery_dungeon import benchmark
 from mystery_dungeon.actions import Press
+from mystery_dungeon.models import ModelEntry
 from fakes import ScriptedModel, press, votes
 from mystery_dungeon.benchmark import (CASES, CHECKPOINTS, CORE, ROM, Case, Grader,
                                        build_fixtures, run_case)
@@ -225,9 +226,27 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     cases = (Case("one", "square", "Task one", "down", 1),
              Case("two", "square", "Task two", "down", 1))
     monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
-                                  "--output", str(tmp_path / "run"),
-                                  "--model-file", str(model_file),
-                                  "--model", "fake:Model"])
+                                  "--output", str(tmp_path / "run"), "--model", "local"])
+    entry = ModelEntry("local", "Local", "fake:Model", ("llama-server", "-m", "model.gguf"), "/health",
+                       files=(str(model_file),))
+    monkeypatch.setattr(benchmark, "read_models", lambda: {"local": entry})
+    served = []
+
+    class Server:
+        def __init__(self, output):
+            pass
+
+        def start(self, entry):
+            served.append(entry)
+            return "http://127.0.0.1:9000"
+
+        def stop(self):
+            pass
+
+        def close(self):
+            served.append("closed")
+
+    monkeypatch.setattr(benchmark, "ModelServer", Server)
     monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
     monkeypatch.setattr(benchmark, "CASES", cases)
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
@@ -238,13 +257,15 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     benchmark.main()
-    assert load.call_count == 2
+    assert served == [entry, "closed"]
+    assert [call.args for call in load.call_args_list] == [("fake:Model", "http://127.0.0.1:9000")] * 2
     assert run.call_args_list[0].args[2] is models[0]
     assert run.call_args_list[1].args[2] is models[1]
     assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
-    assert config["format_version"] == 5
+    assert config["format_version"] == 6
+    assert config["model"]["name"] == "local"
     assert "time_limit_seconds" not in config
     assert "recognition_window" not in config
     assert config["hashes"][str(model_file)] == benchmark.sha256(model_file)
@@ -266,8 +287,8 @@ def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "report", Mock())
     for name, extra in (("none", []), ("controls", ["--knowledge", str(knowledge)])):
         output = tmp_path / name
-        monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom),
-                                      "--core", str(core), "--output", str(output), *extra])
+        monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
+                                      "--output", str(output), "--model", "glm", *extra])
         benchmark.main()
         config = json.loads((output / "config.json").read_text())
         assert config["knowledge"] == (str(knowledge) if extra else None)

@@ -19,7 +19,8 @@ URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 class GlmModel:
-    def __init__(self) -> None:
+    def __init__(self, url: str | None = None) -> None:
+        self.url = url or URL
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required for GLM-5.3-Flash")
@@ -66,7 +67,7 @@ class GlmModel:
             "reasoning": {"effort": "low"},
             "max_tokens": 4096,
         }
-        request = Request(URL, data=json.dumps(payload).encode(), headers={
+        request = Request(self.url, data=json.dumps(payload).encode(), headers={
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         })

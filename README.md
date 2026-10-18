@@ -4,7 +4,17 @@ A vision-based agent for Pokémon Mystery Dungeon: Red Rescue Team. Give it a ta
 
 ## Setup
 
-Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro core, and a save state, then set their paths in `config.toml`. The default local OneJev model also needs GGUF model files and `llama-server`.
+Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro core, and a save state, then set their paths under `[game]` in `config.toml`. Local models need `llama-server` 0.7.0 or later; OneJev also needs its GGUF model files under `data/engines/models/`.
+
+## Models
+
+Each `[models.NAME]` table in `config.toml` names an adapter (`spec`, `MODULE:CLASS`) and a `label` for the browser's model picker, plus how to reach the model:
+
+- `serve` and `ready`: a command the app runs on a free `{port}` (`{python}` is this project's interpreter) until the `ready` path answers, then stops when you switch away or quit. Relative paths are relative to `config.toml`; list local weights under `files` so benchmarks record their hashes.
+- `url`: a server you run yourself, for example on another machine.
+- neither: the adapter's own endpoint, such as OpenRouter for GLM.
+
+The first table is the default. Run any configured server in the foreground with `uv run --extra onejev -m mystery_dungeon serve NAME --port 8080`.
 
 ## Run
 
@@ -14,13 +24,13 @@ uv run --extra onejev -m mystery_dungeon play
 
 Open <http://127.0.0.1:8765> and enter a task. Intervening in the browser cancels the current agent turn.
 
-To use hosted GLM-5.3-Flash, put `OPENROUTER_API_KEY` in `.env` and run:
+Pass `--model NAME` to start with another configured model, or switch in the browser. Hosted GLM-5.3-Flash needs `OPENROUTER_API_KEY` in `.env`:
 
 ```sh
-uv run --env-file .env -m mystery_dungeon play --model mystery_dungeon.models.glm:GlmModel
+uv run --extra onejev --env-file .env -m mystery_dungeon play --model glm
 ```
 
-Add `--knowledge mystery_dungeon/knowledge/controls.md` to either command to provide the game controls.
+Add `--knowledge mystery_dungeon/knowledge/controls.md` to provide the game controls.
 
 ## How it works
 
@@ -34,10 +44,10 @@ uv run --extra onejev python -m pytest -q
 
 ## Benchmark
 
-With `OPENROUTER_API_KEY` in `.env`, run:
+Name a configured model; `glm` needs `OPENROUTER_API_KEY` in `.env`:
 
 ```sh
-uv run --env-file .env -m mystery_dungeon.benchmark
+uv run --extra onejev --env-file .env -m mystery_dungeon.benchmark --model glm
 ```
 
-Results are saved under `runs/benchmarks/`. For background, see [game context](docs/game-context.md), [one-step diagnosis](docs/one-step-diagnosis.md), and [historical benchmark results](docs/benchmark-vision-context.md).
+It serves local models itself and records the model's config table and the hashes of its `files` in `config.json`. Results are saved under `runs/benchmarks/`. For background, see [game context](docs/game-context.md), [one-step diagnosis](docs/one-step-diagnosis.md), and [historical benchmark results](docs/benchmark-vision-context.md).

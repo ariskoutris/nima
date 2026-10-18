@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import struct
@@ -13,7 +14,8 @@ from pathlib import Path
 
 from emulator import GbaEmulator
 from mystery_dungeon.agent import Agent
-from mystery_dungeon.models import Model, load_model
+from mystery_dungeon.models import CONFIG, Model, load_model, read_models
+from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import Checkpoint, GameplaySession, read_ss0, restore
 
@@ -182,9 +184,9 @@ def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
 
 def run_case(game: GbaEmulator, case: Case, model: Model,
              checkpoints: dict[str, Checkpoint], output: Path,
-             knowledge: str = "", model_spec: str = "injected") -> dict:
+             knowledge: str = "", model_name: str = "injected") -> dict:
     output.mkdir(parents=True, exist_ok=False)
-    log = RunLog(output, model_spec,
+    log = RunLog(output, model_name,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
                   "criterion": case.criterion, "action_limit": case.limit,
                   "hold_frames": HOLD, "release_frames": RELEASE},
@@ -261,9 +263,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path,
                         default=Path("runs/benchmarks") / datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
                         help="run directory (default: timestamped directory in runs/benchmarks)")
-    parser.add_argument("--model", default="mystery_dungeon.models.glm:GlmModel")
-    parser.add_argument("--model-file", type=Path, action="append",
-                        help="hash a local model artifact; repeat for weights and vision projector")
+    models = read_models()
+    parser.add_argument("--model", required=True, choices=models,
+                        help="a [models.NAME] table in config.toml")
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
@@ -271,24 +273,25 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
     knowledge = args.knowledge.read_text() if args.knowledge else ""
+    entry = models[args.model]
     files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in
                                   ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")),
-             *(args.model_file or ()),
+             *(CONFIG.parent / path for path in entry.files),
              *((args.knowledge,) if args.knowledge else ()))
     hashes = {str(path): sha256(path) for path in files}
-    hashes["model"] = args.model
     (args.output / "config.json").write_text(json.dumps({
-        "format_version": 5, "layout": "benchmark", "grader": "pmd-red-ram-v1",
-        "cases": [asdict(c) for c in selected],
+        "format_version": 6, "layout": "benchmark", "grader": "pmd-red-ram-v1",
+        "model": asdict(entry), "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_frames": HOLD, "release_frames": RELEASE,
     }, indent=2) + "\n")
-    with GbaEmulator(args.rom, args.core) as game:
+    with GbaEmulator(args.rom, args.core) as game, closing(ModelServer(args.output)) as server:
+        url = server.start(entry)
         checkpoints = build_fixtures(game, args.output)
         results = []
         for case in selected:
             print(case.id, flush=True)
-            result = run_case(game, case, load_model(args.model), checkpoints,
+            result = run_case(game, case, load_model(entry.spec, url), checkpoints,
                               args.output / "cases" / case.id, knowledge, args.model)
             results.append(result)
             report(results, args.output)
