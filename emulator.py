@@ -79,7 +79,9 @@ class GbaEmulator:
         self._buttons: set[str] = set()
         self.on_frame: Callable[[Frame], None] | None = None
         self._video = ArrayVideoDriver()
-        self._session = Session(self.core_path, self.rom, input=self._input(), video=self._video)
+        # No core log: libretro.py can't expand printf arguments, so it would print bare "%s: %s".
+        self._session = Session(self.core_path, self.rom, input=self._input(), video=self._video,
+                                log=None)
 
     def _input(self):
         while True:
