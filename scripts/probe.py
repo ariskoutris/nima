@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import statistics
 import subprocess
 import sys
@@ -16,21 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mystery_dungeon.benchmark import CASES
-from mystery_dungeon.live import ModelServer
+from mystery_dungeon.models import read_models
 
 
 CONTROLS = ROOT / "mystery_dungeon/knowledge/controls.md"
-MODELS = {
-    "glm": ("mystery_dungeon.models.glm:GlmModel", ()),
-    "jev-0.8b": ("mystery_dungeon.models.onejev:OneJevModel", (
-        ROOT / "data/engines/models/onejev-0.8b-q4_k_m.gguf",
-        ROOT / "data/engines/models/onejev-0.8b-mmproj-q8_0.gguf",
-    )),
-    "jev-4b": ("mystery_dungeon.models.onejev:OneJevModel", (
-        ROOT / "data/engines/models/OneJev-4B.Q4_K_M.gguf",
-        ROOT / "data/engines/models/OneJev-4B.mmproj-Q8_0.gguf",
-    )),
-}
 VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge file
 
 
@@ -82,53 +70,36 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, choices=MODELS)
+    parser.add_argument("--model", required=True, choices=read_models())
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     parser.add_argument("--variant", action="append", choices=VARIANTS)
     parser.add_argument("--output", type=Path, help="new run directory (default: timestamped under runs/experiments)")
     args = parser.parse_args(argv)
-    model_spec, model_files = MODELS[args.model]
     cases = [case.id for case in CASES if args.case is None or case.id in args.case]
     variants = list(dict.fromkeys(args.variant or VARIANTS))
-    if args.model == "glm" and not os.getenv("OPENROUTER_API_KEY"):
-        parser.error("OPENROUTER_API_KEY is required for GLM")
-    for path in model_files:
-        if not path.is_file():
-            parser.error(f"local model file not found: {path}")
     output = (args.output or ROOT / "runs/experiments" /
               f"probe-{args.model}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}").resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "config.json").write_text(json.dumps({
-        "model": args.model, "model_spec": model_spec,
-        "model_files": [str(path) for path in model_files],
-        "cases": cases, "variants": variants,
+        "model": args.model, "cases": cases, "variants": variants,
     }, indent=2) + "\n")
-    server = ModelServer(str(model_files[0]), str(model_files[1]), output) if model_files else None
-    environment = os.environ.copy()
     try:
-        if server:
-            environment["QEV_BASE_URL"] = server.start()
         for variant in variants:
             knowledge = VARIANTS[variant]
             command = [sys.executable, "-m", "mystery_dungeon.benchmark",
-                       "--output", str(output / variant), "--model", model_spec]
+                       "--output", str(output / variant), "--model", args.model]
             if knowledge:
                 command += ["--knowledge", str(knowledge)]
-            for path in model_files:
-                command += ["--model-file", str(path)]
             for case in cases:
                 command += ["--case", case]
             print(f"{args.model}: {variant}", flush=True)
-            subprocess.run(command, cwd=ROOT, env=environment, check=True)
+            subprocess.run(command, cwd=ROOT, check=True)
             summaries = summarize(output, args.model, variants, cases)
             if summaries[-1]["model_errors"]:
                 raise SystemExit(f"{variant} had model errors; see {output / 'report.md'}")
     except subprocess.CalledProcessError as exc:
         summarize(output, args.model, variants, cases)
         raise SystemExit(exc.returncode) from exc
-    finally:
-        if server:
-            server.close()
     print(f"Report: {output / 'report.md'}", flush=True)
 
 

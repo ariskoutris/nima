@@ -15,8 +15,11 @@ if TYPE_CHECKING:
 
 
 class OneJevModel:
-    def __init__(self) -> None:
-        self.client = Client()
+    def __init__(self, url: str | None = None) -> None:
+        # Without a URL qev's Client would fall back to environment variables.
+        if url is None:
+            raise ValueError("OneJev needs a server: set serve or url in its config table")
+        self.client = Client(url)
         self.last_response: dict | None = None
 
     def choose_action(self, task: str, knowledge: str, frame: Frame,

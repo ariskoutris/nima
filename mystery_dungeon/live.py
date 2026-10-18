@@ -4,104 +4,29 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import signal
-import socket
-import subprocess
-import sys
 import threading
 import time
-import tomllib
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import urlopen
 
 from emulator import Frame, GbaEmulator
 from mystery_dungeon.actions import ACTIONS, Action
 from mystery_dungeon.agent import Agent, Turn
-from mystery_dungeon.models import load_model
+from mystery_dungeon.models import ModelEntry, load_model, read_models
+from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import Checkpoint, GameplaySession, read_checkpoint, read_ss0
 
-ONEJEV = "mystery_dungeon.models.onejev:OneJevModel"
-GLM = "mystery_dungeon.models.glm:GlmModel"
-MODELS = {ONEJEV: "OneJev (local)", GLM: "GLM-5.3-Flash (OpenRouter)"}
 COMMANDS = ("start", "pause", "turn", "manual", "reset")
 MAX_INSTRUCTIONS = 1000
 SCREEN_WAIT_SECONDS = 15
 FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
 NO_MODEL = "choose a model first"
-
-
-class ModelServer:
-    """Own QEV and its llama-server child for the lifetime of the live view."""
-
-    def __init__(self, gguf: str, mmproj: str, output: Path):
-        self.gguf, self.mmproj, self.output = gguf, mmproj, output
-        self.proc: subprocess.Popen | None = None
-        self.url = ""
-        self.closed = False
-
-    def start(self) -> str:
-        if self.proc:
-            if self.proc.poll() is None:
-                return self.url
-            self.stop()
-        if self.closed:
-            raise RuntimeError("live platform is stopping")
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        self.url = f"http://127.0.0.1:{port}"
-        self.output.mkdir(parents=True, exist_ok=True)
-        with (self.output / "model-server.log").open("ab") as log:
-            self.proc = subprocess.Popen([
-                sys.executable, "-m", "qev.cli", "serve", "--gguf", self.gguf,
-                "--mmproj", self.mmproj, "--host", "127.0.0.1", "--port", str(port),
-            ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            deadline = time.monotonic() + 300
-            proc = self.proc
-            while time.monotonic() < deadline:
-                if self.closed:
-                    raise RuntimeError("live platform is stopping")
-                if proc.poll() is not None:
-                    raise RuntimeError(f"model server exited; see {self.output / 'model-server.log'}")
-                try:
-                    with urlopen(self.url + "/v1/models", timeout=1) as response:
-                        if response.status == 200:
-                            return self.url
-                except OSError:
-                    pass
-                time.sleep(0.5)
-            raise TimeoutError("model server did not become ready")
-        except Exception:
-            self.stop()
-            raise
-
-    def stop(self) -> None:
-        proc, self.proc = self.proc, None
-        if proc:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-
-    def close(self) -> None:
-        self.closed = True
-        self.stop()
 
 
 @dataclass(frozen=True)
@@ -116,7 +41,7 @@ class Load:
 
 @dataclass(frozen=True)
 class SwitchModel:
-    spec: str
+    name: str
 
 
 @dataclass(frozen=True)
@@ -135,19 +60,21 @@ class LiveRun:
     its result is logged as discarded and nothing is applied. Requests run in order.
     """
 
-    def __init__(self, rom: Path, core: Path, state: Path, output: Path, model_spec: str,
-                 hold_frames: int, release_frames: int, knowledge: str = "",
-                 model_server: ModelServer | None = None) -> None:
+    def __init__(self, rom: Path, core: Path, state: Path, output: Path,
+                 models: dict[str, ModelEntry], model: str, model_server: ModelServer,
+                 hold_frames: int, release_frames: int, knowledge: str = "") -> None:
         if output.exists():
             raise FileExistsError(f"session output already exists: {output}")
+        if model not in models:
+            raise ValueError(f"unknown model: {model}")
         self.output = output
-        self.models = {**MODELS, model_spec: MODELS.get(model_spec, model_spec)}
+        self._models = models
         self._rom, self._core = rom, core
         self._checkpoint = read_checkpoint(state)
         self._hold_frames, self._release_frames = hold_frames, release_frames
         self._knowledge = knowledge
         self._model_server = model_server
-        self._log = RunLog(output, model_spec,
+        self._log = RunLog(output, model,
                            {"kind": "live", "rom": str(rom), "core": str(core),
                             "initial_state": str(state), "hold_frames": hold_frames,
                             "release_frames": release_frames}, knowledge)
@@ -155,7 +82,7 @@ class LiveRun:
         self._condition = threading.Condition()
         self._instructions = ""
         self._mode = "paused"  # paused | running | one_turn
-        self._requests: deque[Request] = deque([SwitchModel(model_spec)])
+        self._requests: deque[Request] = deque([SwitchModel(model)])
         self._current: Work | None = None
         self._interrupted: str | None = None
         self._error = self._notice = ""
@@ -175,8 +102,8 @@ class LiveRun:
                     "instructions": self._instructions, "running": self._mode != "paused",
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
-                    "history": self._log.recent(), "model": self._log.model_spec,
-                    "requested_model": self._pending_model(), "models": self.models,
+                    "history": self._log.recent(), "model": self._log.model_name,
+                    "requested_model": self._pending_model(), "models": {name: entry.label for name, entry in self._models.items()},
                     "actions": list(ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
@@ -237,20 +164,20 @@ class LiveRun:
                     self._queue("reset_requested", Load(None))
             self._condition.notify_all()
 
-    def request_model(self, spec: str) -> None:
-        """Switch both model roles to ``spec`` after the current turn is discarded.
+    def request_model(self, name: str) -> None:
+        """Switch both model roles to the configured model ``name`` after the current turn is discarded.
 
         Raises:
             ValueError: for an unknown model or before the emulator is ready.
         """
         with self._condition:
-            if spec not in self.models:
+            if name not in self._models:
                 raise ValueError("unknown model")
             self._require_loaded()
-            target = self._pending_model() or self._log.model_spec
-            if spec == target and self._agent is not None and not self._error:
+            target = self._pending_model() or self._log.model_name
+            if name == target and self._agent is not None and not self._error:
                 return
-            self._queue("model_change", SwitchModel(spec))
+            self._queue("model_change", SwitchModel(name))
             self._condition.notify_all()
 
     def load_state_upload(self, data: bytes, format: str) -> None:
@@ -300,8 +227,8 @@ class LiveRun:
                             self._manual(session, action)
                         case Load(checkpoint):
                             self._load(session, checkpoint)
-                        case SwitchModel(spec):
-                            self._switch_model(spec)
+                        case SwitchModel(name):
+                            self._switch_model(name)
                         case TakeTurn(instructions):
                             self._turn(session, instructions)
                 finally:
@@ -373,18 +300,20 @@ class LiveRun:
             self._notice = "Loaded state." if checkpoint is not None else "Reset complete."
         self._after_step(session)
 
-    def _switch_model(self, spec: str) -> None:
-        local = spec == ONEJEV and self._model_server is not None
+    def _switch_model(self, name: str) -> None:
+        entry = self._models[name]
+        current = self._models[self._log.model_name] if self._agent is not None else None
         try:
-            if local:
-                os.environ["QEV_BASE_URL"] = self._model_server.start()
-            model = self._log.watch(load_model(spec))
+            model = self._log.watch(load_model(entry.spec, self._model_server.start(entry)))
         except Exception as exc:
-            if local:
+            if entry.serve:
                 self._model_server.stop()
+                if current is not None and current.serve:
+                    # Only one local server runs at a time, so the current model lost its server.
+                    self._agent = None
             self._fail(f"Could not switch model: {exc}")
             return
-        if not local and self._model_server is not None:
+        if not entry.serve:
             self._model_server.stop()
         first = self._agent is None
         if first:
@@ -392,9 +321,9 @@ class LiveRun:
         else:
             self._agent.set_models(model, model)
         with self._condition:
-            self._log.record_model_change(spec)
+            self._log.record_model_change(name)
             if not first:
-                self._notice = f"Switched to {self.models[spec]}."
+                self._notice = f"Switched to {entry.label}."
 
     def _after_step(self, session: GameplaySession) -> None:
         """Save and show the session's state if it captured a frame since the last call."""
@@ -418,7 +347,7 @@ class LiveRun:
             self._condition.notify_all()
 
     def _pending_model(self) -> str | None:
-        return next((work.spec for work in reversed((self._current, *self._requests))
+        return next((work.name for work in reversed((self._current, *self._requests))
                      if isinstance(work, SwitchModel)), None)
 
     def _require_loaded(self) -> None:
@@ -553,24 +482,21 @@ def main() -> None:
     parser.add_argument("--core", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--model", default=ONEJEV)
+    models = read_models()
+    parser.add_argument("--model", default=next(iter(models)), choices=models,
+                        help="a [models.NAME] table in config.toml (default: the first)")
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
-    parser.add_argument("--url", help="OneJev server URL")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=8)
     parser.add_argument("--release-frames", type=int, default=4)
     args = parser.parse_args()
     if min(args.hold_frames, args.release_frames) < 1:
         parser.error("frame counts must be positive")
-    if args.url:
-        os.environ["QEV_BASE_URL"] = args.url
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    config = tomllib.loads((Path(__file__).parents[1] / "config.toml").read_text())
-    model_server = (ModelServer(config["server"]["gguf"], config["server"]["mmproj"], output)
-                    if not args.url else None)
-    run = LiveRun(args.rom, args.core, args.state, output, args.model,
+    model_server = ModelServer(output)
+    run = LiveRun(args.rom, args.core, args.state, output, models, args.model, model_server,
                   args.hold_frames, args.release_frames,
-                  args.knowledge.read_text() if args.knowledge else "", model_server)
+                  args.knowledge.read_text() if args.knowledge else "")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
     worker = threading.Thread(target=run.run, daemon=True)
     try:
@@ -583,8 +509,7 @@ def main() -> None:
         pass
     finally:
         run.stop()
-        if model_server:
-            model_server.close()
+        model_server.close()
         server.server_close()
         if worker.ident is not None:
             worker.join(timeout=5)

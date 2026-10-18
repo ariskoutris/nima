@@ -4,13 +4,13 @@ import json
 import threading
 import time
 import tomllib
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from fakes import Game, ScriptedModel, events, votes
 from mystery_dungeon import live
+from mystery_dungeon.models import ModelEntry
 from mystery_dungeon.session import Checkpoint
 
 AGENT_PRESS = (8, ("A",))
@@ -26,25 +26,57 @@ def wait_until(run, predicate, timeout=2.0):
     raise AssertionError(f"timed out; last state: {run.snapshot()}")
 
 
+class Server:
+    """A ModelServer stand-in that records which entries it served and how often it stopped."""
+
+    def __init__(self, failing=()):
+        self.failing = set(failing)
+        self.starts: list[str] = []
+        self.stops = 0
+
+    def start(self, entry):
+        if not entry.serve:
+            return entry.url
+        self.starts.append(entry.name)
+        if entry.name in self.failing:
+            raise RuntimeError("model server exited")
+        return "http://127.0.0.1:9999"
+
+    def stop(self):
+        self.stops += 1
+
+    def close(self):
+        self.stop()
+
+
 def idle(state):
     return state["status"] in ("paused", "error")
 
 
 @pytest.fixture
 def start_run(tmp_path, monkeypatch):
-    """Start a LiveRun over a fake game; ``load`` replaces model loading, ``ready`` waits for it."""
+    """Start a LiveRun over a fake game with one config entry per model, named after its spec.
+
+    ``load`` replaces model loading, ``served`` names entries with a serve command,
+    and ``ready`` waits for the first model.
+    """
     threads = []
     monkeypatch.setattr(live, "FRAME_SECONDS", 0)
 
-    def start(model=None, *, models=None, load=None, ready=True, server=None, spec="fake:Model"):
+    def start(model=None, *, models=None, load=None, ready=True, server=None, spec="fake",
+              served=()):
         game = Game()
         state_file = tmp_path / "start.state"
         state_file.write_bytes(b"start")
         models = {spec: model, **(models or {})}
-        monkeypatch.setattr(live, "load_model", load or models.__getitem__)
+        monkeypatch.setattr(live, "load_model", load or (lambda name, url: models[name]))
+        entries = {name: ModelEntry(name, f"{name} label", name,
+                                    ("serve",) if name in served else (),
+                                    "/ready" if name in served else "")
+                   for name in models}
         monkeypatch.setattr(live, "GbaEmulator", lambda rom, core: game)
         run = live.LiveRun(tmp_path / "game.gba", tmp_path / "core", state_file,
-                           tmp_path / "output", spec, 8, 4, model_server=server)
+                           tmp_path / "output", entries, spec, server or Server(), 8, 4)
         thread = threading.Thread(target=run.run)
         threads.append((run, thread))
         thread.start()
@@ -137,15 +169,15 @@ def test_upload_state_and_ss0(start_run, monkeypatch):
      lambda state: state["reset_count"] == 1),
     (lambda run: run.load_state_upload(b"uploaded", "state"), "reset_requested",
      lambda state: state["reset_count"] == 1),
-    (lambda run: run.request_model(live.GLM), "model_change",
-     lambda state: state["model"] == live.GLM),
+    (lambda run: run.request_model("glm"), "model_change",
+     lambda state: state["model"] == "glm"),
     (lambda run: run.control({"instructions": "Something else"}), "instructions_changed",
      lambda state: state["instructions"] == "Something else"),
 ])
 def test_operator_input_discards_the_turn_in_progress(start_run, interrupt, reason, took_effect):
     gate = threading.Event()
     model = ScriptedModel(gate=gate)
-    run, game = start_run(model, models={live.GLM: ScriptedModel()})
+    run, game = start_run(model, models={"glm": ScriptedModel()})
     run.control({"instructions": "Find exit", "command": "start"})
     assert model.entered.wait(2)
     assert run.snapshot()["running"] is True
@@ -207,7 +239,7 @@ def test_model_error_pauses_with_the_error(start_run):
 def test_manual_queued_behind_a_failed_first_model_keeps_its_error(start_run):
     gate = threading.Event()
 
-    def load(spec):
+    def load(spec, url):
         assert gate.wait(2)
         raise RuntimeError("no server")
 
@@ -243,66 +275,55 @@ def test_frames_stream_during_emulator_steps(start_run):
     assert frame == before + 12
 
 
-def test_model_switch_manages_the_local_server(start_run, monkeypatch):
-    class Server:
-        def __init__(self):
-            self.starts = self.stops = 0
-
-        def start(self):
-            self.starts += 1
-            return "http://127.0.0.1:9999"
-
-        def stop(self):
-            self.stops += 1
-
-    monkeypatch.setenv("QEV_BASE_URL", "")
+def test_model_switch_manages_the_local_server(start_run):
     server = Server()
-    run, _ = start_run(ScriptedModel(), models={live.GLM: ScriptedModel()},
-                       server=server, spec=live.ONEJEV)
-    assert server.starts == 1 and live.os.environ["QEV_BASE_URL"] == "http://127.0.0.1:9999"
-    run.request_model(live.GLM)
-    state = wait_until(run, lambda state: state["model"] == live.GLM)
+    loads = []
+    models = {"onejev": ScriptedModel(), "glm": ScriptedModel()}
+
+    def load(spec, url):
+        loads.append((spec, url))
+        return models[spec]
+
+    run, _ = start_run(models=models, load=load, server=server, spec="onejev", served={"onejev"})
+    assert server.starts == ["onejev"] and loads == [("onejev", "http://127.0.0.1:9999")]
+    run.request_model("glm")
+    state = wait_until(run, lambda state: state["model"] == "glm")
+    assert loads[-1] == ("glm", None) and server.stops == 1
+    assert state["notice"] == "Switched to glm label."
+    assert [row["to"] for row in events(run.output) if row["event"] == "model_change"] == ["glm"]
+
+
+def test_failed_server_start_stops_it_and_shows_the_error(start_run):
+    server = Server(failing={"fake"})
+    run, _ = start_run(ScriptedModel(), server=server, served={"fake"}, ready=False)
+    state = wait_until(run, lambda state: state["status"] == "error")
+    assert state["error"] == "Could not switch model: model server exited"
     assert server.stops == 1
-    assert state["notice"] == "Switched to GLM-5.3-Flash (OpenRouter)."
-    assert [row["to"] for row in events(run.output) if row["event"] == "model_change"] == [live.GLM]
 
 
-def test_model_server_owns_process_group(tmp_path, monkeypatch):
-    class Socket:
-        def __enter__(self):
-            return self
+def test_failed_switch_to_a_hosted_model_keeps_the_current_one_and_its_server(start_run):
+    server = Server()
+    models = {"onejev": ScriptedModel(), "glm": ScriptedModel()}
 
-        def __exit__(self, *args):
-            pass
+    def load(spec, url):
+        if spec == "glm":
+            raise ValueError("OPENROUTER_API_KEY is required")
+        return models[spec]
 
-        def bind(self, address):
-            assert address == ("127.0.0.1", 0)
+    run, _ = start_run(models=models, load=load, server=server, spec="onejev", served={"onejev"})
+    run.request_model("glm")
+    wait_until(run, lambda state: state["status"] == "error")
+    assert server.stops == 0
+    run.control({"command": "manual", "action": "A"})
+    wait_until(run, lambda state: len(state["history"]) == 1)
 
-        def getsockname(self):
-            return ("127.0.0.1", 9000)
 
-    class Process:
-        pid = 1234
-
-        def poll(self):
-            return None
-
-        def wait(self, timeout=None):
-            assert timeout == 10
-
-    @contextmanager
-    def ready(url, timeout):
-        assert url == "http://127.0.0.1:9000/v1/models"
-        yield type("Response", (), {"status": 200})()
-
-    calls = []
-    monkeypatch.setattr(live.socket, "socket", Socket)
-    monkeypatch.setattr(live.subprocess, "Popen", lambda args, **kwargs: calls.append((args, kwargs)) or Process())
-    monkeypatch.setattr(live, "urlopen", ready)
-    monkeypatch.setattr(live.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
-    server = live.ModelServer("model.gguf", "vision.gguf", tmp_path)
-    assert server.start() == "http://127.0.0.1:9000"
-    assert calls[0][0][1:4] == ["-m", "qev.cli", "serve"]
-    assert calls[0][1]["start_new_session"] is True
-    server.close()
-    assert calls[-1] == (1234, live.signal.SIGTERM)
+def test_failed_switch_between_local_models_drops_the_current_one(start_run):
+    server = Server(failing={"other"})
+    run, _ = start_run(ScriptedModel(), models={"other": ScriptedModel()}, server=server,
+                       spec="onejev", served={"onejev", "other"})
+    run.request_model("other")
+    state = wait_until(run, lambda state: state["status"] == "error")
+    assert state["error"] == "Could not switch model: model server exited"
+    with pytest.raises(ValueError, match="choose a model"):
+        run.control({"command": "manual", "action": "A"})

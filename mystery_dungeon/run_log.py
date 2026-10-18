@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.models import Model
     from mystery_dungeon.session import Transition
 
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4  # 4: model is a config table name, not MODULE:CLASS
 RECENT_ROWS = 40
 
 
@@ -55,11 +55,11 @@ class RunLog:
     Model calls made through watch() are attached to the next recorded turn.
     """
 
-    def __init__(self, output: Path, model_spec: str, run: Mapping[str, str | int],
+    def __init__(self, output: Path, model_name: str, run: Mapping[str, str | int],
                  knowledge: str = "") -> None:
         output.mkdir(parents=True, exist_ok=True)
         self._output = output
-        self._model_spec = model_spec
+        self._model_name = model_name
         self._calls: list[dict] = []
         self._recent: deque[dict] = deque(maxlen=RECENT_ROWS)
         self._task: str | None = None
@@ -69,13 +69,13 @@ class RunLog:
             (output / "knowledge.txt").write_bytes(data)
             snapshot = {"file": "knowledge.txt", "sha256": hashlib.sha256(data).hexdigest()}
         (output / "config.json").write_text(json.dumps({
-            "format_version": FORMAT_VERSION, "model": model_spec,
+            "format_version": FORMAT_VERSION, "model": model_name,
             "knowledge": snapshot, "run": dict(run),
         }, indent=2) + "\n")
 
     @property
-    def model_spec(self) -> str:
-        return self._model_spec
+    def model_name(self) -> str:
+        return self._model_name
 
     def watch(self, model: Model) -> WatchedModel:
         return WatchedModel(model, self._calls)
@@ -100,18 +100,18 @@ class RunLog:
 
     def record_manual(self, action: Action, transition: Transition) -> None:
         self._recent.append(_summary(self._write("action", {
-            "source": "manual", "action": to_json(action), "model": self._model_spec,
+            "source": "manual", "action": to_json(action), "model": self._model_name,
             **_transition_fields(transition)})))
 
     def record_reset(self, screenshot: str) -> None:
         self._recent.clear()
         self._write("reset", {"screenshot": screenshot})
 
-    def record_model_change(self, model_spec: str) -> None:
-        if model_spec == self._model_spec:
+    def record_model_change(self, model_name: str) -> None:
+        if model_name == self._model_name:
             return
-        self._write("model_change", {"from": self._model_spec, "to": model_spec})
-        self._model_spec = model_spec
+        self._write("model_change", {"from": self._model_name, "to": model_name})
+        self._model_name = model_name
 
     def record_run_stop(self, reason: str, screenshot: str) -> None:
         self._write("run_stop", {"reason": reason, "screenshot": screenshot})
@@ -128,7 +128,7 @@ class RunLog:
                   "screenshot": turn.observation.screenshot, "complete": turn.complete,
                   "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action)}
                              for entry in turn.memory],
-                  "model": self._model_spec, "model_calls": calls}
+                  "model": self._model_name, "model_calls": calls}
         if turn.action is not None:
             fields["action"] = to_json(turn.action)
         if turn.error is not None:
