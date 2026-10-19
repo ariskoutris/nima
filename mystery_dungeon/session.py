@@ -26,7 +26,6 @@ class Checkpoint:
 class Observation:
     frame: Frame
     screenshot: str
-    game_state: RamState | None
 
 
 @dataclass(frozen=True)
@@ -213,7 +212,7 @@ class GameplaySession:
     def observe(self) -> Observation:
         """Return a readable frame without skipping cutscenes or advancing dialogue."""
         self.wait_for_text()
-        return Observation(self.current_frame(), self.current_name, self.ram_state())
+        return Observation(self.current_frame(), self.current_name)
 
     def apply(self, action: Action) -> Transition:
         if self.current is None:
