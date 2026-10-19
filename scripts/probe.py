@@ -49,7 +49,7 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         "model": model, "selected_cases": cases, "variants": summaries,
     }, indent=2) + "\n")
     lines = ["# Probe comparison", "", f"Model: {model}", "",
-             "| Configuration | Cases | Reached | Recognized | Missed | False completion | Model errors | Median turn ms |",
+             "| Variant | Cases | Reached | Recognized | Missed | False completion | Model errors | Median turn ms |",
              "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for item in summaries:
         lines.append(f"| {item['variant']} | {len(item['cases'])}/{len(cases)} | "
@@ -57,7 +57,7 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
                      f"{item['false_completion']} | {item['model_errors']} | "
                      f"{item['median_turn_ms'] if item['median_turn_ms'] is not None else '—'} |")
     lines += ["", "## Case outcomes", "",
-              "| Configuration | Case | Reached | Recognized | Stop reason | Actions | Seconds |",
+              "| Variant | Case | Reached | Recognized | Stop reason | Actions | Seconds |",
               "|---|---|:---:|:---:|---|---:|---:|"]
     for item in summaries:
         for row in item["cases"]:

@@ -17,7 +17,7 @@ from mystery_dungeon.agent import Agent
 from mystery_dungeon.models import CONFIG, Model, load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.ram_state import GameRam
-from mystery_dungeon.run_log import RunLog
+from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, Checkpoint, GameplaySession,
                                      read_ss0)
 
@@ -150,7 +150,7 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     output.mkdir(parents=True, exist_ok=False)
     log = RunLog(output, model_name,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
-                  "criterion": case.criterion, "action_limit": case.limit,
+                  "criterion": case.criterion, "limit": case.limit,
                   "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES},
                  knowledge)
     watched = log.watch(model)
@@ -162,7 +162,7 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         raise ValueError("benchmark grading needs a real emulator")
     grader = Grader(case, session.ram)
     started = time.monotonic()
-    reason = "budget"
+    reason = "limit"
     error = None
     turns = 0
     reached_at = None
@@ -173,7 +173,7 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         elif success and reached_at is None:
             reached_at = turns
         if session.action_count >= case.limit:
-            reason = "budget"
+            reason = "limit"
             break
         turn, transition = agent.take_turn(session)
         log.record_turn(turn, transition)
@@ -189,8 +189,8 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     (output / "states").mkdir(exist_ok=True)
     (output / "states/final.state").write_bytes(game.save_state())
     (output / "states/final.sav").write_bytes(game.save_ram())
-    public_reason = ("completion_claimed" if reason in ("recognized", "false_completion") else
-                     "benchmark_limit" if reason == "budget" else reason)
+    public_reason = ("completion_claimed" if reason in ("recognized", "false_completion")
+                     else reason)
     log.record_run_stop(public_reason, session.current_name)
     reached = reached_at is not None
     result = {"case": case.id, "task": case.task, "reached": reached,
@@ -240,7 +240,7 @@ def main() -> None:
              *((args.knowledge,) if args.knowledge else ()))
     hashes = {str(path): sha256(path) for path in files}
     (args.output / "config.json").write_text(json.dumps({
-        "format_version": 6, "layout": "benchmark", "grader": "pmd-red-ram-v1",
+        "format_version": FORMAT_VERSION, "layout": "benchmark", "grader": "pmd-red-ram-v1",
         "model": asdict(entry), "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES,

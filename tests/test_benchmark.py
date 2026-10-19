@@ -14,6 +14,7 @@ from fakes import ScriptedModel, press, votes
 from mystery_dungeon.benchmark import (CASES, CHECKPOINT_NAMES, CHECKPOINTS, CORE, ROM, Case, Grader,
                                        build_fixtures, run_case)
 from mystery_dungeon.ram_state import GameRam
+from mystery_dungeon.run_log import FORMAT_VERSION
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
 
@@ -89,7 +90,7 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
 
     result = run_case(game, case, ScriptedModel(["A"]), seeds, output / case.id)
     assert result["actions"] == 14
-    assert result["stop_reason"] == "budget"
+    assert result["stop_reason"] == "limit"
     assert not result["reached"]
     assert not result["recognized"]
     assert Grader(case, GameRam(game)).talking(235)
@@ -193,7 +194,7 @@ def test_dialogue_reach_and_completion_are_separate(town):
     assert finished["recognized"] and finished["actions"] == 1
 
 
-def test_slow_inference_still_acts_but_action_budget_stops_after_reach(town, monkeypatch):
+def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monkeypatch):
     game, seeds, output = town
     clock = Mock(return_value=0)
 
@@ -206,7 +207,7 @@ def test_slow_inference_still_acts_but_action_budget_stops_after_reach(town, mon
         patcher.setattr(benchmark.time, "monotonic", clock)
         result = run_case(game, case, ScriptedModel(["DOWN"], slow_check), seeds,
                           output / "late_turn")
-    assert result["stop_reason"] == "budget"
+    assert result["stop_reason"] == "limit"
     assert result["reached"] and result["missed"]
     assert result["actions"] == result["turns"] == 1
     assert result["seconds"] == 181
@@ -246,7 +247,7 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
     load = Mock(side_effect=models)
-    run = Mock(return_value={"stop_reason": "budget", "actions": 0})
+    run = Mock(return_value={"stop_reason": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "load_model", load)
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
@@ -258,7 +259,7 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
-    assert config["format_version"] == 6
+    assert config["format_version"] == FORMAT_VERSION
     assert config["model"]["name"] == "local"
     assert "time_limit_seconds" not in config
     assert "recognition_window" not in config
@@ -275,7 +276,7 @@ def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
     monkeypatch.setattr(benchmark, "load_model", Mock(return_value=object()))
-    run = Mock(return_value={"stop_reason": "budget", "actions": 0})
+    run = Mock(return_value={"stop_reason": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     for name, extra in (("none", []), ("controls", ["--knowledge", str(knowledge)])):

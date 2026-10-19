@@ -18,7 +18,9 @@ if TYPE_CHECKING:
     from mystery_dungeon.models import Model
     from mystery_dungeon.session import Transition
 
-FORMAT_VERSION = 4  # 4: model is a config table name, not MODULE:CLASS
+# Shared by run and benchmark configs. 7: one counter for both; benchmark results drop
+# events and success, and the action budget is called limit everywhere.
+FORMAT_VERSION = 7
 RECENT_ROWS = 40
 
 

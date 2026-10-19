@@ -6,7 +6,7 @@ import json
 from fakes import ScriptedModel, events, start, votes
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import Agent
-from mystery_dungeon.run_log import RECENT_ROWS, RunLog
+from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
 
 
 def setup(tmp_path, model, knowledge=""):
@@ -20,7 +20,7 @@ def setup(tmp_path, model, knowledge=""):
 def test_config_snapshots_knowledge(tmp_path):
     RunLog(tmp_path, "fake:Model", {"kind": "test"}, "Use the map.")
     config = json.loads((tmp_path / "config.json").read_text())
-    assert config == {"format_version": 4, "model": "fake:Model", "run": {"kind": "test"},
+    assert config == {"format_version": FORMAT_VERSION, "model": "fake:Model", "run": {"kind": "test"},
                       "knowledge": {"file": "knowledge.txt",
                                     "sha256": hashlib.sha256(b"Use the map.").hexdigest()}}
     assert (tmp_path / "knowledge.txt").read_text() == "Use the map."
