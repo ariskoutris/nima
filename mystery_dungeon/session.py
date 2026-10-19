@@ -14,6 +14,17 @@ from mystery_dungeon.ram_state import GameRam, RamState
 
 HOLD_FRAMES = 8  # frames each action holds its button
 RELEASE_FRAMES = 4  # frames with no input after each action
+TEXT_WAIT_LIMIT = 300  # most frames spent waiting for one page of text to print
+TEXT_POLL_FRAMES = 4  # frames between text-printing checks
+# Menus that follow dialogue (e.g. the shop's choices) open a few frames after the last glyph.
+MENU_AFTER_TEXT_FRAMES = 12
+# Frames between the two menu captures, so one of them shows the blinking cursor;
+# test_menu_observation_shows_blinking_cursor_without_an_action covers it.
+CURSOR_BLINK_FRAMES = 8
+BLINK_PIXEL_DELTA = 100  # summed RGB difference for a pixel to count as blinking
+BLINK_BLOCK_PIXELS = 16  # side of the square regions compared for the strongest blink
+STALL_SCENE_DISTANCE = 3  # scene_distance below which a press barely changed the screen
+STALL_PRESSES = 8  # repeated barely-changing presses before warning the operator
 
 
 @dataclass(frozen=True)
@@ -108,10 +119,11 @@ def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
     for index in range(0, len(first.rgba), 4):
         before = first.rgba[index:index + 3]
         after = second.rgba[index:index + 3]
-        if sum(abs(a - b) for a, b in zip(before, after)) <= 100:
+        if sum(abs(a - b) for a, b in zip(before, after)) <= BLINK_PIXEL_DELTA:
             continue
         pixel = index // 4
-        block = (pixel % first.width // 16, pixel // first.width // 16)
+        block = (pixel % first.width // BLINK_BLOCK_PIXELS,
+                 pixel // first.width // BLINK_BLOCK_PIXELS)
         blocks[block] = blocks.get(block, 0) + sum(after) - sum(before)
     # ponytail: local brightness is a visual heuristic; use cursor detection if another menu animation dominates it.
     strongest = max(blocks.values(), key=abs, default=0)
@@ -166,26 +178,23 @@ class GameplaySession:
         self._unchanged_count = 0
         self.capture()
 
-    def wait_for_text(self, max_frames: int = 300) -> tuple[int, bool]:
+    def wait_for_text(self) -> None:
         """Advance silent frames until the current dialogue page is fully printed."""
         if self.current is None:
             raise RuntimeError("capture a frame before waiting")
         state = self.ram_state()
         waited = 0
-        while state is not None and state.text_printing and waited < max_frames:
-            frames = min(4, max_frames - waited)
+        while state is not None and state.text_printing and waited < TEXT_WAIT_LIMIT:
+            frames = min(TEXT_POLL_FRAMES, TEXT_WAIT_LIMIT - waited)
             self.emulator.step(frames)
             self.frame_count += frames
             waited += frames
             state = self.ram_state()
         if waited:
             if state is not None and not state.text_printing and state.mode == "menu":
-                # The shop opens its choice menu a few frames after the last glyph.
-                self.emulator.step(12)
-                self.frame_count += 12
-                waited += 12
+                self.emulator.step(MENU_AFTER_TEXT_FRAMES)
+                self.frame_count += MENU_AFTER_TEXT_FRAMES
             self.capture()
-        return waited, state is None or not state.text_printing
 
     def capture(self, frame: Frame | None = None) -> Frame:
         """Save the current or supplied frame as the session observation."""
@@ -204,8 +213,8 @@ class GameplaySession:
         if state is None or state.mode != "menu":
             return self.current
         first = self.current
-        self.emulator.step(8)
-        self.frame_count += 8
+        self.emulator.step(CURSOR_BLINK_FRAMES)
+        self.frame_count += CURSOR_BLINK_FRAMES
         second = self.emulator.screenshot()
         if (next_state := self.ram_state()) is None or next_state.mode != "menu":
             return self.capture(second)
@@ -224,13 +233,13 @@ class GameplaySession:
         self.frame_count += self.hold_frames + self.release_frames
         after = self.capture()
         self.action_count += 1
-        if isinstance(action, Press) and scene_distance(before, after) < 3:
+        if isinstance(action, Press) and scene_distance(before, after) < STALL_SCENE_DISTANCE:
             self._unchanged_count = self._unchanged_count + 1 if action == self._last_action else 1
         else:
             self._unchanged_count = 0
         self._last_action = action
         self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
-                        f"{name(action)} presses" if self._unchanged_count >= 8 else None)
+                        f"{name(action)} presses" if self._unchanged_count >= STALL_PRESSES else None)
         return Transition(before, before_name, after, self.current_name,
                           self.image_index - 1, self.action_count,
                           frame_before, self.frame_count)

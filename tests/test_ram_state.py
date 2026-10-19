@@ -28,8 +28,9 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         assert initial.mode == "dialogue" and initial.text_printing
         partial = session.current.rgba
         actions = session.action_count
-        waited, ready = session.wait_for_text()
-        assert ready and waited > 0
+        frames = session.frame_count
+        session.wait_for_text()
+        assert session.frame_count > frames
         assert session.action_count == actions
         assert GameRam(game).state().mode == ready_mode
         assert not GameRam(game).state().text_printing
