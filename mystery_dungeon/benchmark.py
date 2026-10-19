@@ -6,7 +6,6 @@ import argparse
 from contextlib import closing
 import hashlib
 import json
-import struct
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -16,15 +15,17 @@ from emulator import GbaEmulator
 from mystery_dungeon.agent import Agent
 from mystery_dungeon.models import CONFIG, Model, load_model, read_models
 from mystery_dungeon.models.server import ModelServer
+from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import Checkpoint, GameplaySession, read_ss0, restore
+from mystery_dungeon.session import Checkpoint, GameplaySession, read_ss0
 
 
 ROM = Path("data/game/roms/red-rescue-team.gba")
 CORE = Path("data/engines/cores/mgba_libretro.dylib")
 CHECKPOINTS = Path("data/game/checkpoints")
-ROM_SHA1 = "9f4cfc5b5f4859d17169a485462e977c7aac2b89"
 HOLD, RELEASE = 8, 4
+GRANBULL, LOMBRE, WIGGLYTUFF = 235, 296, 40  # species ids
+WHISCASH_POND = 3  # ground map beyond the square's north exit
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,8 @@ CASES = (
     Case("dialogue_finish", "npc-dialogue", "Finish the conversation with Granbull", "finish", 18),
     Case("face_npc_finish", "face-npc", "Talk to Granbull until the conversation ends", "finish", 22),
     Case("shop_talk", "shop-interact", "Talk to the shopkeeper in front of you", "wigglytuff", 5),
-    Case("shop_friend_areas", "shop-interact", "Open the Friend Areas list at the shop", "shop_menu", 22),
+    Case("shop_buy_friend_area", "shop-interact",
+         "Open the Friend Areas list at Wigglytuff's shop and choose one to buy", "buy_reply", 24),
     Case("shop_check_pidgey", "shop-interact",
          "Choose Check at Wigglytuff's shop, then select Pidgey from the Pokémon list",
          "check_pidgey", 30),
@@ -75,109 +77,69 @@ def sha256(path: Path) -> str:
 
 
 class Grader:
-    """Read fields documented by https://github.com/pret/pmd-red for ROM_SHA1."""
+    """Judge one case's criterion from general game facts, independently of the agent."""
 
-    def __init__(self, case: Case, game: GbaEmulator):
-        self.game = game
-        position = self.player_position()
+    def __init__(self, case: Case, ram: GameRam):
+        self.case = case
+        self.ram = ram
+        position = ram.player_position()
         if position is None:
             raise ValueError(f"player position unavailable in {case.start} checkpoint")
         self.initial_x, self.initial_y = position
-        self.saw_granbull = self.dialogue() == (1, 235)
-        self.saw_lombre = self.dialogue() == (1, 296)
+        self.saw_granbull = self.talking(GRANBULL)
+        self.saw_lombre = self.talking(LOMBRE)
 
-    def value(self, address: int, fmt: str) -> int:
-        return struct.unpack(fmt, self.game.read_memory(address, struct.calcsize(fmt)))[0]
+    def talking(self, species: int) -> bool:
+        return self.ram.textbox_type() == 1 and self.ram.speaker() == species
 
-    def player_position(self) -> tuple[int, int] | None:
-        # gGroundLives -> GroundLive[0].unk144 (PixelPos, s24.8).
-        lives = self.value(0x03001B84, "<I")
-        if not 0x02000000 <= lives < 0x02040000:
-            return None
-        x, y = struct.unpack("<ii", self.game.read_memory(lives + 0x144, 8))
-        return x // 256, y // 256
-
-    def ground_map_id(self) -> int | None:
-        # gGroundMapAction -> groundMapId; 3 is Whiscash Pond beyond the north exit.
-        action = self.value(0x03001B6C, "<I")
-        return self.value(action + 0xE4, "<h") if 0x02000000 <= action < 0x02040000 else None
-
-    def granbull_position(self) -> tuple[int, int] | None:
-        lives = self.value(0x03001B84, "<I")
-        if not 0x02000000 <= lives < 0x02040000:
-            return None
-        for index in range(24):
-            entry = lives + index * 0x1F0
-            if (self.value(entry + 2, "<h") != -1 and
-                    self.value(entry + 8, "<h") == 235):
-                x, y = struct.unpack("<ii", self.game.read_memory(entry + 0x144, 8))
-                return x // 256, y // 256
-        return None
-
-    def dialogue(self) -> tuple[int, int]:
-        # sTextbox -> Textbox.type and second portrait's speciesID.
-        textbox = self.value(0x03001B64, "<I")
-        if not 0x02000000 <= textbox < 0x02040000:
-            return 0, -1
-        return (self.value(textbox, "<I"),
-                self.value(textbox + 0x43C + 0x24 + 2, "<h"))
-
-    def shop_state(self) -> int | None:
-        # WigglytuffShop3Work pointer -> state; states 9/10 show Friend Areas.
-        shop = self.value(0x0203B290, "<I")
-        return self.value(shop + 4, "<i") if 0x02000000 <= shop < 0x02040000 else None
-
-    def checked_species(self) -> int | None:
-        # WigglytuffShop3Work.state 24 displays chosenSpecies at +0x12.
-        shop = self.value(0x0203B290, "<I")
-        if 0x02000000 <= shop < 0x02040000 and self.value(shop + 4, "<i") == 24:
-            return self.value(shop + 0x12, "<h")
-        return None
-
-    def observe(self, criterion: str) -> tuple[bool, list[str]]:
-        position = self.player_position()
+    def reached(self) -> bool:
+        position = self.ram.player_position()
         if position is None:
-            return False, []
+            return False
         x, y = position
-        dialogue, speaker = self.dialogue()
-        granbull = dialogue == 1 and speaker == 235
-        lombre = dialogue == 1 and speaker == 296
-        if granbull:
-            self.saw_granbull = True
-        if lombre:
-            self.saw_lombre = True
-        npc = self.granbull_position() if criterion == "approach" else None
-        success = {
-            "down": x == self.initial_x and y >= self.initial_y + 16,
-            "north_exit": self.ground_map_id() == 3 if criterion == "north_exit" else False,
-            "approach": (npc is not None and abs(x - npc[0]) <= 12 and
-                         8 <= npc[1] - y <= 24 and dialogue == 0),
-            "granbull": granbull,
-            "lombre": lombre,
-            "finish": self.saw_granbull and dialogue == 0,
-            "finish_lombre": self.saw_lombre and dialogue == 0,
-            "wigglytuff": dialogue == 4 and speaker == 40,
-            "shop_menu": self.shop_state() in (9, 10) if criterion == "shop_menu" else False,
-            "check_pidgey": self.checked_species() == 16 if criterion == "check_pidgey" else False,
-        }[criterion]
-        return success, []
+        closed = self.ram.textbox_type() in (None, 0)
+        self.saw_granbull |= self.talking(GRANBULL)
+        self.saw_lombre |= self.talking(LOMBRE)
+        match self.case.criterion:
+            case "down":
+                return x == self.initial_x and y >= self.initial_y + 16
+            case "north_exit":
+                return self.ram.ground_map() == WHISCASH_POND
+            case "approach":
+                npc = self.ram.npc_position(GRANBULL)
+                return (npc is not None and abs(x - npc[0]) <= 12 and
+                        8 <= npc[1] - y <= 24 and closed)
+            case "granbull":
+                return self.talking(GRANBULL)
+            case "lombre":
+                return self.talking(LOMBRE)
+            case "finish":
+                return self.saw_granbull and closed
+            case "finish_lombre":
+                return self.saw_lombre and closed
+            case "wigglytuff":
+                return self.ram.textbox_type() == 4 and self.ram.speaker() == WIGGLYTUFF
+            case "buy_reply":
+                # The checkpoint has no money, so buying any Friend Area ends at this reply.
+                return "You don't have any money." in self.ram.textbox_text()
+            case "check_pidgey":
+                return "Pidgey's Friend Area" in self.ram.textbox_text()
+            case criterion:
+                raise ValueError(f"unknown criterion: {criterion}")
 
 
 def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
-    if hashlib.sha1(game.rom.read_bytes()).hexdigest() != ROM_SHA1:
-        raise ValueError("town RAM offsets require the matching Red Rescue Team ROM")
     checkpoints = {name: read_ss0(CHECKPOINTS / f"{name}.ss0")
              for name in ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")}
     folder = output / "references"
     folder.mkdir()
+    session = GameplaySession(game, folder)  # saves each checkpoint's frame under frames/
     for name, checkpoint in checkpoints.items():
         (folder / f"{name}.state").write_bytes(checkpoint.state)
         (folder / f"{name}.sav").write_bytes(checkpoint.save_ram)
-        restore(game, checkpoint)
-        game.screenshot().save_png(folder / f"{name}.png")
+        session.load(checkpoint)
         for case in (case for case in CASES if case.start == name):
-            grader = Grader(case, game)
-            if grader.observe(case.criterion)[0]:
+            if Grader(case, session.ram).reached():
                 raise ValueError(f"{case.id} already passes at its checkpoint")
     return checkpoints
 
@@ -196,16 +158,16 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     agent.set_instructions(case.task)
     session = GameplaySession(game, output, HOLD, RELEASE)
     session.load(checkpoints[case.start])
-    grader = Grader(case, game)
-    events: list[str] = []
+    if session.ram is None:
+        raise ValueError("benchmark grading needs a real emulator")
+    grader = Grader(case, session.ram)
     started = time.monotonic()
     reason = "budget"
     error = None
     turns = 0
     reached_at = None
     while True:
-        success, new_events = grader.observe(case.criterion)
-        events.extend(new_events)
+        success = grader.reached()
         if case.criterion in ("finish", "finish_lombre") and not success:
             reached_at = None  # A reopened the conversation after it had ended.
         elif success and reached_at is None:
@@ -233,10 +195,9 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     reached = reached_at is not None
     result = {"case": case.id, "task": case.task, "reached": reached,
               "recognized": reason == "recognized", "missed": reached and reason != "recognized",
-              "false_completion": reason == "false_completion", "success": reached,
+              "false_completion": reason == "false_completion",
               "reached_at": reached_at, "stop_reason": reason,
               "actions": session.action_count, "turns": turns,
-              "events": events,
               "seconds": round(time.monotonic() - started, 2), "error": error}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result

@@ -13,6 +13,7 @@ from mystery_dungeon.models import ModelEntry
 from fakes import ScriptedModel, press, votes
 from mystery_dungeon.benchmark import (CASES, CHECKPOINTS, CORE, ROM, Case, Grader,
                                        build_fixtures, run_case)
+from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
 
@@ -46,7 +47,7 @@ ROUTES = {
     "dialogue_finish": ["A"] * 2,
     "face_npc_finish": ["A"] * 3,
     "shop_talk": ["A"],
-    "shop_friend_areas": ["A"] * 20,
+    "shop_buy_friend_area": ["A"] * 19,
     "shop_check_pidgey": ["A", "DOWN", "A", "A"] + ["DOWN"] * 4 + ["A"],
 }
 
@@ -71,16 +72,16 @@ def test_lombre_finish_requires_closed_dialogue(town, tmp_path):
     game, seeds, _ = town
     restore(game, seeds["face-lombre"])
     case = next(case for case in CASES if case.id == "face_lombre_finish")
-    grader = Grader(case, game)
     session = GameplaySession(game, tmp_path)
+    grader = Grader(case, session.ram)
     session.capture()
     for index in range(9):
         session.apply(Press("A"))
         session.wait_for_text()
-        assert grader.observe(case.criterion)[0] == (index == 8)
+        assert grader.reached() == (index == 8)
     session.apply(Press("A"))
     session.wait_for_text()
-    assert not grader.observe(case.criterion)[0]
+    assert not grader.reached()
 
 
 def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
@@ -92,57 +93,55 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     assert result["stop_reason"] == "budget"
     assert not result["reached"]
     assert not result["recognized"]
-    assert Grader(case, game).dialogue() == (1, 235)
+    assert Grader(case, GameRam(game)).talking(235)
 
 
 def test_standing_still_does_not_count_as_moving_down(town):
     game, seeds, _ = town
     restore(game, seeds["square"])
     case = next(case for case in CASES if case.id == "square_down")
-    grader = Grader(case, game)
+    grader = Grader(case, GameRam(game))
     for _ in range(3):
         press(game, "WAIT")
-        assert not grader.observe("down")[0]
+        assert not grader.reached()
 
 
 def test_moving_the_wrong_way_does_not_count(town):
     game, seeds, _ = town
     restore(game, seeds["square"])
     case = next(case for case in CASES if case.id == "square_down")
-    grader = Grader(case, game)
+    grader = Grader(case, GameRam(game))
     press(game, "RIGHT")
-    assert not grader.observe("down")[0]
+    assert not grader.reached()
 
 
 def test_north_exit_requires_leaving_pokemon_square(town):
     game, seeds, _ = town
     restore(game, seeds["square"])
     case = next(case for case in CASES if case.id == "square_north_exit")
-    grader = Grader(case, game)
-    assert grader.ground_map_id() == 1
+    grader = Grader(case, GameRam(game))
+    assert grader.ram.ground_map() == 1
     for _ in range(8):
         press(game, "UP")
-    assert not grader.observe("north_exit")[0]
+    assert not grader.reached()
     for _ in range(12):
         press(game, "UP")
-    assert grader.ground_map_id() == 3
-    assert grader.observe("north_exit")[0]
+    assert grader.ram.ground_map() == 3
+    assert grader.reached()
 
 
-def test_shop_menu_requires_friend_area_selection(town):
+def test_buying_requires_choosing_a_friend_area(town):
     game, seeds, _ = town
     restore(game, seeds["shop-interact"])
-    case = next(case for case in CASES if case.id == "shop_friend_areas")
-    grader = Grader(case, game)
+    case = next(case for case in CASES if case.id == "shop_buy_friend_area")
+    grader = Grader(case, GameRam(game))
     press(game, "A")
-    assert grader.observe("wigglytuff")[0]
-    assert not grader.observe("shop_menu")[0]
-    for _ in range(15):
+    assert Grader(Case("talk", "shop-interact", "", "wigglytuff", 1), GameRam(game)).reached()
+    for _ in range(17):  # through the greeting and the Friend Areas list to Buy/Info
         press(game, "A")
-    assert grader.observe("shop_menu")[0]
-    for _ in range(2):
-        press(game, "A")
-    assert not grader.observe("shop_menu")[0]
+        assert not grader.reached()
+    press(game, "A")
+    assert grader.reached()
 
 
 def test_check_pidgey_requires_selecting_pidgey(town):
@@ -151,24 +150,21 @@ def test_check_pidgey_requires_selecting_pidgey(town):
     route_to_list = ["A"] * 8 + ["DOWN", "A"] + ["A"] * 6
 
     restore(game, seeds["shop-interact"])
-    grader = Grader(case, game)
+    grader = Grader(case, GameRam(game))
     for button in route_to_list:
         press(game, button)
-    assert grader.shop_state() == 22
-    assert not grader.observe("check_pidgey")[0]
+    assert not grader.reached()
     press(game, "A")  # Select the first entry, Squirtle.
-    assert grader.shop_state() == 24
-    assert grader.checked_species() == 7
-    assert not grader.observe("check_pidgey")[0]
+    assert "Squirtle's Friend Area" in grader.ram.textbox_text()
+    assert not grader.reached()
 
     restore(game, seeds["shop-interact"])
-    grader = Grader(case, game)
+    grader = Grader(case, GameRam(game))
     for button in route_to_list + ["DOWN"] * 4:
         press(game, button)
-    assert not grader.observe("check_pidgey")[0]
+    assert not grader.reached()
     press(game, "A")
-    assert grader.checked_species() == 16
-    assert grader.observe("check_pidgey")[0]
+    assert grader.reached()
 
 
 @pytest.mark.parametrize("case_id,route", [
@@ -180,10 +176,10 @@ def test_movement_grader_tolerates_waiting(town, case_id, route):
     game, seeds, _ = town
     restore(game, seeds["square"])
     case = next(case for case in CASES if case.id == case_id)
-    grader = Grader(case, game)
+    grader = Grader(case, GameRam(game))
     for button in ["WAIT"] * 4 + route:
         press(game, button)
-    assert grader.observe(case.criterion)[0]
+    assert grader.reached()
 
 
 def test_dialogue_reach_and_completion_are_separate(town):
