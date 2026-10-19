@@ -7,7 +7,7 @@ from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import Agent
 from fakes import ScriptedModel, press
 from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
-from mystery_dungeon.ram_state import read_ram_state
+from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
 
@@ -22,17 +22,17 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         restore(game, read_ss0(CHECKPOINTS / f"{checkpoint}.ss0"))
         session = GameplaySession(game, tmp_path)
         session.capture()
-        assert read_ram_state(game).mode == "field"
+        assert GameRam(game).state().mode == "field"
         session.apply(Press("A"))
-        initial = read_ram_state(game)
+        initial = GameRam(game).state()
         assert initial.mode == "dialogue" and initial.text_printing
         partial = session.current.rgba
         actions = session.action_count
         waited, ready = session.wait_for_text()
         assert ready and waited > 0
         assert session.action_count == actions
-        assert read_ram_state(game).mode == ready_mode
-        assert not read_ram_state(game).text_printing
+        assert GameRam(game).state().mode == ready_mode
+        assert not GameRam(game).state().text_printing
         assert session.current.rgba != partial
 
 
@@ -42,13 +42,13 @@ def test_field_menu_and_dungeon_modes():
         pytest.skip("local ROM, core, and checkpoints required")
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
-        field = read_ram_state(game)
+        field = GameRam(game).state()
         assert field.mode == "field" and field.player_position is not None
         game.step(8, ("B",))
         game.step(4)
-        assert read_ram_state(game).mode == "menu"
+        assert GameRam(game).state().mode == "menu"
         restore(game, read_ss0(CHECKPOINTS / "normal-maze.ss0"))
-        assert read_ram_state(game).mode == "dungeon"
+        assert GameRam(game).state().mode == "dungeon"
 
 
 def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
@@ -65,14 +65,14 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "shop-interact.ss0"))
         press(game, "A")
-        while read_ram_state(game).text_printing:
+        while GameRam(game).state().text_printing:
             game.step(4)
         game.step(12)
         popup = game.save_state()
 
         press(game, "DOWN")
         press(game, "A")
-        while read_ram_state(game).text_printing:
+        while GameRam(game).state().text_printing:
             game.step(4)
         game.step(12)
         press(game, "A")
@@ -92,7 +92,7 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
                 game.step(phase + 1)
                 session = GameplaySession(game, tmp_path / name / str(phase))
                 session.capture()
-                assert read_ram_state(game).mode == "menu"
+                assert GameRam(game).state().mode == "menu"
                 observed = session.current_frame()
                 assert light_pixels(observed, rect) > threshold
                 assert session.action_count == 0
@@ -110,10 +110,10 @@ def test_agent_plans_only_after_text_finishes(tmp_path):
         session = GameplaySession(game, tmp_path)
         session.capture()
         session.apply(Press("A"))
-        assert read_ram_state(game).text_printing
+        assert GameRam(game).state().text_printing
 
         def complete():
-            assert not read_ram_state(game).text_printing
+            assert not GameRam(game).state().text_printing
             return True
 
         model = ScriptedModel(complete=complete)
@@ -134,7 +134,7 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
         session.capture()
 
         def complete():
-            state = read_ram_state(game)
+            state = GameRam(game).state()
             assert not state.text_printing
             assert model.calls[-1][2].rgba == game.screenshot().rgba
             return state.mode == "field" and session.action_count > 0
@@ -146,3 +146,24 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
             assert agent.take_turn(session)[0].status == "action"
         assert agent.take_turn(session)[0].status == "completion"
         assert session.action_count == 9
+
+
+def test_game_ram_rejects_another_rom(tmp_path):
+    class OtherRom:
+        rom = tmp_path / "other.gba"
+
+    OtherRom.rom.write_bytes(b"not red rescue team")
+    with pytest.raises(ValueError, match="Red Rescue Team ROM"):
+        GameRam(OtherRom())
+
+
+def test_textbox_text_reads_the_open_page():
+    paths = (ROM, CORE, CHECKPOINTS / "npc-dialogue.ss0", CHECKPOINTS / "square.ss0")
+    if not all(path.is_file() for path in paths):
+        pytest.skip("local ROM, core, and checkpoints required")
+    with GbaEmulator(ROM, CORE) as game:
+        ram = GameRam(game)
+        restore(game, read_ss0(CHECKPOINTS / "npc-dialogue.ss0"))
+        assert ram.textbox_text().startswith("Granbull:  I've given up")
+        restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
+        assert ram.textbox_text() == ""

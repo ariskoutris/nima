@@ -1,7 +1,9 @@
-"""Observed RAM state for the matching Red Rescue Team GBA ROM."""
+"""Read game facts from RAM for the matching Red Rescue Team GBA ROM."""
 
 from __future__ import annotations
 
+import hashlib
+import re
 import struct
 from dataclasses import dataclass
 
@@ -9,13 +11,29 @@ from emulator import GbaEmulator
 
 ROM_SHA1 = "9f4cfc5b5f4859d17169a485462e977c7aac2b89"
 
+# Addresses from https://github.com/pret/pmd-red for ROM_SHA1.
+MAIN_LOOP = 0x0203B03C  # sMainLoopsUnk: 1 dungeon, 2 ground
+TEXTBOX = 0x03001B64  # sTextbox
+TEXT_PHASE = 0x0202E778  # observed text printer phase: 1 while characters stream, 2 at page end
+DIALOGUE_TEXT = 0x0202E798  # sDialogueTextBuffer, the formatted text of the open textbox
+DIALOGUE_TEXT_SIZE = 1000
+GROUND_LIVES = 0x03001B84  # gGroundLives: 24 entries of 0x1F0 bytes
+GROUND_LIVE_COUNT, GROUND_LIVE_SIZE = 24, 0x1F0
+GROUND_MAP_ACTION = 0x03001B6C  # gGroundMapAction -> groundMapId at +0xE4
+
+# Formatting codes in dialogue text: "~27" is a hex-escaped character, "#c\x06" and
+# "#C5" set a colour, and other "#X" codes reset colour or pause printing.
+_ESCAPED = re.compile(r"~([0-9a-fA-F]{2})")
+_CODE = re.compile(r"#[cC].|#[A-Za-z]", re.DOTALL)
+
 
 def _ewram(pointer: int, size: int) -> bool:
     return 0x02000000 <= pointer and pointer + size <= 0x02040000
 
 
-def _u32(game: GbaEmulator, address: int) -> int:
-    return struct.unpack("<I", game.read_memory(address, 4))[0]
+def _position(raw: bytes) -> tuple[int, int]:
+    x, y = struct.unpack("<ii", raw)  # PixelPos, s24.8
+    return x // 256, y // 256
 
 
 @dataclass(frozen=True)
@@ -27,34 +45,85 @@ class RamState:
     player_position: tuple[int, int] | None
 
 
-def read_ram_state(game: GbaEmulator) -> RamState:
-    """Read a snapshot without advancing the emulator.
+class GameRam:
+    """Reads game facts without advancing the emulator.
 
-    Addresses match ROM_SHA1. Callers should check the ROM before using them.
+    Raises:
+        ValueError: when the emulator's ROM isn't the one these addresses match.
     """
-    main_loop = _u32(game, 0x0203B03C)  # sMainLoopsUnk: 1 dungeon, 2 ground
-    textbox = _u32(game, 0x03001B64)  # sTextbox
-    textbox_type = _u32(game, textbox) if _ewram(textbox, 0x464) else None
-    # Observed text printer phase: 1 while characters stream, 2 at the page end.
-    printing = textbox_type in (1, 4) and _u32(game, 0x0202E778) == 1
 
-    lives = _u32(game, 0x03001B84)  # gGroundLives
-    position = None
-    if main_loop == 2 and _ewram(lives, 0x14C):
-        x, y = struct.unpack("<ii", game.read_memory(lives + 0x144, 8))
-        position = x // 256, y // 256
+    def __init__(self, game: GbaEmulator) -> None:
+        if hashlib.sha1(game.rom.read_bytes()).hexdigest() != ROM_SHA1:
+            raise ValueError(f"RAM addresses require the Red Rescue Team ROM {ROM_SHA1}")
+        self._game = game
 
-    if main_loop == 1:
-        mode = "dungeon"
-    elif main_loop != 2:
-        mode = "unknown"
-    elif textbox_type == 1 or printing:
-        mode = "dialogue"
-    elif textbox_type == 4:
-        # Type 4 also carries shop dialogue; the phase only distinguishes active printing.
-        mode = "menu"
-    else:
-        mode = "field"
-    speaker = (struct.unpack("<h", game.read_memory(textbox + 0x462, 2))[0]
-               if mode == "dialogue" else None)
-    return RamState(mode, textbox_type, printing, speaker, position)
+    def _value(self, address: int, fmt: str) -> int:
+        return struct.unpack(fmt, self._game.read_memory(address, struct.calcsize(fmt)))[0]
+
+    def _textbox(self) -> int | None:
+        textbox = self._value(TEXTBOX, "<I")
+        return textbox if _ewram(textbox, 0x464) else None
+
+    def _ground_lives(self) -> int | None:
+        if self._value(MAIN_LOOP, "<I") != 2:
+            return None
+        lives = self._value(GROUND_LIVES, "<I")
+        return lives if _ewram(lives, GROUND_LIVE_COUNT * GROUND_LIVE_SIZE) else None
+
+    def textbox_type(self) -> int | None:
+        """The open textbox's type (1 dialogue, 4 dialogue with a menu), or None."""
+        textbox = self._textbox()
+        return self._value(textbox, "<I") if textbox is not None else None
+
+    def text_printing(self) -> bool:
+        return self.textbox_type() in (1, 4) and self._value(TEXT_PHASE, "<I") == 1
+
+    def textbox_text(self) -> str:
+        """The open textbox's whole page, already complete while it prints; "" when closed."""
+        if self.textbox_type() in (None, 0):
+            return ""
+        raw = self._game.read_memory(DIALOGUE_TEXT, DIALOGUE_TEXT_SIZE).split(b"\0")[0]
+        text = _ESCAPED.sub(lambda match: chr(int(match[1], 16)), raw.decode("latin-1"))
+        return _CODE.sub("", text)
+
+    def speaker(self) -> int | None:
+        """Species shown in the open textbox's speaker portrait, or None."""
+        textbox = self._textbox()
+        return self._value(textbox + 0x462, "<h") if textbox is not None else None
+
+    def player_position(self) -> tuple[int, int] | None:
+        """The leader's ground position in tiles, or None outside ground maps."""
+        lives = self._ground_lives()
+        return _position(self._game.read_memory(lives + 0x144, 8)) if lives is not None else None
+
+    def npc_position(self, species: int) -> tuple[int, int] | None:
+        """The ground position of the first loaded Pokémon of this species, or None."""
+        lives = self._ground_lives()
+        for index in range(GROUND_LIVE_COUNT if lives is not None else 0):
+            entry = lives + index * GROUND_LIVE_SIZE
+            if self._value(entry + 2, "<h") != -1 and self._value(entry + 8, "<h") == species:
+                return _position(self._game.read_memory(entry + 0x144, 8))
+        return None
+
+    def ground_map(self) -> int | None:
+        """The current ground map id (1 Pokémon Square, 3 Whiscash Pond), or None."""
+        action = self._value(GROUND_MAP_ACTION, "<I")
+        return self._value(action + 0xE4, "<h") if _ewram(action, 0xE6) else None
+
+    def state(self) -> RamState:
+        """A snapshot for timing captures and showing the operator."""
+        main_loop = self._value(MAIN_LOOP, "<I")
+        textbox_type = self.textbox_type()
+        printing = self.text_printing()
+        if main_loop == 1:
+            mode = "dungeon"
+        elif main_loop != 2:
+            mode = "unknown"
+        elif textbox_type == 1 or printing:
+            mode = "dialogue"
+        elif textbox_type == 4:
+            # Type 4 also carries shop dialogue; the phase only distinguishes active printing.
+            mode = "menu"
+        else:
+            mode = "field"
+        return RamState(mode, textbox_type, printing, self.speaker(), self.player_position())

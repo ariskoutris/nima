@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import struct
 import zlib
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from typing import assert_never
 
 from emulator import Frame, GbaEmulator, scene_distance
 from mystery_dungeon.actions import Action, Press, Wait, name
-from mystery_dungeon.ram_state import ROM_SHA1, RamState, read_ram_state
+from mystery_dungeon.ram_state import GameRam, RamState
 
 
 @dataclass(frozen=True)
@@ -135,11 +134,11 @@ class GameplaySession:
         self.warning: str | None = None
         self._last_action: Action | None = None
         self._unchanged_count = 0
-        self.ram_enabled = (isinstance(emulator, GbaEmulator) and
-                            hashlib.sha1(emulator.rom.read_bytes()).hexdigest() == ROM_SHA1)
+        # Test doubles aren't GbaEmulators and run without RAM-timed captures.
+        self.ram = GameRam(emulator) if isinstance(emulator, GbaEmulator) else None
 
     def ram_state(self) -> RamState | None:
-        return read_ram_state(self.emulator) if self.ram_enabled else None
+        return self.ram.state() if self.ram is not None else None
 
     def load(self, checkpoint: Checkpoint) -> None:
         """Restore a checkpoint and start counting frames and actions again.
