@@ -11,7 +11,7 @@ from mystery_dungeon import benchmark
 from mystery_dungeon.actions import Press
 from mystery_dungeon.models import ModelEntry
 from fakes import ScriptedModel, press, votes
-from mystery_dungeon.benchmark import (CASES, CHECKPOINTS, CORE, ROM, Case, Grader,
+from mystery_dungeon.benchmark import (CASES, CHECKPOINT_NAMES, CHECKPOINTS, CORE, ROM, Case, Grader,
                                        build_fixtures, run_case)
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
@@ -26,8 +26,7 @@ def test_ss0_can_be_read_from_upload_bytes():
 
 @pytest.fixture(scope="module")
 def town(tmp_path_factory):
-    paths = (ROM, CORE, *(CHECKPOINTS / f"{name}.ss0" for name in
-                          ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")))
+    paths = (ROM, CORE, *(CHECKPOINTS / f"{name}.ss0" for name in CHECKPOINT_NAMES))
     if not all(path.is_file() for path in paths):
         pytest.skip("local ROM, core, and town checkpoints required")
     output = tmp_path_factory.mktemp("town")
@@ -215,8 +214,7 @@ def test_slow_inference_still_acts_but_action_budget_stops_after_reach(town, mon
 
 def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     rom, core, model_file = (tmp_path / name for name in ("game.gba", "core", "model.gguf"))
-    for path in (rom, core, model_file, *(tmp_path / f"{name}.ss0" for name in
-                              ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact"))):
+    for path in (rom, core, model_file, *(tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)):
         path.write_bytes(b"test")
     models = [object(), object()]
     cases = (Case("one", "square", "Task one", "down", 1),
@@ -270,8 +268,7 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
 def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     rom, core, knowledge = tmp_path / "game.gba", tmp_path / "core", tmp_path / "controls.md"
     knowledge.write_text("A talks.")
-    for path in (rom, core, *(tmp_path / f"{name}.ss0" for name in
-                              ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact"))):
+    for path in (rom, core, *(tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)):
         path.write_bytes(b"test")
     monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
     monkeypatch.setattr(benchmark, "CASES", (Case("one", "square", "Move", "down", 1),))

@@ -12,7 +12,8 @@ from mystery_dungeon.agent import Agent
 from mystery_dungeon.models import load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import GameplaySession, read_checkpoint
+from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, GameplaySession,
+                                     read_checkpoint)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -27,8 +28,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="a [models.NAME] table in config.toml (default: the first)")
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--turns", type=int, default=1)
-    parser.add_argument("--hold-frames", type=int, default=8)
-    parser.add_argument("--release-frames", type=int, default=4)
+    parser.add_argument("--hold-frames", type=int, default=HOLD_FRAMES)
+    parser.add_argument("--release-frames", type=int, default=RELEASE_FRAMES)
     args = parser.parse_args(argv)
     if min(args.turns, args.hold_frames, args.release_frames) < 1:
         parser.error("turns and frame counts must be positive")

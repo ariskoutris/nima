@@ -2,6 +2,7 @@
 rom = "data/game/roms/red-rescue-team.gba"
 core = "data/engines/cores/mgba_libretro.dylib"
 state = "data/game/checkpoints/square.ss0"
+checkpoints = "data/game/checkpoints"
 
 # Each [models.NAME] table names an adapter (spec) and how to reach it: a serve command
 # that the app runs on a free {port} until it answers its ready path, or the url of a

@@ -9,7 +9,7 @@ from typing import Callable, Sequence
 
 from emulator import Frame
 from mystery_dungeon.actions import ACTIONS, Action
-from mystery_dungeon.session import GameplaySession, perform
+from mystery_dungeon.session import HOLD_FRAMES, RELEASE_FRAMES, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to sample
 
@@ -113,4 +113,4 @@ def events(output: Path) -> list[dict]:
 
 def press(game, action: str) -> None:
     """Perform a named action on a real emulator with the benchmark's timing."""
-    perform(game, ACTIONS[action], 8, 4)
+    perform(game, ACTIONS[action], HOLD_FRAMES, RELEASE_FRAMES)

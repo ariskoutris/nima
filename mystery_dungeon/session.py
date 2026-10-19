@@ -12,6 +12,9 @@ from emulator import Frame, GbaEmulator, scene_distance
 from mystery_dungeon.actions import Action, Press, Wait, name
 from mystery_dungeon.ram_state import GameRam, RamState
 
+HOLD_FRAMES = 8  # frames each action holds its button
+RELEASE_FRAMES = 4  # frames with no input after each action
+
 
 @dataclass(frozen=True)
 class Checkpoint:
@@ -119,7 +122,7 @@ class GameplaySession:
     """Run the emulator for the agent and save every observed frame under output."""
 
     def __init__(self, emulator: GbaEmulator, output: Path,
-                 hold_frames: int = 8, release_frames: int = 4):
+                 hold_frames: int = HOLD_FRAMES, release_frames: int = RELEASE_FRAMES):
         if min(hold_frames, release_frames) < 1:
             raise ValueError("frame counts must be positive")
         self.emulator = emulator

@@ -20,7 +20,8 @@ from mystery_dungeon.agent import Agent, Turn
 from mystery_dungeon.models import ModelEntry, load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import Checkpoint, GameplaySession, read_checkpoint, read_ss0
+from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, Checkpoint, GameplaySession,
+                                     read_checkpoint, read_ss0)
 
 COMMANDS = ("start", "pause", "turn", "manual", "reset")
 MAX_INSTRUCTIONS = 1000
@@ -487,8 +488,8 @@ def main() -> None:
                         help="a [models.NAME] table in config.toml (default: the first)")
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--hold-frames", type=int, default=8)
-    parser.add_argument("--release-frames", type=int, default=4)
+    parser.add_argument("--hold-frames", type=int, default=HOLD_FRAMES)
+    parser.add_argument("--release-frames", type=int, default=RELEASE_FRAMES)
     args = parser.parse_args()
     if min(args.hold_frames, args.release_frames) < 1:
         parser.error("frame counts must be positive")

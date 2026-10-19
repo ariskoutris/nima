@@ -7,6 +7,7 @@ from contextlib import closing
 import hashlib
 import json
 import time
+import tomllib
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,13 +18,12 @@ from mystery_dungeon.models import CONFIG, Model, load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import Checkpoint, GameplaySession, read_ss0
+from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, Checkpoint, GameplaySession,
+                                     read_ss0)
 
 
-ROM = Path("data/game/roms/red-rescue-team.gba")
-CORE = Path("data/engines/cores/mgba_libretro.dylib")
-CHECKPOINTS = Path("data/game/checkpoints")
-HOLD, RELEASE = 8, 4
+GAME = tomllib.loads(CONFIG.read_text())["game"]
+ROM, CORE, CHECKPOINTS = (CONFIG.parent / GAME[key] for key in ("rom", "core", "checkpoints"))
 GRANBULL, LOMBRE, WIGGLYTUFF = 235, 296, 40  # species ids
 WHISCASH_POND = 3  # ground map beyond the square's north exit
 
@@ -67,6 +67,7 @@ CASES = (
          "check_pidgey", 30),
 )
 
+CHECKPOINT_NAMES = tuple(dict.fromkeys(case.start for case in CASES))
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -129,8 +130,7 @@ class Grader:
 
 
 def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
-    checkpoints = {name: read_ss0(CHECKPOINTS / f"{name}.ss0")
-             for name in ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")}
+    checkpoints = {name: read_ss0(CHECKPOINTS / f"{name}.ss0") for name in CHECKPOINT_NAMES}
     folder = output / "references"
     folder.mkdir()
     session = GameplaySession(game, folder)  # saves each checkpoint's frame under frames/
@@ -151,12 +151,12 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     log = RunLog(output, model_name,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
                   "criterion": case.criterion, "action_limit": case.limit,
-                  "hold_frames": HOLD, "release_frames": RELEASE},
+                  "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES},
                  knowledge)
     watched = log.watch(model)
     agent = Agent(watched, watched, knowledge)
     agent.set_instructions(case.task)
-    session = GameplaySession(game, output, HOLD, RELEASE)
+    session = GameplaySession(game, output)
     session.load(checkpoints[case.start])
     if session.ram is None:
         raise ValueError("benchmark grading needs a real emulator")
@@ -235,8 +235,7 @@ def main() -> None:
     (args.output / "cases").mkdir()
     knowledge = args.knowledge.read_text() if args.knowledge else ""
     entry = models[args.model]
-    files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in
-                                  ("square", "face-lombre", "face-npc", "npc-dialogue", "shop-interact")),
+    files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in CHECKPOINT_NAMES),
              *(CONFIG.parent / path for path in entry.files),
              *((args.knowledge,) if args.knowledge else ()))
     hashes = {str(path): sha256(path) for path in files}
@@ -244,7 +243,7 @@ def main() -> None:
         "format_version": 6, "layout": "benchmark", "grader": "pmd-red-ram-v1",
         "model": asdict(entry), "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
-        "hold_frames": HOLD, "release_frames": RELEASE,
+        "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES,
     }, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game, closing(ModelServer(args.output)) as server:
         url = server.start(entry)
