@@ -6,6 +6,8 @@ import hashlib
 import re
 import struct
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 
 from emulator import GbaEmulator
 
@@ -25,6 +27,11 @@ GROUND_MAP_ACTION = 0x03001B6C  # gGroundMapAction -> groundMapId at +0xE4
 # "#C5" set a colour, and other "#X" codes reset colour or pause printing.
 _ESCAPED = re.compile(r"~([0-9a-fA-F]{2})")
 _CODE = re.compile(r"#[cC].|#[A-Za-z]", re.DOTALL)
+
+
+@cache
+def _rom_sha1(rom: Path) -> str:
+    return hashlib.sha1(rom.read_bytes()).hexdigest()  # one hash per ROM path, not per session
 
 
 def _ewram(pointer: int, size: int) -> bool:
@@ -53,7 +60,7 @@ class GameRam:
     """
 
     def __init__(self, game: GbaEmulator) -> None:
-        if hashlib.sha1(game.rom.read_bytes()).hexdigest() != ROM_SHA1:
+        if _rom_sha1(game.rom) != ROM_SHA1:
             raise ValueError(f"RAM addresses require the Red Rescue Team ROM {ROM_SHA1}")
         self._game = game
 
@@ -92,12 +99,12 @@ class GameRam:
         return self._value(textbox + 0x462, "<h") if textbox is not None else None
 
     def player_position(self) -> tuple[int, int] | None:
-        """The leader's ground position in tiles, or None outside ground maps."""
+        """The leader's ground position in pixels, or None outside ground maps."""
         lives = self._ground_lives()
         return _position(self._game.read_memory(lives + 0x144, 8)) if lives is not None else None
 
     def npc_position(self, species: int) -> tuple[int, int] | None:
-        """The ground position of the first loaded Pokémon of this species, or None."""
+        """The ground position in pixels of the first loaded Pokémon of this species, or None."""
         lives = self._ground_lives()
         for index in range(GROUND_LIVE_COUNT if lives is not None else 0):
             entry = lives + index * GROUND_LIVE_SIZE
@@ -126,4 +133,5 @@ class GameRam:
             mode = "menu"
         else:
             mode = "field"
-        return RamState(mode, textbox_type, printing, self.speaker(), self.player_position())
+        speaker = self.speaker() if mode == "dialogue" else None
+        return RamState(mode, textbox_type, printing, speaker, self.player_position())

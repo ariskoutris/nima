@@ -4,7 +4,7 @@ A vision-based agent for Pokémon Mystery Dungeon: Red Rescue Team. Give it a ta
 
 ## Setup
 
-Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro core, and a save state, then set their paths under `[game]` in `config.toml`. Local models need `llama-server` 0.7.0 or later; OneJev also needs its GGUF model files under `data/engines/models/`.
+Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro core, and a save state, then set their paths under `[game]` in `config.toml`; `checkpoints` is the folder of benchmark save states. Local models need `llama-server` 0.7.0 or later; OneJev also needs its GGUF model files under `data/engines/models/`.
 
 ## Models
 

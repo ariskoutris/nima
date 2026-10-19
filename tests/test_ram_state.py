@@ -34,6 +34,8 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         assert session.action_count == actions
         assert GameRam(game).state().mode == ready_mode
         assert not GameRam(game).state().text_printing
+        if ready_mode == "menu":  # the snapshot names a speaker only in dialogue
+            assert GameRam(game).state().speaker_species is None
         assert session.current.rgba != partial
 
 
