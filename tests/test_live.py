@@ -7,8 +7,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
-
 from fakes import Game, ScriptedModel, events, votes
+
 from mystery_dungeon import live
 from mystery_dungeon.models import ModelEntry
 from mystery_dungeon.session import Checkpoint
@@ -213,7 +213,8 @@ def test_one_turn_runs_exactly_one_turn(start_run):
     model = ScriptedModel()
     run, game = start_run(model)
     run.control({"instructions": "Find exit", "command": "turn"})
-    assert wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))["running"] is False
+    state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
+    assert state["running"] is False
     time.sleep(0.05)
     assert len(run.snapshot()["history"]) == 1
     assert game.steps.count(AGENT_PRESS) == 1

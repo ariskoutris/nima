@@ -5,6 +5,7 @@ experiments and deletion over backwards compatibility.
 
 ## Commands
 - Test: `uv run --extra onejev python -m pytest -q`
+- Lint: `uv run ruff check` (`--fix` sorts imports)
 - Play: `uv run --extra onejev -m mystery_dungeon play [--model NAME]`
 - Serve a model: `uv run --extra onejev -m mystery_dungeon serve NAME --port 8080`
 - Benchmark: `uv run -m mystery_dungeon.benchmark --model NAME [--case ID]`

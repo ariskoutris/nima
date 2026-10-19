@@ -5,8 +5,8 @@ import json
 from urllib.error import HTTPError
 
 import pytest
-
 from fakes import FRAME
+
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import MemoryEntry
 from mystery_dungeon.models import d1, load_model

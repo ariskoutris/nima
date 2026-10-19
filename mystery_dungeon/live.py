@@ -20,8 +20,14 @@ from mystery_dungeon.agent import Agent, Turn
 from mystery_dungeon.models import ModelEntry, load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, Checkpoint, GameplaySession,
-                                     read_checkpoint, read_ss0)
+from mystery_dungeon.session import (
+    HOLD_FRAMES,
+    RELEASE_FRAMES,
+    Checkpoint,
+    GameplaySession,
+    read_checkpoint,
+    read_ss0,
+)
 
 COMMANDS = ("start", "pause", "turn", "manual", "reset")
 MAX_INSTRUCTIONS = 1000
@@ -104,7 +110,8 @@ class LiveRun:
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
                     "history": self._log.recent(), "model": self._log.model_name,
-                    "requested_model": self._pending_model(), "models": {name: entry.label for name, entry in self._models.items()},
+                    "requested_model": self._pending_model(),
+                    "models": {name: entry.label for name, entry in self._models.items()},
                     "actions": list(ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
@@ -166,7 +173,7 @@ class LiveRun:
             self._condition.notify_all()
 
     def request_model(self, name: str) -> None:
-        """Switch both model roles to the configured model ``name`` after the current turn is discarded.
+        """Switch both model roles to the configured model ``name``, discarding the current turn.
 
         Raises:
             ValueError: for an unknown model or before the emulator is ready.
@@ -215,7 +222,8 @@ class LiveRun:
     def _run(self) -> None:
         with GbaEmulator(self._rom, self._core) as emulator:
             emulator.on_frame = self._stream
-            session = GameplaySession(emulator, self.output, self._hold_frames, self._release_frames)
+            session = GameplaySession(emulator, self.output,
+                                      self._hold_frames, self._release_frames)
             session.load(self._checkpoint)
             self._after_step(session)
             with self._condition:
@@ -421,8 +429,9 @@ def handler_for(run: LiveRun):
                 self.respond(200, json.dumps(run.snapshot()).encode(), "application/json")
             elif path == "/api/screen":
                 after = request.query.removeprefix("after=")
-                if request.query and (not request.query.startswith("after=") or
-                                      not after.isascii() or not after.isdecimal() or len(after) > 12):
+                valid = (request.query.startswith("after=") and after.isascii() and
+                         after.isdecimal() and len(after) <= 12)
+                if request.query and not valid:
                     self.respond(400, b"Invalid screen revision", "text/plain; charset=utf-8")
                     return
                 screen, revision, frame = run.wait_for_screen(int(after) if request.query else None)
@@ -451,14 +460,16 @@ def handler_for(run: LiveRun):
             try:
                 content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                 length = int(self.headers.get("Content-Length", "0"))
-                if length < 1 or length > (16 * 1024 * 1024 if request.path == "/api/load-state" else 16384):
+                limit = 16 * 1024 * 1024 if request.path == "/api/load-state" else 16384
+                if length < 1 or length > limit:
                     raise ValueError("invalid request size")
                 if request.path in ("/api/control", "/api/model"):
                     if content_type != "application/json":
                         raise ValueError("Content-Type must be application/json")
                     data = json.loads(self.rfile.read(length))
                     if request.path == "/api/model":
-                        if not isinstance(data, dict) or set(data) != {"model"} or not isinstance(data["model"], str):
+                        if (not isinstance(data, dict) or set(data) != {"model"} or
+                                not isinstance(data["model"], str)):
                             raise ValueError("model must be a model name")
                         run.request_model(data["model"])
                     else:
@@ -468,7 +479,8 @@ def handler_for(run: LiveRun):
                         raise ValueError("Content-Type must be application/octet-stream")
                     if request.query not in ("format=state", "format=ss0"):
                         raise ValueError("choose a .state or .ss0 file")
-                    run.load_state_upload(self.rfile.read(length), request.query.removeprefix("format="))
+                    run.load_state_upload(self.rfile.read(length),
+                                          request.query.removeprefix("format="))
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.respond(400, json.dumps({"error": str(exc)}).encode(), "application/json")
                 return

@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from fakes import ScriptedModel, events, start, votes
+
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import Agent
 from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
@@ -20,7 +21,8 @@ def setup(tmp_path, model, knowledge=""):
 def test_config_snapshots_knowledge(tmp_path):
     RunLog(tmp_path, "fake:Model", {"kind": "test"}, "Use the map.")
     config = json.loads((tmp_path / "config.json").read_text())
-    assert config == {"format_version": FORMAT_VERSION, "model": "fake:Model", "run": {"kind": "test"},
+    assert config == {"format_version": FORMAT_VERSION, "model": "fake:Model",
+                      "run": {"kind": "test"},
                       "knowledge": {"file": "knowledge.txt",
                                     "sha256": hashlib.sha256(b"Use the map.").hexdigest()}}
     assert (tmp_path / "knowledge.txt").read_text() == "Use the map."
@@ -74,5 +76,6 @@ def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):
     assert log.recent() == []
     log.record_model_change("other:Model")
     log.record_run_stop("turn_limit", "frames/000001.png")
-    assert [row["event"] for row in events(tmp_path / "run")[-3:]] == ["reset", "model_change", "run_stop"]
+    names = [row["event"] for row in events(tmp_path / "run")[-3:]]
+    assert names == ["reset", "model_change", "run_stop"]
     assert events(tmp_path / "run")[-2]["to"] == "other:Model"

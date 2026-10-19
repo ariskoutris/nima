@@ -5,14 +5,23 @@ import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from fakes import ScriptedModel, press, votes
 
 from emulator import GbaEmulator
 from mystery_dungeon import benchmark
 from mystery_dungeon.actions import Press
+from mystery_dungeon.benchmark import (
+    CASES,
+    CHECKPOINT_NAMES,
+    CHECKPOINTS,
+    CORE,
+    ROM,
+    Case,
+    Grader,
+    build_fixtures,
+    run_case,
+)
 from mystery_dungeon.models import ModelEntry
-from fakes import ScriptedModel, press, votes
-from mystery_dungeon.benchmark import (CASES, CHECKPOINT_NAMES, CHECKPOINTS, CORE, ROM, Case, Grader,
-                                       build_fixtures, run_case)
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
@@ -215,15 +224,16 @@ def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monk
 
 def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     rom, core, model_file = (tmp_path / name for name in ("game.gba", "core", "model.gguf"))
-    for path in (rom, core, model_file, *(tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)):
+    checkpoints = (tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)
+    for path in (rom, core, model_file, *checkpoints):
         path.write_bytes(b"test")
     models = [object(), object()]
     cases = (Case("one", "square", "Task one", "down", 1),
              Case("two", "square", "Task two", "down", 1))
     monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
                                   "--output", str(tmp_path / "run"), "--model", "local"])
-    entry = ModelEntry("local", "Local", "fake:Model", ("llama-server", "-m", "model.gguf"), "/health",
-                       files=(str(model_file),))
+    entry = ModelEntry("local", "Local", "fake:Model", ("llama-server", "-m", "model.gguf"),
+                       "/health", files=(str(model_file),))
     monkeypatch.setattr(benchmark, "read_models", lambda: {"local": entry})
     served = []
 
@@ -253,7 +263,8 @@ def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "report", Mock())
     benchmark.main()
     assert served == [entry, "closed"]
-    assert [call.args for call in load.call_args_list] == [("fake:Model", "http://127.0.0.1:9000")] * 2
+    loaded = [call.args for call in load.call_args_list]
+    assert loaded == [("fake:Model", "http://127.0.0.1:9000")] * 2
     assert run.call_args_list[0].args[2] is models[0]
     assert run.call_args_list[1].args[2] is models[1]
     assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"

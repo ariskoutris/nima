@@ -9,7 +9,8 @@ ACTION_DESCRIPTIONS = {
     "DOWN": "move one step down in the world, or move the menu cursor down",
     "LEFT": "move one step left in the world, or move the menu cursor left",
     "RIGHT": "move one step right in the world, or move the menu cursor right",
-    "A": "press the A button to interact with or talk to what the character faces; confirm a menu choice; advance visible text or dialogue; attack in a dungeon",
+    "A": ("press the A button to interact with or talk to what the character faces; "
+          "confirm a menu choice; advance visible text or dialogue; attack in a dungeon"),
     "B": "press the B button to open the menu during play, cancel a command, or go back",
     "SELECT": "press SELECT to show the dungeon map",
     "WAIT": "press nothing and let the game advance",

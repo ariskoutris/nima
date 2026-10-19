@@ -37,7 +37,8 @@ class WatchedModel:
 
     def choose_action(self, task: str, knowledge: str, frame: Frame,
                       memory: tuple[MemoryEntry, ...]) -> Action:
-        return self._call("choose_action", self._model.choose_action, task, knowledge, frame, memory)
+        return self._call("choose_action", self._model.choose_action,
+                          task, knowledge, frame, memory)
 
     def is_complete(self, task: str, frame: Frame, memory: tuple[MemoryEntry, ...]) -> bool:
         return self._call("is_complete", self._model.is_complete, task, frame, memory)
@@ -83,7 +84,7 @@ class RunLog:
         return WatchedModel(model, self._calls)
 
     def recent(self) -> list[dict]:
-        """Return action rows since the last reset, newest first, without model responses or memory."""
+        """Return action rows since the last reset, newest first, without responses or memory."""
         return list(reversed(self._recent))
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
@@ -93,7 +94,8 @@ class RunLog:
         if transition is None:
             self._write(turn.status, fields)
             return
-        self._recent.append(_summary(self._write(turn.status, {**fields, **_transition_fields(transition)})))
+        row = self._write(turn.status, {**fields, **_transition_fields(transition)})
+        self._recent.append(_summary(row))
 
     def record_discarded(self, turn: Turn, reason: str) -> None:
         """Record a turn that was proposed but never applied."""

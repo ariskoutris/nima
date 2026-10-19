@@ -3,8 +3,8 @@
 from dataclasses import fields
 
 import pytest
-
 from fakes import Game, ScriptedModel, start, votes
+
 from mystery_dungeon.actions import Press, Wait
 from mystery_dungeon.agent import Agent, Turn
 

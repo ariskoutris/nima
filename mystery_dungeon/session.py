@@ -119,13 +119,14 @@ def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
     for index in range(0, len(first.rgba), 4):
         before = first.rgba[index:index + 3]
         after = second.rgba[index:index + 3]
-        if sum(abs(a - b) for a, b in zip(before, after)) <= BLINK_PIXEL_DELTA:
+        if sum(abs(a - b) for a, b in zip(before, after, strict=True)) <= BLINK_PIXEL_DELTA:
             continue
         pixel = index // 4
         block = (pixel % first.width // BLINK_BLOCK_PIXELS,
                  pixel // first.width // BLINK_BLOCK_PIXELS)
         blocks[block] = blocks.get(block, 0) + sum(after) - sum(before)
-    # ponytail: local brightness is a visual heuristic; use cursor detection if another menu animation dominates it.
+    # ponytail: local brightness is a visual heuristic; use cursor detection if another
+    # menu animation dominates it.
     strongest = max(blocks.values(), key=abs, default=0)
     return second if strongest >= 0 else first
 
@@ -238,8 +239,9 @@ class GameplaySession:
         else:
             self._unchanged_count = 0
         self._last_action = action
+        stalled = self._unchanged_count >= STALL_PRESSES
         self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
-                        f"{name(action)} presses" if self._unchanged_count >= STALL_PRESSES else None)
+                        f"{name(action)} presses" if stalled else None)
         return Transition(before, before_name, after, self.current_name,
                           self.image_index - 1, self.action_count,
                           frame_before, self.frame_count)

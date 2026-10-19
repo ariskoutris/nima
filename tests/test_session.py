@@ -1,8 +1,8 @@
 """Checkpoint loading and observations."""
 
 import pytest
-
 from fakes import Game
+
 from mystery_dungeon.actions import Press
 from mystery_dungeon.session import Checkpoint, GameplaySession
 

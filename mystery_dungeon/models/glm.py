@@ -51,7 +51,8 @@ class GlmModel:
         self.last_response = None
         content = [{"type": "text", "text": text}]
         for index, entry in enumerate(memory, 1):
-            content += [{"type": "text", "text": f"Earlier screenshot {index}, followed by {name(entry.action)}:"},
+            label = f"Earlier screenshot {index}, followed by {name(entry.action)}:"
+            content += [{"type": "text", "text": label},
                         _image(entry.frame)]
         content += [{"type": "text", "text": "Current screenshot:"}, _image(frame)]
         payload = {

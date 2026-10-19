@@ -28,14 +28,16 @@ class D1Model:
                       memory: tuple[MemoryEntry, ...]) -> Action:
         question = f"{ACT}\n{knowledge}" if knowledge else ACT
         choice = self._ask(task, frame, memory, {
-            "type": "choice", "instructions": question, "criteria": ACTION_DESCRIPTIONS}).get("choice")
+            "type": "choice", "instructions": question, "criteria": ACTION_DESCRIPTIONS,
+        }).get("choice")
         if choice not in ACTIONS:
             raise ValueError(f"d1 returned an unknown action: {choice!r}")
         return ACTIONS[choice]
 
     def is_complete(self, task: str, frame: Frame, memory: tuple[MemoryEntry, ...]) -> bool:
         # d1 answers a yes/no question with the probability of yes.
-        return self._ask(task, frame, memory, {"type": "noul", "instructions": COMPLETE})["noul"] > 0.5
+        answer = self._ask(task, frame, memory, {"type": "noul", "instructions": COMPLETE})
+        return answer["noul"] > 0.5
 
     def _ask(self, task: str, frame: Frame, memory: tuple[MemoryEntry, ...],
              question: dict) -> dict:

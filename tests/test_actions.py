@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 
 import pytest
-
 from fakes import Game, start
+
 from mystery_dungeon.actions import ACTIONS, Press, Wait, name, to_json
 from mystery_dungeon.prompts import ACTION_DESCRIPTIONS
 

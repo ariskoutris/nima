@@ -69,7 +69,8 @@ def test_starting_another_entry_replaces_the_running_server(tmp_path, monkeypatc
     assert calls[-2][0] == ["llama-server", "9000"] and calls[-1].endswith("/health")
 
 
-def test_an_entry_without_a_command_gets_its_url_and_leaves_the_server_running(tmp_path, monkeypatch):
+def test_an_entry_without_a_command_gets_its_url_and_leaves_the_server_running(tmp_path,
+                                                                                monkeypatch):
     calls = []
     fake_process(monkeypatch, calls)
     server = model_server.ModelServer(tmp_path)
@@ -79,7 +80,8 @@ def test_an_entry_without_a_command_gets_its_url_and_leaves_the_server_running(t
 
 
 def test_only_port_and_python_placeholders_are_filled_in():
-    entry = ModelEntry("x", "X", "a:B", ("{python}", "--port={port}", '{"enable_thinking": false}'), "/r")
+    entry = ModelEntry("x", "X", "a:B",
+                       ("{python}", "--port={port}", '{"enable_thinking": false}'), "/r")
     assert model_server.serve_command(entry, 9000) == [
         sys.executable, "--port=9000", '{"enable_thinking": false}']
 

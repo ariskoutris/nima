@@ -12,8 +12,7 @@ from mystery_dungeon.agent import Agent
 from mystery_dungeon.models import load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, GameplaySession,
-                                     read_checkpoint)
+from mystery_dungeon.session import HOLD_FRAMES, RELEASE_FRAMES, GameplaySession, read_checkpoint
 
 
 def main(argv: list[str] | None = None) -> None:

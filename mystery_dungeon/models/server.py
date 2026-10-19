@@ -67,7 +67,8 @@ class ModelServer:
                 if self.closed:
                     raise RuntimeError("model server is closing")
                 if proc.poll() is not None:
-                    raise RuntimeError(f"model server exited; see {self.output / 'model-server.log'}")
+                    log = self.output / "model-server.log"
+                    raise RuntimeError(f"model server exited; see {log}")
                 try:
                     with urlopen(self.url + entry.ready, timeout=1):  # raises until ready
                         return self.url

@@ -15,4 +15,11 @@ qev = { git = "https://github.com/OmniJev/OneJev.git", rev = "81ce62f1597c91e467
 [dependency-groups]
 dev = [
     "pytest>=8,<10",
+    "ruff>=0.17.1",
 ]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]

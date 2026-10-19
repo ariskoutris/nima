@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
 import hashlib
 import json
 import time
 import tomllib
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,9 +18,13 @@ from mystery_dungeon.models import CONFIG, Model, load_model, read_models
 from mystery_dungeon.models.server import ModelServer
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
-from mystery_dungeon.session import (HOLD_FRAMES, RELEASE_FRAMES, Checkpoint, GameplaySession,
-                                     read_ss0)
-
+from mystery_dungeon.session import (
+    HOLD_FRAMES,
+    RELEASE_FRAMES,
+    Checkpoint,
+    GameplaySession,
+    read_ss0,
+)
 
 GAME = tomllib.loads(CONFIG.read_text())["game"]
 ROM, CORE, CHECKPOINTS = (CONFIG.parent / GAME[key] for key in ("rom", "core", "checkpoints"))
@@ -58,7 +62,8 @@ CASES = (
          "Stop when its first dialogue box appears; do not advance or finish the conversation",
          "granbull", 5),
     Case("dialogue_finish", "npc-dialogue", "Finish the conversation with Granbull", "finish", 18),
-    Case("face_npc_finish", "face-npc", "Talk to Granbull until the conversation ends", "finish", 22),
+    Case("face_npc_finish", "face-npc",
+         "Talk to Granbull until the conversation ends", "finish", 22),
     Case("shop_talk", "shop-interact", "Talk to the shopkeeper in front of you", "wigglytuff", 5),
     Case("shop_buy_friend_area", "shop-interact",
          "Open the Friend Areas list at Wigglytuff's shop and choose one to buy", "buy_reply", 24),
@@ -210,7 +215,8 @@ def report(results: list[dict], output: Path) -> None:
              "|---|:---:|:---:|:---:|:---:|---:|---:|"]
     for row in results:
         lines.append(f"| {row['case']} | {row['reached']} | {row['recognized']} | "
-                     f"{row['missed']} | {row['false_completion']} | {row['actions']} | {row['seconds']} |")
+                     f"{row['missed']} | {row['false_completion']} | {row['actions']} | "
+                     f"{row['seconds']} |")
     lines += ["", "The hidden grader measures reach independently from model completion.",
               "Each turn makes separate completion and action requests, so latency is not "
               "comparable with earlier benchmark reports.", ""]
@@ -221,8 +227,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom", type=Path, default=ROM)
     parser.add_argument("--core", type=Path, default=CORE)
-    parser.add_argument("--output", type=Path,
-                        default=Path("runs/benchmarks") / datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    parser.add_argument("--output", type=Path, default=Path("runs/benchmarks") / timestamp,
                         help="run directory (default: timestamped directory in runs/benchmarks)")
     models = read_models()
     parser.add_argument("--model", required=True, choices=models,

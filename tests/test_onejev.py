@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-
 from fakes import FRAME
+
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import MemoryEntry
 from mystery_dungeon.models import load_model, onejev

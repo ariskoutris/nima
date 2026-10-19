@@ -14,9 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mystery_dungeon.benchmark import CASES
-from mystery_dungeon.models import read_models
-
+from mystery_dungeon.benchmark import CASES  # noqa: E402 (needs ROOT on sys.path)
+from mystery_dungeon.models import read_models  # noqa: E402
 
 CONTROLS = ROOT / "mystery_dungeon/knowledge/controls.md"
 VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge file
@@ -49,7 +48,8 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         "model": model, "selected_cases": cases, "variants": summaries,
     }, indent=2) + "\n")
     lines = ["# Probe comparison", "", f"Model: {model}", "",
-             "| Variant | Cases | Reached | Recognized | Missed | False completion | Model errors | Median turn ms |",
+             "| Variant | Cases | Reached | Recognized | Missed | False completion | Model errors "
+             "| Median turn ms |",
              "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for item in summaries:
         lines.append(f"| {item['variant']} | {len(item['cases'])}/{len(cases)} | "
@@ -73,7 +73,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--model", required=True, choices=read_models())
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     parser.add_argument("--variant", action="append", choices=VARIANTS)
-    parser.add_argument("--output", type=Path, help="new run directory (default: timestamped under runs/experiments)")
+    parser.add_argument("--output", type=Path,
+                        help="new run directory (default: timestamped under runs/experiments)")
     args = parser.parse_args(argv)
     cases = [case.id for case in CASES if args.case is None or case.id in args.case]
     variants = list(dict.fromkeys(args.variant or VARIANTS))

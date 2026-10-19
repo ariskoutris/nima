@@ -1,11 +1,11 @@
 """RAM observations against the checked-in Red Rescue Team checkpoints."""
 
 import pytest
+from fakes import ScriptedModel, press
 
 from emulator import GbaEmulator
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import Agent
-from fakes import ScriptedModel, press
 from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.session import GameplaySession, read_ss0, restore

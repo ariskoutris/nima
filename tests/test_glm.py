@@ -4,8 +4,8 @@ import io
 import json
 
 import pytest
-
 from fakes import FRAME
+
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import MemoryEntry
 from mystery_dungeon.models import glm, load_model

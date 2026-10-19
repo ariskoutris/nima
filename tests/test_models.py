@@ -37,7 +37,8 @@ spec = "c:D"
 url = "http://gpu:8080"
 """)
     assert read_models(path) == {
-        "local": ModelEntry("local", "Local", "a:B", ("llama-server", "--port", "{port}"), "/health"),
+        "local": ModelEntry("local", "Local", "a:B",
+                            ("llama-server", "--port", "{port}"), "/health"),
         "remote": ModelEntry("remote", "Remote", "c:D", url="http://gpu:8080"),
     }
 
