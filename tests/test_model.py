@@ -156,11 +156,12 @@ def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
 def test_on_screen_characters_are_described_relative_to_the_player(monkeypatch):
     sent = answering(monkeypatch, reply({"reasoning": "Face it.", "action": "DOWN"}))
     state = GameState((464, 332), None, "west", (
-        Character("Granbull", (456, 352), "south"), Character("Lombre", (464, 332), "east")))
+        Character("Granbull", (456, 352), "south"), Character("Lombre", (464, 332), "east")),
+        "Quilava")
     ChatModel(SETTINGS).call(Context("Talk", "", (), state), FRAME)
     user = json.loads(sent[0].data)["messages"][1]["content"]
     assert user[-1]["text"] == (
-        "# Game state\nplayer position (464, 332) pixels, facing west\n"
+        "# Game state\nYou play as Quilava.\nplayer position (464, 332) pixels, facing west\n"
         "Characters on screen, relative to you:\n"
         "- Granbull: 8 left, 20 down, facing south\n"
         "- Lombre: same position, facing east")

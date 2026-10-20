@@ -152,6 +152,13 @@ class GameRam:
             return None
         return _position(self._game.read_memory(lives + GROUND_LIVE_POSITION, 8))
 
+    def player_species(self) -> int | None:
+        """Return the leader's species on ground maps, or None elsewhere or before it spawns."""
+        lives = self._ground_lives()
+        if lives is None or self._value(lives + 2, "<h") == -1:
+            return None
+        return self._value(lives + GROUND_LIVE_SPECIES, "<h")
+
     def player_tile(self) -> tuple[int, int] | None:
         """Return the leader's dungeon tile as (x, y), or None outside dungeons."""
         leader = self._dungeon_leader()

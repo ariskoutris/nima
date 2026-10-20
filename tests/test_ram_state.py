@@ -277,3 +277,4 @@ def test_ground_characters_are_named_from_the_rom_and_filtered_to_the_screen(tmp
         names = {character.name for character in state.characters}
         assert {"Granbull", "Lombre"} <= names and "Wigglytuff" not in names  # 260 px away
         assert "Quilava" not in names  # the player isn't listed as another character
+        assert state.species == "Quilava"

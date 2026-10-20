@@ -55,6 +55,7 @@ class GameState:
     tile: tuple[int, int] | None  # in dungeons
     direction: str | None
     characters: tuple[Character, ...] = ()  # on screen, on ground maps
+    species: str | None = None  # the player's, on ground maps
 
 
 @dataclass(frozen=True)
@@ -198,8 +199,9 @@ class GameplaySession:
             for npc in self.ram.ground_characters()
             if abs(npc.position[0] - position[0]) <= VISIBLE_X
             and abs(npc.position[1] - position[1]) <= VISIBLE_Y)
+        species = self.ram.player_species()
         return GameState(position, self.ram.player_tile(), self.ram.player_direction(),
-                         characters)
+                         characters, None if species is None else self.ram.species_name(species))
 
     def load(self, checkpoint: Checkpoint) -> None:
         """Restore a checkpoint and start counting ticks and actions again.

@@ -152,8 +152,10 @@ def _content(context: Context, frame: Frame) -> list[dict]:
                     {"type": "text", "text": "\n".join(after)}]
     current = [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
     if context.game_state is not None:
+        state = context.game_state
+        you = [] if state.species is None else [f"You play as {state.species}."]
         current.append({"type": "text", "text": "# Game state\n" + "\n".join(
-            [describe(context.game_state), *nearby(context.game_state)])})
+            [*you, describe(state), *nearby(state)])})
     return content + current
 
 
