@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from emulator import Frame
-from mystery_dungeon.actions import Action
+from mystery_dungeon.actions import Action, Done, GameAction
 
 if TYPE_CHECKING:
     from mystery_dungeon.model import Model
@@ -25,7 +25,7 @@ class MemoryEntry:
 
     frame: Frame
     screenshot: str
-    action: Action
+    action: GameAction
     reasoning: str | None
 
 
@@ -43,22 +43,21 @@ class Context:
 
 @dataclass(frozen=True)
 class Turn:
-    """What the agent saw and chose in one turn.
-
-    A turn without an action or error reports the task complete.
-    """
+    """What the agent saw and acted on in one turn, the action it chose, and why."""
 
     observation: Observation
     context: Context
-    action: Action | None = None
-    reasoning: str | None = None
-    error: str | None = None
+    action: Action
+    reasoning: str
 
-    @property
-    def status(self) -> Literal["model_error", "completion", "action"]:
-        if self.error is not None:
-            return "model_error"
-        return "completion" if self.action is None else "action"
+
+@dataclass(frozen=True)
+class ModelError:
+    """A turn that produced no action because the model call failed."""
+
+    observation: Observation
+    context: Context
+    message: str
 
 
 class Agent:
@@ -92,11 +91,11 @@ class Agent:
     def clear_memory(self) -> None:
         self._memory.clear()
 
-    def act(self, session: GameplaySession) -> tuple[Turn, Transition | None]:
-        """Observe, ask the model, and apply its action unless it reports completion.
+    def act(self, session: GameplaySession) -> tuple[Turn | ModelError, Transition | None]:
+        """Observe, ask the model, and apply its action unless it is Done.
 
-        Model failures are returned as the turn's error instead of being raised. The
-        transition is None when nothing was applied.
+        Model failures are returned as a ModelError instead of being raised. The transition
+        is None when nothing was applied.
 
         Raises:
             ValueError: when the agent has no task.
@@ -106,19 +105,21 @@ class Agent:
         observation = session.observe()
         context = Context(self._task, self._knowledge, self.memory)
         try:
-            choice = self._model.choose(context, observation.frame)
+            reply = self._model.call(context, observation.frame)
         except Exception as exc:
-            return Turn(observation, context, error=f"{type(exc).__name__}: {exc}"), None
-        turn = Turn(observation, context, choice.action, choice.reasoning)
-        if choice.action is None:
-            return turn, None
-        return turn, self._apply(session, choice.action, choice.reasoning)
+            return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
+        turn = Turn(observation, context, reply.action, reply.reasoning)
+        match reply.action:
+            case Done():
+                return turn, None
+            case action:
+                return turn, self._apply(session, action, reply.reasoning)
 
-    def manual(self, session: GameplaySession, action: Action) -> Transition:
+    def manual(self, session: GameplaySession, action: GameAction) -> Transition:
         """Apply an operator's action; it enters memory like the agent's own."""
         return self._apply(session, action, None)
 
-    def _apply(self, session: GameplaySession, action: Action,
+    def _apply(self, session: GameplaySession, action: GameAction,
                reasoning: str | None) -> Transition:
         transition = session.apply(action)
         self._memory.append(MemoryEntry(transition.before, transition.before_name, action,

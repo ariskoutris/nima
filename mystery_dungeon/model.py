@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from emulator import Frame
 from mystery_dungeon import CONFIG
 from mystery_dungeon.actions import ACTIONS, Action, name
-from mystery_dungeon.prompts import CHOICES, DONE, INSTRUCTIONS
+from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
 
 if TYPE_CHECKING:
     from mystery_dungeon.agent import Context
@@ -23,17 +23,17 @@ TIMEOUT_SECONDS = 120
 ANSWER_SCHEMA = {
     "type": "object",
     "properties": {"reasoning": {"type": "string"},
-                   "action": {"type": "string", "enum": list(CHOICES)}},
+                   "action": {"type": "string", "enum": list(ACTIONS)}},
     "required": ["reasoning", "action"],
     "additionalProperties": False,
 }
 
 
 @dataclass(frozen=True)
-class Choice:
-    """The next action, or None when the model reports the task complete, and why."""
+class Reply:
+    """The action the model chose, and why."""
 
-    action: Action | None
+    action: Action
     reasoning: str
 
 
@@ -43,11 +43,11 @@ class Model(Protocol):
     name: str  # recorded in run configs
     last_response: dict | None  # raw answer to the latest call, kept for the run log
 
-    def choose(self, context: Context, frame: Frame) -> Choice:
-        """Return one action from ACTIONS for the current frame, or report completion.
+    def call(self, context: Context, frame: Frame) -> Reply:
+        """Return one action from ACTIONS for the current frame; Done when the task is complete.
 
         Raises:
-            Exception: when the endpoint fails or answers outside the choices.
+            Exception: when the endpoint fails or answers outside the actions.
         """
         ...
 
@@ -87,16 +87,15 @@ class ChatModel:
         self.name = settings.name
         self.last_response: dict | None = None
 
-    def choose(self, context: Context, frame: Frame) -> Choice:
+    def call(self, context: Context, frame: Frame) -> Reply:
         answer = self._send(_content(context, frame))
         if not isinstance(answer, dict) or answer.keys() != ANSWER_SCHEMA["properties"].keys():
             raise ValueError(f"{self.name} returned an invalid answer: {answer!r}")
-        if not isinstance(answer["action"], str) or answer["action"] not in CHOICES:
+        if not isinstance(answer["action"], str) or answer["action"] not in ACTIONS:
             raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
         if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
-        action = None if answer["action"] == DONE else ACTIONS[answer["action"]]
-        return Choice(action, answer["reasoning"].strip())
+        return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip())
 
     def _send(self, content: list[dict]) -> object:
         """Post one request and return the decoded JSON answer."""
@@ -126,12 +125,12 @@ class ChatModel:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """The task, knowledge and choices, then earlier turns, then the current screenshot."""
+    """The task, knowledge and actions, then earlier turns, then the current screenshot."""
     text = [f"Task: {context.task}"]
     if context.knowledge:
         text.append(f"Knowledge: {context.knowledge}")
-    text.append("Choices:\n" + "\n".join(
-        f"{choice}: {description}" for choice, description in CHOICES.items()))
+    text.append("Actions:\n" + "\n".join(
+        f"{action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
     content = [{"type": "text", "text": "\n\n".join(text)}]
     for index, entry in enumerate(context.memory, 1):
         if entry.reasoning is None:

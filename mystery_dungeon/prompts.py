@@ -1,4 +1,4 @@
-"""Model-facing wording: the turn instructions and the choices."""
+"""Model-facing wording: the turn instructions and the actions."""
 
 INSTRUCTIONS = ("You are playing Pokémon Mystery Dungeon: Red Rescue Team. "
                 "Choose the next action that moves the task forward, or DONE when the task is "
@@ -11,8 +11,7 @@ INSTRUCTIONS = ("You are playing Pokémon Mystery Dungeon: Red Rescue Team. "
                 "2. Whether your last action did what you expected, and if not, why. "
                 "3. Your plan, and what you expect the next screenshot to show. "
                 "Continue with your existing action plan or adapt it.")
-DONE = "DONE"
-CHOICES = {  # every action in ACTIONS, plus DONE
+ACTION_DESCRIPTIONS = {  # one per action in ACTIONS
     "UP": "move one tile up, or move the menu cursor up",
     "DOWN": "move one tile down, or move the menu cursor down",
     "LEFT": "move one tile left, or move the menu cursor left",
@@ -22,5 +21,5 @@ CHOICES = {  # every action in ACTIONS, plus DONE
     "B": "open the menu, cancel, or go back",
     "SELECT": "show the dungeon map",
     "WAIT": "press nothing and let the game run",
-    DONE: "report that the task is complete; this ends the task",
+    "DONE": "report that the task is complete; this ends the task",
 }

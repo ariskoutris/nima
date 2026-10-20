@@ -10,13 +10,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
-from mystery_dungeon.actions import Action, to_json
+from mystery_dungeon.actions import Done, GameAction, to_json
 
 if TYPE_CHECKING:
     from emulator import Frame
-    from mystery_dungeon.agent import Context, Turn
-    from mystery_dungeon.model import Choice, Model
-    from mystery_dungeon.session import Transition
+    from mystery_dungeon.agent import Context, ModelError, Turn
+    from mystery_dungeon.model import Model, Reply
+    from mystery_dungeon.session import Observation, Transition
 
 # Shared by run and benchmark configs. 9: no discarded rows; operator input waits for the
 # turn in progress instead of cancelling it.
@@ -36,10 +36,10 @@ class LoggedModel:
     def last_response(self) -> dict | None:
         return self._model.last_response
 
-    def choose(self, context: Context, frame: Frame) -> Choice:
+    def call(self, context: Context, frame: Frame) -> Reply:
         started = time.perf_counter()
         try:
-            return self._model.choose(context, frame)
+            return self._model.call(context, frame)
         finally:
             self._calls.append({"ms": round((time.perf_counter() - started) * 1000),
                                 "response": self._model.last_response})
@@ -73,15 +73,28 @@ class RunLog:
         return list(reversed(self._recent))
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
-        """Record an agent turn; transition is None when nothing was applied."""
-        fields = self._turn_fields(turn)
-        if transition is None:
-            self._write(turn.status, fields)
-            return
-        row = self._write(turn.status, {**fields, **_transition_fields(transition)})
-        self._recent.append(_summary(row))
+        """Record an agent turn; transition is what its game action did, None for Done.
 
-    def record_manual(self, action: Action, transition: Transition) -> None:
+        Raises:
+            ValueError: when a game action comes without its transition.
+        """
+        fields = {**self._step_fields(turn.observation, turn.context),
+                  "reasoning": turn.reasoning}
+        match turn.action:
+            case Done():
+                self._write("completion", fields)
+            case action if transition is not None:
+                row = self._write("action", {**fields, "action": to_json(action),
+                                             **_transition_fields(transition)})
+                self._recent.append(_summary(row))
+            case _:
+                raise ValueError("a game action needs the transition it caused")
+
+    def record_model_error(self, error: ModelError) -> None:
+        self._write("model_error", {**self._step_fields(error.observation, error.context),
+                                    "error": error.message})
+
+    def record_manual(self, action: GameAction, transition: Transition) -> None:
         self._recent.append(_summary(self._write("action", {
             "source": "manual", "action": to_json(action),
             **_transition_fields(transition)})))
@@ -93,21 +106,13 @@ class RunLog:
     def record_run_stop(self, reason: str, screenshot: str) -> None:
         self._write("run_stop", {"reason": reason, "screenshot": screenshot})
 
-    def _turn_fields(self, turn: Turn) -> dict:
-        """Describe a turn and take the model calls made since the previous turn."""
+    def _step_fields(self, observation: Observation, context: Context) -> dict:
+        """Describe what the agent acted on and take the model calls made since the last row."""
         calls, self._calls[:] = self._calls.copy(), []
-        fields = {"source": "agent", "task": turn.context.task,
-                  "screenshot": turn.observation.screenshot,
-                  "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action),
-                              "reasoning": entry.reasoning} for entry in turn.context.memory],
-                  "model_calls": calls}
-        if turn.action is not None:
-            fields["action"] = to_json(turn.action)
-        if turn.reasoning is not None:
-            fields["reasoning"] = turn.reasoning
-        if turn.error is not None:
-            fields["error"] = turn.error
-        return fields
+        return {"source": "agent", "task": context.task, "screenshot": observation.screenshot,
+                "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action),
+                            "reasoning": entry.reasoning} for entry in context.memory],
+                "model_calls": calls}
 
     def _write(self, event: str, fields: dict) -> dict:
         row = {"event": event, "time": datetime.now().astimezone().isoformat(timespec="seconds"),

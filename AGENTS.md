@@ -51,11 +51,12 @@ experiments and deletion over backwards compatibility.
 ## Names
 One term per concept in code, prompts, log fields, flags and docs:
 - task: what the agent is currently pursuing; the model decides when it is complete by
-  answering DONE instead of an action.
+  choosing the action `Done`.
 - task list: a tree of tasks rooted at "beat the game". A task's children are prerequisites that
   must be completed first (e.g. level up before a boss). The agent maintains it because what to
   attempt next isn't always clear. The design is pending; this core idea is fixed.
-- action: one `Press(button)` or `Wait()`, the closed set in `actions.py`.
+- action: one `Press(button)`, `Wait()` or `Done()`, the closed set in `actions.py`. `GameAction`
+  (Press, Wait) is what the game performs; Done reports the task complete to the runner.
 - short-term memory: recent reasoning, observations and turns, plus information retrieved for the
   current task.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
@@ -63,7 +64,7 @@ One term per concept in code, prompts, log fields, flags and docs:
   task information comes from here. It starts with prerequisite information such as
   `knowledge/controls.md`. Not "guide". The memory design is pending; this two-level
   split is fixed.
-- model: what the agent asks each turn to choose an action or DONE (`Model`, `ChatModel`),
+- model: what the agent calls each turn for an action and its reasoning (`Model`, `ChatModel`),
   configured by `[model]` in `config.toml`; `name` is its endpoint id.
 - context: what the model acts on each turn besides the current frame: the task, knowledge and
   short-term memory (`agent.Context`).

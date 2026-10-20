@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 
 from emulator import Frame, GbaEmulator
 from mystery_dungeon import CORE, ROM, STATE
-from mystery_dungeon.actions import ACTIONS, Action
-from mystery_dungeon.agent import Agent, Turn
+from mystery_dungeon.actions import GAME_ACTIONS, Done, GameAction
+from mystery_dungeon.agent import Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
@@ -37,7 +37,7 @@ FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
 
 @dataclass(frozen=True)
 class Manual:
-    action: Action
+    action: GameAction
     task: str  # the task when the operator acted, so the move stays in that task's memory
 
 
@@ -100,7 +100,7 @@ class LiveRun:
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
                     "history": self._log.recent(), "model": self._log.model.name,
-                    "actions": list(ACTIONS), "output": str(self.output)}
+                    "actions": list(GAME_ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
         """Return the screen PNG, its revision and game frame once it is newer than ``after``.
@@ -131,7 +131,7 @@ class LiveRun:
         if command is not None and command not in COMMANDS:
             raise ValueError("unknown command")
         action = data.get("action")
-        if command == "manual" and action not in ACTIONS:
+        if command == "manual" and action not in GAME_ACTIONS:
             raise ValueError("invalid manual action")
         if command != "manual" and action is not None:
             raise ValueError("action requires the manual command")
@@ -149,7 +149,7 @@ class LiveRun:
                 case "pause":
                     self._mode = "paused"
                 case "manual":
-                    self._queue(Manual(ACTIONS[action], task))
+                    self._queue(Manual(GAME_ACTIONS[action], task))
                 case "reset":
                     self._queue(Load(None))
             self._condition.notify_all()
@@ -223,25 +223,25 @@ class LiveRun:
 
     def _turn(self, session: GameplaySession, task: str) -> None:
         self._agent.set_task(task)
-        turn, transition = self._agent.act(session)
+        result, transition = self._agent.act(session)
         with self._condition:
-            self._log.record_turn(turn, transition)
-            self._settle(turn)
+            match result:
+                case ModelError(message=message):
+                    self._log.record_model_error(result)
+                    self._mode = "paused"
+                    self._error = f"Model failed: {message}"
+                # Done for a task the operator replaced during the turn doesn't end the new one.
+                case Turn(action=Done()) if result.context.task == self._task:
+                    self._log.record_turn(result, transition)
+                    self._mode = "paused"
+                    self._notice = f"Completed: {result.context.task}"
+                case Turn():
+                    self._log.record_turn(result, transition)
+                    if self._mode == "one_turn":
+                        self._mode = "paused"
         self._after_step(session)
 
-    def _settle(self, turn: Turn) -> None:
-        match turn.status:
-            # A completion for a task the operator replaced during the turn doesn't end the new one.
-            case "completion" if turn.context.task == self._task:
-                self._mode = "paused"
-                self._notice = f"Completed: {turn.context.task}"
-            case "model_error":
-                self._mode = "paused"
-                self._error = f"Model failed: {turn.error}"
-            case "action" if self._mode == "one_turn":
-                self._mode = "paused"
-
-    def _manual(self, session: GameplaySession, action: Action, task: str) -> None:
+    def _manual(self, session: GameplaySession, action: GameAction, task: str) -> None:
         self._agent.set_task(task)
         transition = self._agent.manual(session, action)
         with self._condition:

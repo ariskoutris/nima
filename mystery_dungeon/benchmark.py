@@ -12,7 +12,8 @@ from pathlib import Path
 
 from emulator import GbaEmulator
 from mystery_dungeon import CHECKPOINTS, CORE, ROM
-from mystery_dungeon.agent import MEMORY_TURNS, Agent
+from mystery_dungeon.actions import Done
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.ram_state import GameRam
@@ -175,15 +176,20 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         if session.action_count >= case.limit:
             reason = "limit"
             break
-        turn, transition = agent.act(session)
-        log.record_turn(turn, transition)
-        if turn.status == "model_error":
-            reason, error = "model_error", turn.error
-            break
-        turns += 1
-        if turn.status == "completion":
-            reason = "recognized" if reached_at is not None else "false_completion"
-            break
+        result, transition = agent.act(session)
+        match result:
+            case ModelError(message=message):
+                log.record_model_error(result)
+                reason, error = "model_error", message
+                break
+            case Turn(action=Done()):
+                log.record_turn(result, transition)
+                turns += 1
+                reason = "recognized" if reached_at is not None else "false_completion"
+                break
+            case Turn():
+                log.record_turn(result, transition)
+                turns += 1
     final = session.current
     final.save_png(output / "frames/final.png")
     (output / "states").mkdir(exist_ok=True)

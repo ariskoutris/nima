@@ -3,6 +3,7 @@
 import hashlib
 import json
 
+import pytest
 from fakes import ScriptedModel, events, start, votes
 
 from mystery_dungeon.actions import Press
@@ -61,12 +62,20 @@ def test_completion_and_model_error_rows(tmp_path):
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
     model.error = RuntimeError("down")
-    log.record_turn(*agent.act(session))
+    error, _ = agent.act(session)
+    log.record_model_error(error)
     rows = events(tmp_path / "run")
     assert [row["event"] for row in rows] == ["completion", "model_error"]
     assert "action" not in rows[0] and rows[0]["reasoning"] == "Done talking."
     assert rows[1]["error"] == "RuntimeError: down" and rows[1]["task"] == "Find exit"
     assert not log.recent()
+
+
+def test_a_game_action_without_its_transition_is_rejected(tmp_path):
+    log, agent, session = setup(tmp_path, ScriptedModel())
+    turn, _ = agent.act(session)
+    with pytest.raises(ValueError, match="transition"):
+        log.record_turn(turn, None)
 
 
 def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):

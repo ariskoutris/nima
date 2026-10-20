@@ -5,13 +5,15 @@ from dataclasses import dataclass
 import pytest
 from fakes import Game, start
 
-from mystery_dungeon.actions import ACTIONS, Press, Wait, name, to_json
-from mystery_dungeon.prompts import CHOICES, DONE
+from mystery_dungeon.actions import ACTIONS, GAME_ACTIONS, Done, Press, Wait, name, to_json
+from mystery_dungeon.prompts import ACTION_DESCRIPTIONS
 
 
 def test_names_round_trip_serialize_and_have_descriptions():
     assert all(name(action) == key for key, action in ACTIONS.items())
-    assert CHOICES.keys() - {DONE} == ACTIONS.keys()
+    assert ACTION_DESCRIPTIONS.keys() == ACTIONS.keys()
+    assert ACTIONS.keys() - GAME_ACTIONS.keys() == {"DONE"}
+    assert name(Done()) == "DONE" and Done() not in GAME_ACTIONS.values()
     assert to_json(Press("UP")) == {"type": "press", "button": "UP"}
     assert to_json(Wait()) == {"type": "wait"}
 

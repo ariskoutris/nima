@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import assert_never
 
 from emulator import Frame, GbaEmulator, scene_distance
-from mystery_dungeon.actions import Action, Press, Wait, name
+from mystery_dungeon.actions import GameAction, Press, Wait, name
 from mystery_dungeon.ram_state import GameRam, RamState
 
 HOLD_FRAMES = 8  # frames each action holds its button
@@ -99,7 +99,8 @@ def restore(game: GbaEmulator, checkpoint: Checkpoint) -> None:
     game.step()
 
 
-def perform(game: GbaEmulator, action: Action, hold_frames: int, release_frames: int) -> None:
+def perform(game: GbaEmulator, action: GameAction, hold_frames: int,
+            release_frames: int) -> None:
     """Hold the action's input for hold_frames, then release it for release_frames."""
     match action:
         case Press(button):
@@ -148,7 +149,7 @@ class GameplaySession:
         self.current: Frame | None = None
         self.current_name = ""
         self.warning: str | None = None
-        self._last_action: Action | None = None
+        self._last_action: GameAction | None = None
         self._unchanged_count = 0
         # Test doubles aren't GbaEmulators and run without RAM-timed captures.
         self.ram = GameRam(emulator) if isinstance(emulator, GbaEmulator) else None
@@ -226,7 +227,7 @@ class GameplaySession:
         self.wait_for_text()
         return Observation(self.current_frame(), self.current_name)
 
-    def apply(self, action: Action) -> Transition:
+    def apply(self, action: GameAction) -> Transition:
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
         before, before_name, frame_before = self.current, self.current_name, self.frame_count

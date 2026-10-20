@@ -5,8 +5,8 @@ from dataclasses import fields
 import pytest
 from fakes import Game, ScriptedModel, start, votes
 
-from mystery_dungeon.actions import Press, Wait
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, Turn
+from mystery_dungeon.actions import Done, Press, Wait
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, Turn
 
 
 def agent_with(model, task="Find exit", knowledge=""):
@@ -23,7 +23,7 @@ def test_turns_act_on_the_task_knowledge_and_memory(tmp_path):
     turn, _ = agent.act(session)
     assert turn.context == Context("Find exit", "Use the map.", turn.context.memory)
     assert [entry.action for entry in turn.context.memory] == [Press("A")]
-    assert model.calls[-1] == ("choose", turn.context, turn.observation.frame)
+    assert model.calls[-1] == ("call", turn.context, turn.observation.frame)
 
 
 def test_a_new_task_clears_memory(tmp_path):
@@ -83,16 +83,15 @@ def test_completion_applies_nothing(tmp_path):
     game = Game()
     model = ScriptedModel(complete=votes(True))
     turn, transition = agent_with(model).act(start(tmp_path, game))
-    assert turn.status == "completion"
+    assert turn.action == Done()
     assert transition is None
     assert game.steps == []
-    assert [call[0] for call in model.calls] == ["choose"]
+    assert [call[0] for call in model.calls] == ["call"]
 
 
 def test_incomplete_task_applies_the_chosen_action(tmp_path):
     game = Game()
     turn, transition = agent_with(ScriptedModel(["WAIT"])).act(start(tmp_path, game))
-    assert turn.status == "action"
     assert turn.action == Wait()
     assert transition.action_number == 1
     assert game.steps == [(8, ()), (4, ())]
@@ -101,24 +100,23 @@ def test_incomplete_task_applies_the_chosen_action(tmp_path):
 def test_model_failures_become_model_errors(tmp_path):
     model = ScriptedModel(error=RuntimeError("model down"))
     game = Game()
-    turn, transition = agent_with(model).act(start(tmp_path, game))
-    assert turn.status == "model_error"
-    assert turn.error == "RuntimeError: model down"
-    assert turn.context.task == "Find exit"
+    error, transition = agent_with(model).act(start(tmp_path, game))
+    assert isinstance(error, ModelError)
+    assert error.message == "RuntimeError: model down"
+    assert error.context.task == "Find exit"
     assert transition is None and game.steps == []
 
 
 def test_each_turn_makes_one_model_call(tmp_path):
     model = ScriptedModel()
     agent_with(model).act(start(tmp_path))
-    assert [call[0] for call in model.calls] == ["choose"]
+    assert [call[0] for call in model.calls] == ["call"]
 
 
 def test_reasoning_of_a_completion_is_kept_on_the_turn(tmp_path):
     model = ScriptedModel(complete=votes(True), reasoning="The dialogue has closed.")
     turn, _ = agent_with(model).act(start(tmp_path))
-    assert turn.status == "completion" and turn.action is None
-    assert turn.reasoning == "The dialogue has closed."
+    assert turn.action == Done() and turn.reasoning == "The dialogue has closed."
 
 
 def test_missing_task_fails_before_any_model_call(tmp_path):
@@ -131,7 +129,7 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "context", "action", "reasoning", "error"}
+        "observation", "context", "action", "reasoning"}
 
 
 def test_agent_writes_no_files(tmp_path):
@@ -149,7 +147,7 @@ def test_agent_only_needs_observe_and_apply(tmp_path):
         def apply(self, action):
             return session.apply(action)
 
-    assert agent_with(ScriptedModel()).act(SessionPort())[0].status == "action"
+    assert agent_with(ScriptedModel()).act(SessionPort())[0].action == Press("A")
 
 
 def test_repeated_actions_warn_without_stopping(tmp_path):
@@ -158,6 +156,6 @@ def test_repeated_actions_warn_without_stopping(tmp_path):
     agent = agent_with(model)
     session = start(tmp_path, game)
     for _ in range(12):
-        assert agent.act(session)[0].status == "action"
+        assert agent.act(session)[0].action == Press("A")
     assert game.steps == [(8, ("A",)), (4, ())] * 12
     assert session.warning == "Possible stall: little screen change after 12 A presses"

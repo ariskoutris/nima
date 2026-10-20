@@ -4,7 +4,7 @@ import pytest
 from fakes import ScriptedModel, press
 
 from emulator import GbaEmulator
-from mystery_dungeon.actions import Press
+from mystery_dungeon.actions import Done, Press
 from mystery_dungeon.agent import Agent
 from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
 from mystery_dungeon.ram_state import GameRam
@@ -122,7 +122,7 @@ def test_agent_plans_only_after_text_finishes(tmp_path):
         model = ScriptedModel(complete=complete)
         agent = Agent(model)
         agent.set_task("Read Granbull's line")
-        assert agent.act(session)[0].status == "completion"
+        assert agent.act(session)[0].action == Done()
         assert session.action_count == 1
 
 
@@ -146,8 +146,8 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
         agent = Agent(model)
         agent.set_task("Finish talking to Lombre")
         for _ in range(9):
-            assert agent.act(session)[0].status == "action"
-        assert agent.act(session)[0].status == "completion"
+            assert agent.act(session)[0].action == Press("A")
+        assert agent.act(session)[0].action == Done()
         assert session.action_count == 9
 
 

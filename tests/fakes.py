@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from emulator import Frame
-from mystery_dungeon.actions import ACTIONS
-from mystery_dungeon.model import Choice
+from mystery_dungeon.actions import ACTIONS, GAME_ACTIONS, Done
+from mystery_dungeon.model import Reply
 from mystery_dungeon.session import HOLD_FRAMES, RELEASE_FRAMES, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to sample
@@ -18,7 +18,7 @@ FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to
 class ScriptedModel:
     """Answer from fixed scripts and record every call.
 
-    Actions are model-facing names; the last one repeats, and every choice comes
+    Actions are model-facing names; the last one repeats, and every reply comes
     with ``reasoning``. ``complete`` is asked during each call, which reports the
     task complete instead of acting when it answers True. With a
     ``gate``, each call waits until the gate is set, after setting ``entered``.
@@ -39,13 +39,13 @@ class ScriptedModel:
         self.last_response: dict | None = None
         self._chosen = 0
 
-    def choose(self, context, frame) -> Choice:
-        self._called("choose", context, frame)
+    def call(self, context, frame) -> Reply:
+        self._called("call", context, frame)
         if self.complete():
-            return Choice(None, self.reasoning)
+            return Reply(Done(), self.reasoning)
         action = self.actions[min(self._chosen, len(self.actions) - 1)]
         self._chosen += 1
-        return Choice(ACTIONS[action], self.reasoning)
+        return Reply(ACTIONS[action], self.reasoning)
 
     def _called(self, *call) -> None:
         self.calls.append(call)
@@ -116,4 +116,4 @@ def events(output: Path) -> list[dict]:
 
 def press(game, action: str) -> None:
     """Perform a named action on a real emulator with the benchmark's timing."""
-    perform(game, ACTIONS[action], HOLD_FRAMES, RELEASE_FRAMES)
+    perform(game, GAME_ACTIONS[action], HOLD_FRAMES, RELEASE_FRAMES)

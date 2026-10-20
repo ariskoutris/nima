@@ -7,10 +7,10 @@ import pytest
 from fakes import FRAME
 
 from mystery_dungeon import model
-from mystery_dungeon.actions import Press
+from mystery_dungeon.actions import Done, Press
 from mystery_dungeon.agent import Context, MemoryEntry
-from mystery_dungeon.model import ChatModel, ChatSettings, Choice, read_settings
-from mystery_dungeon.prompts import DONE, INSTRUCTIONS
+from mystery_dungeon.model import ChatModel, ChatSettings, Reply, read_settings
+from mystery_dungeon.prompts import INSTRUCTIONS
 
 MEMORY = (MemoryEntry(FRAME, "before.png", Press("UP"), "Walk up to the door."),
           MemoryEntry(FRAME, "manual.png", Press("A"), None))
@@ -41,8 +41,8 @@ def reply(answer, finish_reason="stop"):
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({"reasoning": " The door is ahead. ", "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
-    choice = chat_model.choose(Context("Find the exit", "Avoid walls", MEMORY), FRAME)
-    assert choice == Choice(Press("DOWN"), "The door is ahead.")
+    answer = chat_model.call(Context("Find the exit", "Avoid walls", MEMORY), FRAME)
+    assert answer == Reply(Press("DOWN"), "The door is ahead.")
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
     payload = json.loads(sent[0].data)
@@ -63,20 +63,20 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     schema = payload["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["reasoning", "action"]
     assert schema["required"] == ["reasoning", "action"]
-    assert {"WAIT", DONE} <= set(schema["properties"]["action"]["enum"])
+    assert {"WAIT", "DONE"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
 
 def test_done_reports_completion_with_its_reasoning(monkeypatch):
-    answering(monkeypatch, reply({"reasoning": "The dialogue closed.", "action": DONE}))
-    choice = ChatModel(SETTINGS).choose(Context("Find the exit", "", MEMORY), FRAME)
-    assert choice == Choice(None, "The dialogue closed.")
+    answering(monkeypatch, reply({"reasoning": "The dialogue closed.", "action": "DONE"}))
+    answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
+    assert answer == Reply(Done(), "The dialogue closed.")
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
     sent = answering(monkeypatch, reply({"reasoning": "Wait.", "action": "WAIT"}))
     local = ChatModel(ChatSettings("http://localhost/v1/chat/completions", "local"))
-    local.choose(Context("Talk", "", ()), FRAME)
+    local.call(Context("Talk", "", ()), FRAME)
     assert sent[0].get_header("Authorization") is None
     assert local.name == "local"
 
@@ -108,5 +108,5 @@ def test_invalid_answers_raise_and_keep_the_response(monkeypatch, response, mess
     answering(monkeypatch, response)
     chat_model = ChatModel(SETTINGS)
     with pytest.raises(ValueError, match=message):
-        chat_model.choose(Context("Talk", "", ()), FRAME)
+        chat_model.call(Context("Talk", "", ()), FRAME)
     assert chat_model.last_response == response

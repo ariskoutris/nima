@@ -67,7 +67,7 @@ def test_case_is_reachable_by_scripted_play(town, case):
     route = ROUTES[case.id]
 
     def done():
-        earlier_calls = sum(call[0] == "choose" for call in model.calls) - 1
+        earlier_calls = sum(call[0] == "call" for call in model.calls) - 1
         return case.criterion in ("finish", "finish_lombre") and earlier_calls == len(route)
 
     model = ScriptedModel(route, done)

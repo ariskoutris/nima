@@ -17,12 +17,19 @@ class Wait:
     """Press nothing and let the game advance for one action's duration."""
 
 
-Action = Press | Wait
+@dataclass(frozen=True)
+class Done:
+    """Report the task complete; it goes to the runner, never to the game."""
 
-ACTIONS: dict[str, Action] = {
+
+GameAction = Press | Wait  # what the game performs
+Action = GameAction | Done
+
+GAME_ACTIONS: dict[str, GameAction] = {
     **{button: Press(button) for button in ("UP", "DOWN", "LEFT", "RIGHT", "A", "B", "SELECT")},
     "WAIT": Wait(),
 }
+ACTIONS: dict[str, Action] = {**GAME_ACTIONS, "DONE": Done()}
 _NAMES = {action: name for name, action in ACTIONS.items()}
 
 
