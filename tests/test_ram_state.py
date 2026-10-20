@@ -260,3 +260,20 @@ def test_observations_carry_the_game_state_before_and_after_a_move(tmp_path):
         x, y = observed.position
         after = transition.after.game_state
         assert after.position[0] == x and after.position[1] > y
+
+
+def test_ground_characters_are_named_from_the_rom_and_filtered_to_the_screen(tmp_path):
+    if not all(path.is_file() for path in (ROM, CORE, CHECKPOINTS / "square.ss0")):
+        pytest.skip("local ROM, core, and checkpoint required")
+    with GbaEmulator(ROM, CORE) as game:
+        restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
+        session = GameplaySession(game, tmp_path)
+        session.capture()
+        ram = GameRam(game)
+        assert ram.species_name(235) == "Granbull" and ram.species_name(40) == "Wigglytuff"
+        assert ram.npc_position(235) == (456, 352)
+        assert len(ram.ground_characters()) > 10  # the whole square is loaded
+        state = session.observe().game_state
+        names = {character.name for character in state.characters}
+        assert {"Granbull", "Lombre"} <= names and "Wigglytuff" not in names  # 260 px away
+        assert "Quilava" not in names  # the player isn't listed as another character

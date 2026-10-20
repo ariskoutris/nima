@@ -25,6 +25,9 @@ BLINK_PIXEL_DELTA = 100  # summed RGB difference for a pixel to count as blinkin
 BLINK_BLOCK_PIXELS = 16  # side of the square regions compared for the strongest blink
 STALL_SCENE_DISTANCE = 3  # scene_distance below which a press barely changed the screen
 STALL_PRESSES = 8  # repeated barely-changing presses before warning the operator
+# Characters within this many pixels of the player across and down count as on screen: the
+# screen is 240x160 and the camera centres the player except at map edges.
+VISIBLE_X, VISIBLE_Y = 120, 80
 
 
 @dataclass(frozen=True)
@@ -36,12 +39,22 @@ class Checkpoint:
 
 
 @dataclass(frozen=True)
+class Character:
+    """Another character on screen, positioned like the player."""
+
+    name: str
+    position: tuple[int, int]
+    direction: str
+
+
+@dataclass(frozen=True)
 class GameState:
     """What the model may know from RAM besides the frame. Positions are (x, y), y downward."""
 
     position: tuple[int, int] | None  # pixels, on ground maps
     tile: tuple[int, int] | None  # in dungeons
     direction: str | None
+    characters: tuple[Character, ...] = ()  # on screen, on ground maps
 
 
 @dataclass(frozen=True)
@@ -179,8 +192,14 @@ class GameplaySession:
         """Return the game state the model may know, or None without RAM."""
         if self.ram is None:
             return None
-        return GameState(self.ram.player_position(), self.ram.player_tile(),
-                         self.ram.player_direction())
+        position = self.ram.player_position()
+        characters = () if position is None else tuple(
+            Character(self.ram.species_name(npc.species), npc.position, npc.direction)
+            for npc in self.ram.ground_characters()
+            if abs(npc.position[0] - position[0]) <= VISIBLE_X
+            and abs(npc.position[1] - position[1]) <= VISIBLE_Y)
+        return GameState(position, self.ram.player_tile(), self.ram.player_direction(),
+                         characters)
 
     def load(self, checkpoint: Checkpoint) -> None:
         """Restore a checkpoint and start counting ticks and actions again.

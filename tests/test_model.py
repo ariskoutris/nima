@@ -19,7 +19,7 @@ from mystery_dungeon.model import (
     scaled,
 )
 from mystery_dungeon.prompts import INSTRUCTIONS
-from mystery_dungeon.session import GameState, Observation
+from mystery_dungeon.session import Character, GameState, Observation
 
 MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to the door."),
           MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
@@ -151,3 +151,16 @@ def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
                      "Reasoning: Step left.\nAction: LEFT",
                      "# Current screenshot", None,
                      "# Game state\nplayer tile (4, 7), facing west"]
+
+
+def test_on_screen_characters_are_described_relative_to_the_player(monkeypatch):
+    sent = answering(monkeypatch, reply({"reasoning": "Face it.", "action": "DOWN"}))
+    state = GameState((464, 332), None, "west", (
+        Character("Granbull", (456, 352), "south"), Character("Lombre", (464, 332), "east")))
+    ChatModel(SETTINGS).call(Context("Talk", "", (), state), FRAME)
+    user = json.loads(sent[0].data)["messages"][1]["content"]
+    assert user[-1]["text"] == (
+        "# Game state\nplayer position (464, 332) pixels, facing west\n"
+        "Characters on screen, relative to you:\n"
+        "- Granbull: 8 left, 20 down, facing south\n"
+        "- Lombre: same position, facing east")

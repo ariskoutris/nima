@@ -23,6 +23,12 @@ GROUND_LIVES = 0x03001B84  # gGroundLives
 GROUND_LIVE_COUNT, GROUND_LIVE_SIZE = 24, 0x1F0
 GROUND_MAP_ACTION = 0x03001B6C  # gGroundMapAction -> groundMapId at +0xE4
 GROUND_LIVE_POSITION, GROUND_LIVE_DIRECTION = 0x144, 0x142  # GroundLive unk144, direction1
+GROUND_LIVE_SPECIES = 0x8
+# The species table in ROM: one entry per species id, each starting with a pointer to the
+# species name. Found from the pointers to "Wigglytuff", "Granbull" and "Lombre" (ids 40, 235
+# and 296), which sit exactly SPECIES_ENTRY_SIZE apart per id.
+SPECIES_TABLE, SPECIES_ENTRY_SIZE = 0x08357B98, 0x48
+SPECIES_NAME_SIZE = 16  # longest name read; names end at the first zero byte
 # pmd-red names gDungeon without an address; this is the EWRAM_INIT pointer whose team slot 0
 # points at its own teamPokemonEntities, found by scanning RAM in normal-maze.ss0.
 DUNGEON = 0x0203B418  # gDungeon
@@ -55,6 +61,15 @@ def _ewram(pointer: int, size: int) -> bool:
 def _position(raw: bytes) -> tuple[int, int]:
     x, y = struct.unpack("<ii", raw)  # PixelPos, s24.8
     return x // 256, y // 256
+
+
+@dataclass(frozen=True)
+class GroundCharacter:
+    """A character loaded on the ground map, positioned in pixels like the leader."""
+
+    species: int
+    position: tuple[int, int]
+    direction: str
 
 
 @dataclass(frozen=True)
@@ -159,12 +174,28 @@ class GameRam:
 
     def npc_position(self, species: int) -> tuple[int, int] | None:
         """Return the ground position in pixels of the first loaded ``species``, or None."""
+        return next((character.position for character in self.ground_characters()
+                     if character.species == species), None)
+
+    def ground_characters(self) -> tuple[GroundCharacter, ...]:
+        """Return the characters loaded on the ground map besides the leader; () elsewhere."""
         lives = self._ground_lives()
-        for index in range(GROUND_LIVE_COUNT if lives is not None else 0):
+        characters = []
+        for index in range(1, GROUND_LIVE_COUNT if lives is not None else 0):
             entry = lives + index * GROUND_LIVE_SIZE
-            if self._value(entry + 2, "<h") != -1 and self._value(entry + 8, "<h") == species:
-                return _position(self._game.read_memory(entry + GROUND_LIVE_POSITION, 8))
-        return None
+            if self._value(entry + 2, "<h") == -1:  # an empty slot
+                continue
+            direction = self._value(entry + GROUND_LIVE_DIRECTION, "<B")
+            characters.append(GroundCharacter(
+                self._value(entry + GROUND_LIVE_SPECIES, "<h"),
+                _position(self._game.read_memory(entry + GROUND_LIVE_POSITION, 8)),
+                DIRECTIONS[direction & DIRECTION_MASK]))
+        return tuple(characters)
+
+    def species_name(self, species: int) -> str:
+        """Return a species' name from the ROM's species table."""
+        pointer = self._value(SPECIES_TABLE + species * SPECIES_ENTRY_SIZE, "<I")
+        return self._game.read_memory(pointer, SPECIES_NAME_SIZE).split(b"\0")[0].decode("latin-1")
 
     def ground_map(self) -> int | None:
         """Return the current ground map id (1 Pokémon Square, 3 Whiscash Pond), or None."""

@@ -8,7 +8,8 @@ the listed actions that moves the task forward.
 Earlier turns are listed oldest first; turn -1 is the most recent. Each shows the screenshot and \
 game state you saw then, your reasoning and the action you took; the next turn shows the result. \
 An operator turn is an action someone else took. The game state is read from the game: your \
-character's position as (x, y), with x growing rightward and y downward, and the way it faces.
+character's position as (x, y), with x growing rightward and y downward, the way it faces, and \
+where the other characters on screen are relative to you. In towns one step is 16.
 
 In your reasoning, state briefly:
 1. What the current screenshot and game state show: where your character is and which way it \

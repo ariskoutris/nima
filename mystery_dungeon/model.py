@@ -152,7 +152,8 @@ def _content(context: Context, frame: Frame) -> list[dict]:
                     {"type": "text", "text": "\n".join(after)}]
     current = [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
     if context.game_state is not None:
-        current.append({"type": "text", "text": f"# Game state\n{describe(context.game_state)}"})
+        current.append({"type": "text", "text": "# Game state\n" + "\n".join(
+            [describe(context.game_state), *nearby(context.game_state)])})
     return content + current
 
 
@@ -166,6 +167,26 @@ def describe(state: GameState) -> str:
     if state.direction is not None:
         parts.append(f"facing {state.direction}")
     return ", ".join(parts) or "unknown"
+
+
+def nearby(state: GameState) -> list[str]:
+    """Describe each on-screen character by its offset from the player."""
+    if state.position is None or not state.characters:
+        return []
+    lines = ["Characters on screen, relative to you:"]
+    for character in state.characters:
+        offset = ", ".join(part for part in (
+            _offset(character.position[0] - state.position[0], "right", "left"),
+            _offset(character.position[1] - state.position[1], "down", "up")) if part)
+        lines.append(f"- {character.name}: {offset or 'same position'}, "
+                     f"facing {character.direction}")
+    return lines
+
+
+def _offset(distance: int, positive: str, negative: str) -> str:
+    if distance == 0:
+        return ""
+    return f"{abs(distance)} {positive if distance > 0 else negative}"
 
 
 def _image(frame: Frame) -> dict:
