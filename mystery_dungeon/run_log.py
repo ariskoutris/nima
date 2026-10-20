@@ -15,7 +15,7 @@ from mystery_dungeon.actions import Action, to_json
 if TYPE_CHECKING:
     from emulator import Frame
     from mystery_dungeon.agent import MemoryEntry, Turn
-    from mystery_dungeon.models import Model
+    from mystery_dungeon.model import Model
     from mystery_dungeon.session import Transition
 
 # Shared by run and benchmark configs. 7: one counter for both; benchmark results drop
@@ -24,12 +24,13 @@ FORMAT_VERSION = 7
 RECENT_ROWS = 40
 
 
-class WatchedModel:
+class LoggedModel:
     """Delegate to a model while timing each call and keeping its raw response for the log."""
 
     def __init__(self, model: Model, calls: list[dict]) -> None:
         self._model = model
         self._calls = calls
+        self.name = model.name
 
     @property
     def last_response(self) -> dict | None:
@@ -55,15 +56,15 @@ class WatchedModel:
 class RunLog:
     """Write config.json once, then append one events.jsonl row per event.
 
-    Model calls made through watch() are attached to the next recorded turn.
+    Calls made through ``model`` are attached to the next recorded turn.
     """
 
-    def __init__(self, output: Path, model_name: str, run: Mapping[str, str | int],
+    def __init__(self, output: Path, model: Model, run: Mapping[str, str | int],
                  knowledge: str = "") -> None:
         output.mkdir(parents=True, exist_ok=True)
         self._output = output
-        self._model_name = model_name
         self._calls: list[dict] = []
+        self.model = LoggedModel(model, self._calls)
         self._recent: deque[dict] = deque(maxlen=RECENT_ROWS)
         self._task: str | None = None
         snapshot = None
@@ -72,16 +73,9 @@ class RunLog:
             (output / "knowledge.txt").write_bytes(data)
             snapshot = {"file": "knowledge.txt", "sha256": hashlib.sha256(data).hexdigest()}
         (output / "config.json").write_text(json.dumps({
-            "format_version": FORMAT_VERSION, "model": model_name,
+            "format_version": FORMAT_VERSION, "model": model.name,
             "knowledge": snapshot, "run": dict(run),
         }, indent=2) + "\n")
-
-    @property
-    def model_name(self) -> str:
-        return self._model_name
-
-    def watch(self, model: Model) -> WatchedModel:
-        return WatchedModel(model, self._calls)
 
     def recent(self) -> list[dict]:
         """Return action rows since the last reset, newest first, without responses or memory."""
@@ -104,7 +98,7 @@ class RunLog:
 
     def record_manual(self, action: Action, transition: Transition) -> None:
         self._recent.append(_summary(self._write("action", {
-            "source": "manual", "action": to_json(action), "model": self._model_name,
+            "source": "manual", "action": to_json(action), "model": self.model.name,
             **_transition_fields(transition)})))
 
     def record_reset(self, screenshot: str) -> None:
@@ -126,7 +120,7 @@ class RunLog:
                   "screenshot": turn.observation.screenshot, "complete": turn.complete,
                   "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action)}
                              for entry in turn.memory],
-                  "model": self._model_name, "model_calls": calls}
+                  "model": self.model.name, "model_calls": calls}
         if turn.action is not None:
             fields["action"] = to_json(turn.action)
         if turn.error is not None:

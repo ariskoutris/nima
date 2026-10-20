@@ -41,7 +41,7 @@ def start_run(tmp_path, monkeypatch):
         state_file.write_bytes(b"start")
         monkeypatch.setattr(live, "GbaEmulator", lambda rom, core: game)
         run = live.LiveRun(tmp_path / "game.gba", tmp_path / "core", state_file,
-                           tmp_path / "output", model, "fake", 8, 4)
+                           tmp_path / "output", model, 8, 4)
         thread = threading.Thread(target=run.run)
         threads.append((run, thread))
         thread.start()

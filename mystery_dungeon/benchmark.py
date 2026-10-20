@@ -13,8 +13,7 @@ from pathlib import Path
 from emulator import GbaEmulator
 from mystery_dungeon import CHECKPOINTS, CORE, ROM
 from mystery_dungeon.agent import Agent
-from mystery_dungeon.models import Model
-from mystery_dungeon.models.glm import MODEL, GlmModel
+from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
@@ -147,16 +146,14 @@ def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
 
 
 def run_case(game: GbaEmulator, case: Case, model: Model,
-             checkpoints: dict[str, Checkpoint], output: Path,
-             knowledge: str = "", model_name: str = "injected") -> dict:
+             checkpoints: dict[str, Checkpoint], output: Path, knowledge: str = "") -> dict:
     output.mkdir(parents=True, exist_ok=False)
-    log = RunLog(output, model_name,
+    log = RunLog(output, model,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
                   "criterion": case.criterion, "limit": case.limit,
                   "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES},
                  knowledge)
-    watched = log.watch(model)
-    agent = Agent(watched, watched, knowledge)
+    agent = Agent(log.model, log.model, knowledge)
     agent.set_instructions(case.task)
     session = GameplaySession(game, output)
     session.load(checkpoints[case.start])
@@ -230,7 +227,8 @@ def main() -> None:
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
-    model = GlmModel()  # fails on a missing key before any output exists
+    settings = read_settings()
+    model = ChatModel(settings)  # fails on a missing key before any output exists
     selected = [case for case in CASES if args.case is None or case.id in args.case]
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
@@ -240,7 +238,7 @@ def main() -> None:
     hashes = {str(path): sha256(path) for path in files}
     (args.output / "config.json").write_text(json.dumps({
         "format_version": FORMAT_VERSION, "layout": "benchmark", "grader": "pmd-red-ram-v1",
-        "model": MODEL, "cases": [asdict(c) for c in selected],
+        "model": asdict(settings), "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES,
     }, indent=2) + "\n")
@@ -250,7 +248,7 @@ def main() -> None:
         for case in selected:
             print(case.id, flush=True)
             result = run_case(game, case, model, checkpoints, args.output / "cases" / case.id,
-                              knowledge, MODEL)
+                              knowledge)
             results.append(result)
             report(results, args.output)
             print(f"  {result['stop_reason']} after {result['actions']} actions", flush=True)

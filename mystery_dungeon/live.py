@@ -18,8 +18,7 @@ from emulator import Frame, GbaEmulator
 from mystery_dungeon import CORE, ROM, STATE
 from mystery_dungeon.actions import ACTIONS, Action
 from mystery_dungeon.agent import Agent, Turn
-from mystery_dungeon.models import Model
-from mystery_dungeon.models.glm import MODEL, GlmModel
+from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
     HOLD_FRAMES,
@@ -63,7 +62,7 @@ class LiveRun:
     """
 
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 model: Model, model_name: str, hold_frames: int, release_frames: int,
+                 model: Model, hold_frames: int, release_frames: int,
                  knowledge: str = "") -> None:
         if output.exists():
             raise FileExistsError(f"session output already exists: {output}")
@@ -71,12 +70,11 @@ class LiveRun:
         self._rom, self._core = rom, core
         self._checkpoint = read_checkpoint(state)
         self._hold_frames, self._release_frames = hold_frames, release_frames
-        self._log = RunLog(output, model_name,
+        self._log = RunLog(output, model,
                            {"kind": "live", "rom": str(rom), "core": str(core),
                             "initial_state": str(state), "hold_frames": hold_frames,
                             "release_frames": release_frames}, knowledge)
-        watched = self._log.watch(model)
-        self._agent = Agent(watched, watched, knowledge)
+        self._agent = Agent(self._log.model, self._log.model, knowledge)
         self._condition = threading.Condition()
         self._instructions = ""
         self._mode = "paused"  # paused | running | one_turn
@@ -100,7 +98,7 @@ class LiveRun:
                     "instructions": self._instructions, "running": self._mode != "paused",
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
-                    "history": self._log.recent(), "model": self._log.model_name,
+                    "history": self._log.recent(), "model": self._log.model.name,
                     "actions": list(ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
@@ -427,9 +425,9 @@ def main() -> None:
     args = parser.parse_args()
     if min(args.hold_frames, args.release_frames) < 1:
         parser.error("frame counts must be positive")
-    model = GlmModel()  # fails on a missing key before any output exists
+    model = ChatModel(read_settings())  # fails on a missing key before any output exists
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    run = LiveRun(args.rom, args.core, args.state, output, model, MODEL,
+    run = LiveRun(args.rom, args.core, args.state, output, model,
                   args.hold_frames, args.release_frames,
                   args.knowledge.read_text() if args.knowledge else "")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))

@@ -10,7 +10,7 @@ from emulator import Frame
 from mystery_dungeon.actions import Action
 
 if TYPE_CHECKING:
-    from mystery_dungeon.models import ActionModel, PlanningModel
+    from mystery_dungeon.model import ActionModel, PlanningModel
     from mystery_dungeon.session import GameplaySession, Observation, Transition
 
 MEMORY_ENTRIES = 1

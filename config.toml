@@ -3,3 +3,16 @@ rom = "data/game/roms/red-rescue-team.gba"
 core = "data/engines/cores/mgba_libretro.dylib"
 state = "data/game/checkpoints/square.ss0"
 checkpoints = "data/game/checkpoints"
+
+# Any OpenAI-compatible chat-completions endpoint. api_key_env names the environment variable
+# holding the key; leave it out for local servers. request is merged into every request body
+# as-is, for endpoint-specific options.
+[model]
+url = "https://openrouter.ai/api/v1/chat/completions"
+name = "z-ai/glm-5.3-flash"
+api_key_env = "OPENROUTER_API_KEY"
+max_tokens = 4096
+
+[model.request]
+reasoning = { effort = "low" }
+provider = { require_parameters = true }  # OpenRouter: only route to providers that support the schema

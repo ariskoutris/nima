@@ -21,6 +21,7 @@ from mystery_dungeon.benchmark import (
     build_fixtures,
     run_case,
 )
+from mystery_dungeon.model import ChatSettings
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
@@ -231,7 +232,9 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
              Case("two", "square", "Task two", "down", 1))
     monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
                                       "--output", str(tmp_path / "run")])
-    monkeypatch.setattr(benchmark, "GlmModel", Mock(return_value=model))
+    settings = ChatSettings("http://endpoint", "vendor/model")
+    monkeypatch.setattr(benchmark, "read_settings", lambda: settings)
+    monkeypatch.setattr(benchmark, "ChatModel", Mock(return_value=model))
     monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
     monkeypatch.setattr(benchmark, "CASES", cases)
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
@@ -245,7 +248,7 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
     assert config["format_version"] == FORMAT_VERSION
-    assert config["model"] == benchmark.MODEL
+    assert config["model"]["name"] == "vendor/model"
     assert "time_limit_seconds" not in config
     assert "recognition_window" not in config
 
@@ -259,7 +262,8 @@ def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "CASES", (Case("one", "square", "Move", "down", 1),))
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
-    monkeypatch.setattr(benchmark, "GlmModel", Mock(return_value=object()))
+    monkeypatch.setattr(benchmark, "read_settings", lambda: ChatSettings("http://x", "m"))
+    monkeypatch.setattr(benchmark, "ChatModel", Mock(return_value=object()))
     run = Mock(return_value={"stop_reason": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())

@@ -18,5 +18,5 @@ def imported_modules(path: Path) -> set[str]:
 
 
 def test_agent_and_models_never_import_game_state():
-    for path in (PACKAGE / "agent.py", PACKAGE / "prompts.py", *(PACKAGE / "models").glob("*.py")):
+    for path in (PACKAGE / "agent.py", PACKAGE / "prompts.py", PACKAGE / "model.py"):
         assert not imported_modules(path) & FORBIDDEN, path

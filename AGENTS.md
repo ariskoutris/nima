@@ -9,7 +9,7 @@ experiments and deletion over backwards compatibility.
 - Play: `uv run --env-file .env -m mystery_dungeon.live`
 - Benchmark: `uv run --env-file .env -m mystery_dungeon.benchmark [--case ID]`
 - Probe: `uv run --env-file .env -m scripts.probe [--case ID] [--variant NAME]`
-- `--env-file .env` supplies `OPENROUTER_API_KEY`.
+- `--env-file .env` supplies the API key named by `[model] api_key_env` in `config.toml`.
 - Don't start benchmarks, probes or model runs unless asked; give the command instead.
 
 ## Architecture
@@ -40,7 +40,7 @@ experiments and deletion over backwards compatibility.
 
 ## Object design
 - Give each module and class one responsibility: the agent decides, the session drives the emulator, runners own logging and run output, the live server coordinates operator input. Call another object's public methods instead of reaching into its state.
-- Add a Protocol only at a seam with two or more real implementations (e.g. the GLM model plus scripted test models). For a single implementation, use the concrete class; no ABCs, factories or registries.
+- Add a Protocol only at a seam with two or more real implementations (e.g. the chat model plus scripted test models). For a single implementation, use the concrete class; no ABCs, factories or registries.
 - `PlanningModel` and `ActionModel` are separate roles that one object may fill: a deliberate exception that keeps room for a separate planner.
 - Compose objects instead of inheriting. To share code, write a module-level function, not a base class.
 - Use `@dataclass(frozen=True)` for values passed between components. Only the owning class mutates its state.
@@ -63,6 +63,8 @@ One term per concept in code, prompts, log fields, flags and docs:
   task information comes from here. It starts with prerequisite information such as
   `knowledge/controls.md`. Not "context" or "guide". The memory design is pending; this two-level
   split is fixed.
+- model: what the agent asks each turn to judge completion and choose an action
+  (`Model`, `ChatModel`), configured by `[model]` in `config.toml`; `name` is its endpoint id.
 - frame: an image in memory. screenshot: its saved PNG.
 - case: one benchmark task. variant: one probe configuration. limit: a case's action budget.
 - Don't use "goal" or "decision". "steering" is reserved for future mid-run operator guidance.
@@ -77,8 +79,8 @@ One term per concept in code, prompts, log fields, flags and docs:
 
 ## General practice
 - Type-hint every public signature. Put constants in UPPER_CASE at module top.
-- Define each path, hash, timing and model setting once: paths in `config.toml`, the
-  rest as a constant in its owning module.
+- Define each path, hash, timing and model setting once: paths and model settings in
+  `config.toml`, the rest as a constant in its owning module.
 - Keep functions small with early returns. Replace boolean parameters that switch behaviour with two functions or an explicit value.
 - Prefer the standard library; ask before adding a dependency.
 - Test behaviour through public APIs, never private attributes. Every bug fix or new rule gets a test.

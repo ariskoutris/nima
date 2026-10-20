@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mystery_dungeon.benchmark import CASES  # noqa: E402 (needs ROOT on sys.path)
-from mystery_dungeon.models.glm import MODEL  # noqa: E402
+from mystery_dungeon.model import read_settings  # noqa: E402
 
 CONTROLS = ROOT / "mystery_dungeon/knowledge/controls.md"
 VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge file
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--output", type=Path,
                         help="new run directory (default: timestamped under runs/experiments)")
     args = parser.parse_args(argv)
-    model = MODEL
+    model = read_settings().name
     cases = [case.id for case in CASES if args.case is None or case.id in args.case]
     variants = list(dict.fromkeys(args.variant or VARIANTS))
     output = (args.output or ROOT / "runs/experiments" /

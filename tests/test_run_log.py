@@ -11,17 +11,16 @@ from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
 
 
 def setup(tmp_path, model, knowledge=""):
-    log = RunLog(tmp_path / "run", "fake:Model", {"kind": "test"}, knowledge)
-    watched = log.watch(model)
-    agent = Agent(watched, watched, knowledge)
+    log = RunLog(tmp_path / "run", model, {"kind": "test"}, knowledge)
+    agent = Agent(log.model, log.model, knowledge)
     agent.set_instructions("Find exit")
     return log, agent, start(tmp_path / "run")
 
 
 def test_config_snapshots_knowledge(tmp_path):
-    RunLog(tmp_path, "fake:Model", {"kind": "test"}, "Use the map.")
+    RunLog(tmp_path, ScriptedModel(), {"kind": "test"}, "Use the map.")
     config = json.loads((tmp_path / "config.json").read_text())
-    assert config == {"format_version": FORMAT_VERSION, "model": "fake:Model",
+    assert config == {"format_version": FORMAT_VERSION, "model": "scripted",
                       "run": {"kind": "test"},
                       "knowledge": {"file": "knowledge.txt",
                                     "sha256": hashlib.sha256(b"Use the map.").hexdigest()}}

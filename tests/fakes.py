@@ -31,6 +31,7 @@ class ScriptedModel:
         self.error = error
         self.entered = threading.Event()
         self.calls: list[tuple] = []
+        self.name = "scripted"
         self.last_response: dict | None = None
         self._chosen = 0
 
