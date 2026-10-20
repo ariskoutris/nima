@@ -6,8 +6,15 @@ import pytest
 from fakes import Game, ScriptedModel, finding, start, votes
 
 from mystery_dungeon.actions import Press, Stop, Wait
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, Turn
-from mystery_dungeon.model import Replacement, ScratchpadEdit
+from mystery_dungeon.agent import (
+    EDIT_REJECTED,
+    MEMORY_TURNS,
+    Agent,
+    Context,
+    ModelError,
+    Turn,
+)
+from mystery_dungeon.model import LineChange, ScratchpadEdit
 
 
 def agent_with(model, task="Find exit", knowledge=""):
@@ -39,46 +46,52 @@ def test_a_new_task_clears_memory(tmp_path):
 
 def test_scratchpad_edits_use_the_numbers_shown_this_turn(tmp_path):
     model = ScriptedModel(["A"], edits=[
-        ScratchpadEdit(("Find Kecleon.", "Shop is east, a guess.", "Buy a berry.")),
-        ScratchpadEdit(("Talked to Kecleon.",), (1,),
-                       (Replacement(2, "Shop is east of the well."),)),
-        ScratchpadEdit((), (1, 3))])
+        ScratchpadEdit(add=("Find Kecleon.", "Shop is east, a guess.", "Buy a berry.")),
+        ScratchpadEdit(lines=(LineChange(1, None), LineChange(2, "Shop is east of the well.")),
+                       add=("Talked to Kecleon.",)),
+        ScratchpadEdit(lines=(LineChange(1, None), LineChange(3, None))),
+        ScratchpadEdit(rewrite=("Bought a berry.", "Task done."))])
     agent = agent_with(model)
     session = start(tmp_path)
-    for _ in range(3):
+    for _ in range(4):
         agent.act(session)
     assert model.calls[0][1].scratchpad == ()
     assert model.calls[1][1].scratchpad == ("Find Kecleon.", "Shop is east, a guess.",
                                             "Buy a berry.")
-    # Replaced in place, the removal renumbers, and the addition goes at the end.
+    # Changed in place, the deletion renumbers, and the addition goes at the end.
     assert model.calls[2][1].scratchpad == ("Shop is east of the well.", "Buy a berry.",
                                             "Talked to Kecleon.")
-    assert agent.scratchpad == ("Buy a berry.",)
+    assert model.calls[3][1].scratchpad == ("Buy a berry.",)
+    assert agent.scratchpad == ("Bought a berry.", "Task done.")
 
 
-@pytest.mark.parametrize("edit", [
-    ScratchpadEdit(("Never added.",), (7,)),
-    ScratchpadEdit(("Never added.",), (1,), (Replacement(7, "No such line."),))])
-def test_changing_a_missing_line_is_a_model_error_that_changes_nothing(tmp_path, edit):
+@pytest.mark.parametrize("edit,problem", [
+    (ScratchpadEdit(lines=(LineChange(7, None),)), "lines [7] are not shown"),
+    (ScratchpadEdit(lines=(LineChange(1, None), LineChange(1, "Twice."))),
+     "lines [1] were changed more than once"),
+    (ScratchpadEdit(rewrite=("Fresh.",), add=("More.",)), "a rewrite came with"),
+    (ScratchpadEdit(add=(" ",)), "a line was empty"),
+    (ScratchpadEdit(rewrite=("[1] Talked to Kecleon.",)), "started with a line number"),
+])
+def test_a_rejected_edit_keeps_the_turn_and_says_why_in_the_scratchpad(tmp_path, edit, problem):
     game = Game()
-    model = ScriptedModel(["A"], edits=[ScratchpadEdit(("Find Kecleon.",)), edit])
+    model = ScriptedModel(["A"], edits=[ScratchpadEdit(add=("Find Kecleon.",)), edit],
+                          findings=[[], [finding("Kecleon runs the shop in Pokémon Square.")]])
     agent = agent_with(model)
     session = start(tmp_path, game)
     agent.act(session)
-    steps = list(game.steps)
-    error, transition = agent.act(session)
-    assert isinstance(error, ModelError) and "[7]" in error.message
-    assert transition is None and game.steps == steps
-    assert agent.scratchpad == ("Find Kecleon.",)
+    turn, transition = agent.act(session)
+    assert problem in turn.scratchpad_problem
+    assert transition is not None and len(agent.findings) == 1  # the action and findings apply
+    first, note = agent.scratchpad
+    assert first == "Find Kecleon." and note == EDIT_REJECTED.format(
+        problem=turn.scratchpad_problem)
 
 
-@pytest.mark.parametrize("fields", [
-    {"remove": (1,), "replace": (Replacement(1, "Twice."),)},
-    {"replace": (Replacement(1, "a"), Replacement(1, "b"))},
-    {"add": (" ",)}, {"replace": (Replacement(1, ""),)}, {"add": ("[2] Talked to Kecleon.",)}])
-def test_every_scratchpad_edit_is_checked_wherever_it_comes_from(fields):
-    with pytest.raises(ValueError, match="invalid scratchpad edit"):
-        ScratchpadEdit(**fields)
+def test_an_edit_that_applies_has_no_problem(tmp_path):
+    turn, _ = agent_with(ScriptedModel(edits=[ScratchpadEdit(add=("Find Kecleon.",))])).act(
+        start(tmp_path))
+    assert turn.scratchpad_problem is None
 
 
 def test_findings_accumulate_without_reaching_the_model(tmp_path):
@@ -95,7 +108,7 @@ def test_findings_accumulate_without_reaching_the_model(tmp_path):
 
 
 def test_a_new_task_or_cleared_memory_forgets_scratchpad_and_findings(tmp_path):
-    model = ScriptedModel(["A"], edits=[ScratchpadEdit(("A line.",))] * 3,
+    model = ScriptedModel(["A"], edits=[ScratchpadEdit(add=("A line.",))] * 3,
                           findings=[[finding("A fact.")]] * 3)
     agent = agent_with(model)
     session = start(tmp_path)
@@ -111,7 +124,7 @@ def test_a_new_task_or_cleared_memory_forgets_scratchpad_and_findings(tmp_path):
 
 
 def test_a_stop_applies_its_scratchpad_edit_and_findings(tmp_path):
-    model = ScriptedModel(stop=votes(True), edits=[ScratchpadEdit(("Talked to Kecleon.",))],
+    model = ScriptedModel(stop=votes(True), edits=[ScratchpadEdit(add=("Talked to Kecleon.",))],
                           findings=[[finding("Kecleon runs the shop in Pokémon Square.")]])
     agent = agent_with(model)
     agent.act(start(tmp_path))
@@ -213,7 +226,8 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "context", "action", "reasoning", "scratchpad", "findings"}
+        "observation", "context", "action", "reasoning", "scratchpad", "findings",
+        "scratchpad_problem"}
 
 
 def test_agent_writes_no_files(tmp_path):

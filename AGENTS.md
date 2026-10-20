@@ -59,8 +59,9 @@ One term per concept in code, prompts, log fields, flags and docs:
   complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
   reasoning.
 - scratchpad: the model's working lines for the current task (what is done, what was
-  tried, the plan, guesses), shown numbered from 1 every turn. It replaces, removes and adds
-  lines by those numbers; the scratchpad is cleared when the task changes.
+  tried, the plan, guesses), shown numbered from 1 every turn. An edit either rewrites it or
+  changes and deletes lines by those numbers and appends new ones; an edit that can't apply is
+  skipped and the agent adds a line saying why. It is cleared when the task changes.
 - finding: a standalone fact about the game the model records (a kind and a text that states
   any uncertainty). Findings are never shown back to the model; they are logged with each turn
   for the orchestrator, which will merge them into knowledge.

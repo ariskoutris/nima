@@ -14,7 +14,7 @@ from mystery_dungeon.model import (
     ChatModel,
     ChatSettings,
     Finding,
-    Replacement,
+    LineChange,
     Reply,
     ScratchpadEdit,
     internal_reasoning,
@@ -29,7 +29,7 @@ MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to
           MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
-EMPTY = {"scratchpad": {"add": [], "remove": [], "replace": []}, "findings": []}
+EMPTY = {"scratchpad": {"rewrite": None, "lines": [], "add": []}, "findings": []}
 CHARIZARD = {"kind": "dialogue",
              "text": " Charizard in Pokémon Square says its team reached Gold Rank. "}
 
@@ -57,16 +57,18 @@ def reply(answer, finish_reason="stop"):
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({
         "reasoning": " The door is ahead. ",
-        "scratchpad": {"add": [" Found the door. "], "remove": [2],
-                       "replace": [{"line": 1, "text": " Left the house, a guess. "}]},
+        "scratchpad": {"rewrite": None, "add": [" Found the door. "],
+                       "lines": [{"line": 1, "text": " Left the house, a guess. "},
+                                 {"line": 2, "text": None}]},
         "findings": [CHARIZARD], "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
     context = Context("Find the exit", "Avoid walls", MEMORY,
                       scratchpad=("Left the house.", "The exit is south, a guess."))
     answer = chat_model.call(context, FRAME)
     assert answer == Reply(Press("DOWN"), "The door is ahead.",
-                           ScratchpadEdit(("Found the door.",), (2,),
-                                          (Replacement(1, "Left the house, a guess."),)),
+                           ScratchpadEdit(lines=(LineChange(1, "Left the house, a guess."),
+                                                 LineChange(2, None)),
+                                          add=("Found the door.",)),
                            (Finding("dialogue", CHARIZARD["text"].strip()),))
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
@@ -103,6 +105,14 @@ def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
                                   "action": action}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
     assert answer == Reply(Stop(outcome), "The dialogue closed.", ScratchpadEdit(), ())
+
+
+@pytest.mark.parametrize("add", [[], ["Talked to Kecleon."]])
+def test_an_empty_rewrite_means_no_rewrite(monkeypatch, add):
+    answering(monkeypatch, reply({"reasoning": "Wait.", "findings": [], "action": "WAIT",
+                                  "scratchpad": {"rewrite": [], "lines": [], "add": add}}))
+    edit = ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).scratchpad
+    assert edit == ScratchpadEdit(add=tuple(add)) and edit.problem(0) is None
 
 
 def test_an_empty_scratchpad_is_shown_as_empty(monkeypatch):
@@ -148,12 +158,11 @@ def test_settings_come_from_the_model_table(tmp_path):
     (reply({"reasoning": "Press A.", **EMPTY, "findings": ["Charizard is Gold Rank."],
             "action": "A"}), "invalid finding"),
     *[(reply({"reasoning": "Press A.", **EMPTY, "action": "A",
-                "scratchpad": {"add": [], "remove": [], "replace": [], **edit}}),
+                "scratchpad": {"rewrite": None, "lines": [], "add": [], **edit}}),
        "invalid scratchpad edit") for edit in (
-        {"replace": None}, {"add": [""]}, {"remove": ["1"]}, {"remove": [True]},
-        {"remove": [2, 2]}, {"remove": [2], "replace": [{"line": 2, "text": "Twice."}]},
-        {"replace": [{"line": 1}]}, {"add": ["[4] Talked to Kecleon."]},
-        {"replace": [{"line": 1, "text": " [1] Talked to Kecleon."}]})],
+        {"rewrite": "All of it."}, {"add": None}, {"add": [1]}, {"lines": [{"line": 1}]},
+        {"lines": [{"line": "1", "text": None}]}, {"lines": [{"line": True, "text": "x"}]},
+        {"lines": [{"line": 1, "text": 2}]}, {"clear": True})],
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),

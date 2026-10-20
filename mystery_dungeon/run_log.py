@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
-FORMAT_VERSION = 17  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 18  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
@@ -146,6 +146,7 @@ class RunLog:
 
 def _reply_fields(turn: Turn) -> dict:
     return {"reasoning": turn.reasoning, "scratchpad": dataclasses.asdict(turn.scratchpad),
+            "scratchpad_problem": turn.scratchpad_problem,
             "findings": [dataclasses.asdict(finding) for finding in turn.findings]}
 
 

@@ -20,11 +20,17 @@ its game state. If nothing changed, say so and why.
 
 The scratchpad is your working memory for this task: earlier turns are forgotten after a few \
 turns, but the scratchpad stays. Keep in it what is done, what you tried that did not work, \
-your plan, and guesses you are still checking; say in a line when it is a guess. Its lines are \
-shown numbered from 1, and the numbers change as lines come and go, so always use the numbers \
-shown this turn. Each turn you may replace a line's text, remove lines, and add lines at the \
-end; change as many as you need. Never write a line number in a line's text. Update lines as \
+your plan, and guesses you are still checking; say in a line when it is a guess. Update lines as \
 soon as they become stale or wrong, and keep it short.
+
+Its lines are shown numbered from 1, and the numbers change as lines come and go, so always use \
+the numbers shown this turn. Edit it in one of two ways:
+- Change lines: in lines, give a shown line's number with its new text, or with null to delete \
+it, at most once per line; in add, give new lines to append at the end. Leave rewrite null.
+- Rewrite it: give the whole new scratchpad in rewrite, and leave lines and add empty.
+When nothing changes, leave rewrite null and lines and add empty. Never write a line number in \
+a line's text. An edit that breaks these rules is not applied, and a line saying why is added \
+instead.
 
 Findings are what you learn about the game that is worth knowing beyond this task. Record one \
 when it first appears on screen:

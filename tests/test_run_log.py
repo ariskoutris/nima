@@ -72,14 +72,15 @@ def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
 
 
 def test_agent_rows_carry_the_model_reasoning(tmp_path):
-    model = ScriptedModel(reasoning="Door ahead.", edits=[ScratchpadEdit(("Find the door.",))],
+    model = ScriptedModel(reasoning="Door ahead.", edits=[ScratchpadEdit(add=("Find the door.",))],
                           findings=[[finding("Kecleon in Pokémon Square sells X-Ray Specs.")]])
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
     log.record_manual(Press("B"), agent.manual(session, Press("B")))
     action, manual = turns(tmp_path)
     assert action["reasoning"] == "Door ahead."
-    assert action["scratchpad"] == {"add": ["Find the door."], "remove": [], "replace": []}
+    assert action["scratchpad"] == {"rewrite": None, "lines": [], "add": ["Find the door."]}
+    assert action["scratchpad_problem"] is None
     assert action["findings"] == [{"kind": "dialogue",
                                    "text": "Kecleon in Pokémon Square sells X-Ray Specs."}]
     assert "reasoning" not in manual
@@ -97,7 +98,7 @@ def test_stop_and_model_error_rows(tmp_path):
     assert [stop["event"], error_row["event"]] == ["stop", "model_error"]
     assert "action" not in stop and stop["outcome"] == "stuck"
     assert stop["reasoning"] == "Blocked by a wall." and stop["findings"] == []
-    assert stop["scratchpad"] == {"add": [], "remove": [], "replace": []}
+    assert stop["scratchpad"] == {"rewrite": None, "lines": [], "add": []}
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()

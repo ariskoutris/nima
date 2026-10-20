@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from mystery_dungeon.session import GameState, Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
+EDIT_REJECTED = ("A scratchpad edit of yours was rejected, so none of it applied: {problem}. "
+                 "Delete this line once you have redone the edit.")
 
 
 class Session(Protocol):
@@ -51,6 +53,7 @@ class Turn:
     reasoning: str
     scratchpad: ScratchpadEdit
     findings: tuple[Finding, ...]
+    scratchpad_problem: str | None  # why the edit was rejected; None when it applied
 
 
 @dataclass(frozen=True)
@@ -109,29 +112,32 @@ class Agent:
                           self.scratchpad)
         try:
             reply = self._model.call(context, observation.frame)
-            shown = range(1, len(self._scratchpad) + 1)
-            unknown = sorted(number for number in reply.scratchpad.lines if number not in shown)
-            if unknown:
-                raise ValueError(f"changed scratchpad lines that do not exist: {unknown}")
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
+        # A bad edit costs only itself: in a live run one discarded a correct STOP.
+        problem = reply.scratchpad.problem(len(self._scratchpad))
         turn = Turn(observation, context, reply.action, reply.reasoning, reply.scratchpad,
-                    reply.findings)
+                    reply.findings, problem)
         match reply.action:
             case Stop():
                 transition = None
             case action:
                 transition = self._apply(session, action, reply.reasoning)
-        self._edit(reply.scratchpad)
+        if problem is None:
+            self._edit(reply.scratchpad)
+        else:
+            self._scratchpad.append(EDIT_REJECTED.format(problem=problem))
         self._findings.extend(reply.findings)
         return turn, transition
 
     def _edit(self, edit: ScratchpadEdit) -> None:
-        """Apply an edit by the numbers the model saw: replace, remove, then append."""
-        for replacement in edit.replace:
-            self._scratchpad[replacement.line - 1] = replacement.text
-        self._scratchpad = [line for number, line in enumerate(self._scratchpad, 1)
-                            if number not in edit.remove]
+        """Apply a valid edit by the numbers the model saw."""
+        if edit.rewrite is not None:
+            self._scratchpad = list(edit.rewrite)
+            return
+        changes = {change.line: change.text for change in edit.lines}
+        self._scratchpad = [text for number, line in enumerate(self._scratchpad, 1)
+                            if (text := changes.get(number, line)) is not None]
         self._scratchpad.extend(edit.add)
 
     def manual(self, session: Session, action: GameAction) -> Transition:

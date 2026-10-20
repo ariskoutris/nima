@@ -32,13 +32,13 @@ ANSWER_SCHEMA = {
     "properties": {
         "reasoning": {"type": "string"},
         "scratchpad": {"type": "object", "properties": {
-            "add": {"type": "array", "items": {"type": "string"}},
-            "remove": {"type": "array", "items": {"type": "integer"}},
-            "replace": {"type": "array", "items": {
+            "rewrite": {"type": ["array", "null"], "items": {"type": "string"}},
+            "lines": {"type": "array", "items": {
                 "type": "object", "properties": {"line": {"type": "integer"},
-                                                 "text": {"type": "string"}},
-                "required": ["line", "text"], "additionalProperties": False}}},
-            "required": ["add", "remove", "replace"], "additionalProperties": False},
+                                                 "text": {"type": ["string", "null"]}},
+                "required": ["line", "text"], "additionalProperties": False}},
+            "add": {"type": "array", "items": {"type": "string"}}},
+            "required": ["rewrite", "lines", "add"], "additionalProperties": False},
         "findings": {"type": "array", "items": {
             "type": "object",
             "properties": {"kind": {"type": "string", "enum": list(get_args(FindingKind))},
@@ -52,37 +52,41 @@ ANSWER_SCHEMA = {
 
 
 @dataclass(frozen=True)
-class Replacement:
-    """New text for one scratchpad line, by the number it was shown with."""
+class LineChange:
+    """New text for a scratchpad line, by the number shown this turn; None deletes it."""
 
     line: int
-    text: str
+    text: str | None
 
 
 @dataclass(frozen=True)
 class ScratchpadEdit:
-    """Changes to the scratchpad by the line numbers shown this turn: replacements, then
-    removals, then lines appended at the end."""
+    """Either a rewrite of the whole scratchpad, or changes to shown lines plus lines appended
+    at the end."""
 
+    rewrite: tuple[str, ...] | None = None
+    lines: tuple[LineChange, ...] = ()
     add: tuple[str, ...] = ()
-    remove: tuple[int, ...] = ()
-    replace: tuple[Replacement, ...] = ()
 
-    def __post_init__(self) -> None:
-        """Raises:
-            ValueError: when a line is changed twice, or a text is empty or starts with a line
-                number (the model copied shown numbers like "[4]" into its text, then edited
-                by those).
-        """
-        texts = [*self.add, *(replacement.text for replacement in self.replace)]
-        if len(set(self.lines)) != len(self.lines) or not all(
-                text.strip() and not NUMBERED.match(text.strip()) for text in texts):
-            raise ValueError(f"invalid scratchpad edit: {self!r}")
-
-    @property
-    def lines(self) -> tuple[int, ...]:
-        """The line numbers the edit refers to."""
-        return (*self.remove, *(replacement.line for replacement in self.replace))
+    def problem(self, shown: int) -> str | None:
+        """Say why the edit can't apply to a scratchpad of ``shown`` lines, or None if it can."""
+        if self.rewrite is not None and (self.lines or self.add):
+            return "a rewrite came with line changes or additions"
+        numbers = [change.line for change in self.lines]
+        if len(set(numbers)) != len(numbers):
+            twice = sorted({number for number in numbers if numbers.count(number) > 1})
+            return f"lines {twice} were changed more than once"
+        missing = sorted(number for number in numbers if not 1 <= number <= shown)
+        if missing:
+            return f"lines {missing} are not shown"
+        texts = [*(self.rewrite or ()), *self.add,
+                 *(change.text for change in self.lines if change.text is not None)]
+        if not all(text.strip() for text in texts):
+            return "a line was empty; delete a line with null instead"
+        # The model copied shown numbers like "[4]" into its text, then edited by those.
+        if any(NUMBERED.match(text.strip()) for text in texts):
+            return "a line's text started with a line number"
+        return None
 
 
 @dataclass(frozen=True)
@@ -160,18 +164,23 @@ class ChatModel:
                      tuple(self._finding(finding) for finding in answer["findings"]))
 
     def _edit(self, edit: object) -> ScratchpadEdit:
-        if (not isinstance(edit, dict) or edit.keys() != {"add", "remove", "replace"}
-                or not all(isinstance(edit[key], list) for key in edit)
-                or not all(isinstance(item, dict) and item.keys() == {"line", "text"}
-                           for item in edit["replace"])
-                or not all(type(number) is int for number in
-                           [*edit["remove"], *(item["line"] for item in edit["replace"])])
-                or not all(isinstance(text, str) for text in
-                           [*edit["add"], *(item["text"] for item in edit["replace"])])):
+        """Check the edit's shape; ScratchpadEdit.problem judges whether it can apply."""
+        if (not isinstance(edit, dict) or edit.keys() != {"rewrite", "lines", "add"}
+                or not isinstance(edit["rewrite"], list | None)
+                or not isinstance(edit["lines"], list) or not isinstance(edit["add"], list)
+                or not all(isinstance(change, dict) and change.keys() == {"line", "text"}
+                           and type(change["line"]) is int
+                           and isinstance(change["text"], str | None)
+                           for change in edit["lines"])
+                or not all(isinstance(text, str)
+                           for text in [*(edit["rewrite"] or ()), *edit["add"]])):
             raise ValueError(f"{self.name} returned an invalid scratchpad edit: {edit!r}")
-        return ScratchpadEdit(tuple(text.strip() for text in edit["add"]), tuple(edit["remove"]),
-                              tuple(Replacement(item["line"], item["text"].strip())
-                                    for item in edit["replace"]))
+        return ScratchpadEdit(
+            # An empty rewrite means no rewrite; clearing every line would lose the scratchpad.
+            tuple(text.strip() for text in edit["rewrite"]) if edit["rewrite"] else None,
+            tuple(LineChange(change["line"], None if change["text"] is None
+                             else change["text"].strip()) for change in edit["lines"]),
+            tuple(text.strip() for text in edit["add"]))
 
     def _finding(self, finding: object) -> Finding:
         if (not isinstance(finding, dict) or finding.keys() != {"kind", "text"}

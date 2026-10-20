@@ -170,7 +170,7 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
 
 
 def test_the_view_shows_the_task_scratchpad_and_findings(start_run):
-    run, _ = start_run(ScriptedModel(edits=[ScratchpadEdit(("Find the exit.",))],
+    run, _ = start_run(ScriptedModel(edits=[ScratchpadEdit(add=("Find the exit.",))],
                                      findings=[[finding("Kecleon sells Oran Berries.")]]))
     run.control({"task": "Find exit", "command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
