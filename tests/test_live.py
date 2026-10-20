@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fakes import Game, ScriptedModel, rows, votes
 
+from emulator import Frame
 from mystery_dungeon import live
 from mystery_dungeon.session import Checkpoint
 
@@ -231,3 +232,12 @@ def test_frames_stream_during_emulator_steps(start_run):
     screen, revision, tick = run.wait_for_screen(None)
     assert screen == game.frame.png_bytes() and revision >= 1
     assert tick == before + 12
+
+
+def test_live_screen_shows_streamed_ticks_not_screenshots(start_run):
+    run, game = start_run(ScriptedModel())
+    screenshot = Frame(16, 16, bytes([255]) * 16 * 16 * 4)
+    game.screenshot = lambda: screenshot
+    run.control({"command": "manual", "action": "WAIT"})
+    wait_until(run, lambda state: len(state["history"]) == 1)
+    assert run.wait_for_screen(None)[0] == game.frame.png_bytes()

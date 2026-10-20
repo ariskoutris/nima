@@ -266,7 +266,10 @@ class LiveRun:
         self._after_step(session)
 
     def _after_step(self, session: GameplaySession) -> None:
-        """Save and show the session's state if it captured a frame since the last call."""
+        """Save and publish the session's state if it captured a frame since the last call.
+
+        The live screen shows only streamed ticks; screenshots appear with their action.
+        """
         if session.image_index == self._published_image:
             return
         self._published_image = session.image_index
@@ -278,7 +281,6 @@ class LiveRun:
             self._condition.notify_all()
         with self._screen_condition:
             self._stream_tick = session.tick
-        self._show(session.current)
 
     def _fail(self, message: str) -> None:
         with self._condition:
@@ -307,17 +309,13 @@ class LiveRun:
                 return "resetting"
         return "paused" if self._mode == "paused" else "running"
 
-    def _show(self, frame: Frame) -> None:
+    def _stream(self, frame: Frame) -> None:
         with self._screen_condition:
+            self._stream_tick += 1
             if self._screen is None or frame.rgba != self._screen.rgba:
                 self._screen = frame
                 self._screen_revision += 1
                 self._screen_condition.notify_all()
-
-    def _stream(self, frame: Frame) -> None:
-        with self._screen_condition:
-            self._stream_tick += 1
-        self._show(frame)
         time.sleep(TICK_SECONDS)
 
 
