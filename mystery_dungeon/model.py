@@ -7,7 +7,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, get_args
 from urllib.request import Request, urlopen
 
 from emulator import Frame
@@ -22,23 +22,56 @@ if TYPE_CHECKING:
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
-# Reasoning comes first so the model writes it before it commits to an action.
+NoteKind = Literal["dialogue", "place", "mechanic", "item", "character", "job"]
+NoteSource = Literal["seen", "inferred"]
+_STRINGS = {"type": "array", "items": {"type": "string"}}
+# The model judges the screen, rewrites its progress and records new notes before it commits
+# to an action.
 ANSWER_SCHEMA = {
     "type": "object",
-    "properties": {"reasoning": {"type": "string"}, "note": {"type": "string"},
-                   "action": {"type": "string", "enum": list(ACTION_NAMES)}},
-    "required": ["reasoning", "note", "action"],
+    "properties": {
+        "reasoning": {"type": "string"},
+        "progress": {"type": "object", "properties": {"done": _STRINGS, "remaining": _STRINGS},
+                     "required": ["done", "remaining"], "additionalProperties": False},
+        "notes": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": list(get_args(NoteKind))},
+                           "subject": {"type": "string"}, "fact": {"type": "string"},
+                           "source": {"type": "string", "enum": list(get_args(NoteSource))}},
+            "required": ["kind", "subject", "fact", "source"], "additionalProperties": False}},
+        "action": {"type": "string", "enum": list(ACTION_NAMES)},
+    },
+    "required": ["reasoning", "progress", "notes", "action"],
     "additionalProperties": False,
 }
 
 
 @dataclass(frozen=True)
+class Progress:
+    """What is done and what remains of the task, as the model last rewrote it."""
+
+    done: tuple[str, ...]
+    remaining: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Note:
+    """One fact about the game, found while it was on screen; subject is who or what it is about."""
+
+    kind: NoteKind
+    subject: str
+    fact: str
+    source: NoteSource
+
+
+@dataclass(frozen=True)
 class Reply:
-    """The model's action, its reasoning and its note (None when it wrote none)."""
+    """The model's action, its reasoning, its progress and the notes it added (often none)."""
 
     action: Action
     reasoning: str
-    note: str | None = None
+    progress: Progress
+    notes: tuple[Note, ...] = ()
 
 
 class Model(Protocol):
@@ -91,10 +124,31 @@ class ChatModel:
             raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
         if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
-        if not isinstance(answer["note"], str):
-            raise ValueError(f"{self.name} returned an invalid note: {answer['note']!r}")
+        if not isinstance(answer["notes"], list):
+            raise ValueError(f"{self.name} returned invalid notes: {answer['notes']!r}")
         return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip(),
-                     answer["note"].strip() or None)
+                     self._progress(answer["progress"]),
+                     tuple(self._note(note) for note in answer["notes"]))
+
+    def _progress(self, progress: object) -> Progress:
+        if not isinstance(progress, dict) or progress.keys() != {"done", "remaining"}:
+            raise ValueError(f"{self.name} returned invalid progress: {progress!r}")
+        items = {}
+        for key, values in progress.items():
+            if not isinstance(values, list) or not all(
+                    isinstance(value, str) and value.strip() for value in values):
+                raise ValueError(f"{self.name} returned invalid progress: {progress!r}")
+            items[key] = tuple(value.strip() for value in values)
+        return Progress(**items)
+
+    def _note(self, note: object) -> Note:
+        if (not isinstance(note, dict) or note.keys() != {"kind", "subject", "fact", "source"}
+                or note["kind"] not in get_args(NoteKind)
+                or note["source"] not in get_args(NoteSource)
+                or not all(isinstance(note[key], str) and note[key].strip()
+                           for key in ("subject", "fact"))):
+            raise ValueError(f"{self.name} returned an invalid note: {note!r}")
+        return Note(note["kind"], note["subject"].strip(), note["fact"].strip(), note["source"])
 
     def _send(self, content: list[dict]) -> object:
         """Post one request and return the model's answer as decoded JSON."""
@@ -149,13 +203,17 @@ def token_usage(response: dict | None) -> dict | None:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """Build the user message: task, knowledge, notes and actions, earlier turns, current frame."""
+    """Build the user message: task, knowledge, progress, notes and actions, earlier turns,
+    current frame."""
     text = [f"# Task\n{context.task}"]
     if context.knowledge:
         text.append(f"# Knowledge\n{context.knowledge}")
+    if context.progress is not None:
+        text.append("# Your progress\n" + "\n".join(
+            [*_items("Done", context.progress.done),
+             *_items("Remaining", context.progress.remaining)]))
     if context.notes:
-        text.append("# Your notes for this task (oldest first)\n" +
-                    "\n".join(f"- {note}" for note in context.notes))
+        text.append("# Your notes for this task\n" + _grouped(context.notes))
     text.append("# Actions\n" + "\n".join(
         f"- {action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
     if context.memory:
@@ -179,6 +237,19 @@ def _content(context: Context, frame: Frame) -> list[dict]:
         current.append({"type": "text", "text": "# Game state\n" + "\n".join(
             [*you, describe(state), *nearby(state)])})
     return content + current
+
+
+def _items(heading: str, items: tuple[str, ...]) -> list[str]:
+    return [f"{heading}:", *(f"- {item}" for item in items)] if items else [f"{heading}: none"]
+
+
+def _grouped(notes: tuple[Note, ...]) -> str:
+    """List notes under their subjects, subjects in the order they first appeared."""
+    subjects: dict[str, list[str]] = {}
+    for note in notes:
+        label = note.kind if note.source == "seen" else f"{note.kind}, inferred"
+        subjects.setdefault(note.subject, []).append(f"- ({label}) {note.fact}")
+    return "\n".join(f"## {subject}\n" + "\n".join(lines) for subject, lines in subjects.items())
 
 
 def describe(state: GameState) -> str:

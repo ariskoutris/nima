@@ -13,6 +13,8 @@ from mystery_dungeon.agent import Context, MemoryEntry
 from mystery_dungeon.model import (
     ChatModel,
     ChatSettings,
+    Note,
+    Progress,
     Reply,
     internal_reasoning,
     read_settings,
@@ -26,6 +28,9 @@ MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to
           MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
+EMPTY = {"progress": {"done": [], "remaining": []}, "notes": []}
+SPECS = {"kind": "item", "subject": " Kecleon Shop ", "fact": " Sells X-Ray Specs. ",
+         "source": "seen"}
 
 
 def answering(monkeypatch, *responses):
@@ -49,13 +54,20 @@ def reply(answer, finish_reason="stop"):
 
 
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": " The door is ahead. ",
-                                         "note": " Door is south. ", "action": "DOWN"}))
+    sent = answering(monkeypatch, reply({
+        "reasoning": " The door is ahead. ",
+        "progress": {"done": [" Found the door "], "remaining": ["Go through it"]},
+        "notes": [SPECS], "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
     context = Context("Find the exit", "Avoid walls", MEMORY,
-                      notes=("Exit is south.", "Map is small."))
+                      progress=Progress(("Left the house",), ()),
+                      notes=(Note("place", "Square", "The shop is east of the well.", "seen"),
+                             Note("item", "Kecleon Shop", "Sells Oran Berries.", "seen"),
+                             Note("character", "Square", "Lombre runs it.", "inferred")))
     answer = chat_model.call(context, FRAME)
-    assert answer == Reply(Press("DOWN"), "The door is ahead.", "Door is south.")
+    assert answer == Reply(Press("DOWN"), "The door is ahead.",
+                           Progress(("Found the door",), ("Go through it",)),
+                           (Note("item", "Kecleon Shop", "Sells X-Ray Specs.", "seen"),))
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
     payload = json.loads(sent[0].data)
@@ -65,7 +77,11 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert system["content"] == INSTRUCTIONS
     assert "# Task\nFind the exit" in user["content"][0]["text"]
     assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
-    assert ("# Your notes for this task (oldest first)\n- Exit is south.\n- Map is small."
+    assert ("# Your progress\nDone:\n- Left the house\nRemaining: none\n\n"
+            "# Your notes for this task\n"
+            "## Square\n- (place) The shop is east of the well.\n"
+            "- (character, inferred) Lombre runs it.\n"
+            "## Kecleon Shop\n- (item) Sells Oran Berries.\n\n# Actions"
             in user["content"][0]["text"])
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
@@ -76,8 +92,10 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]
-    assert list(schema["properties"]) == ["reasoning", "note", "action"]
-    assert schema["required"] == ["reasoning", "note", "action"]
+    assert list(schema["properties"]) == ["reasoning", "progress", "notes", "action"]
+    assert schema["required"] == ["reasoning", "progress", "notes", "action"]
+    assert schema["properties"]["notes"]["items"]["properties"]["kind"]["enum"] == [
+        "dialogue", "place", "mechanic", "item", "character", "job"]
     assert {"WAIT", "STOP_STUCK"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
@@ -85,19 +103,21 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
 @pytest.mark.parametrize("action,outcome", [
     ("STOP_COMPLETE", "complete"), ("STOP_STUCK", "stuck"), ("STOP_INVALID", "invalid")])
 def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
-    answering(monkeypatch, reply({"reasoning": "The dialogue closed.", "note": "",
+    answering(monkeypatch, reply({"reasoning": "The dialogue closed.", **EMPTY,
                                   "action": action}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
-    assert answer == Reply(Stop(outcome), "The dialogue closed.")
+    assert answer == Reply(Stop(outcome), "The dialogue closed.", Progress((), ()))
 
 
-def test_an_empty_note_is_none(monkeypatch):
-    answering(monkeypatch, reply({"reasoning": "Wait.", "note": "", "action": "WAIT"}))
-    assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).note is None
+def test_a_context_without_progress_or_notes_leaves_both_out(monkeypatch):
+    sent = answering(monkeypatch, reply({"reasoning": "Wait.", **EMPTY, "action": "WAIT"}))
+    assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).notes == ()
+    text = json.loads(sent[0].data)["messages"][1]["content"][0]["text"]
+    assert "# Your progress" not in text and "# Your notes" not in text
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Wait.", "note": "", "action": "WAIT"}))
+    sent = answering(monkeypatch, reply({"reasoning": "Wait.", **EMPTY, "action": "WAIT"}))
     local = ChatModel(ChatSettings("http://localhost/v1/chat/completions", "local"))
     local.call(Context("Talk", "", ()), FRAME)
     assert sent[0].get_header("Authorization") is None
@@ -120,10 +140,22 @@ def test_settings_come_from_the_model_table(tmp_path):
 
 
 @pytest.mark.parametrize("response,message", [
-    (reply({"reasoning": "Start.", "note": "", "action": "START"}), "unknown action"),
-    (reply({"reasoning": "Press A.", "note": "", "action": ["A"]}), "unknown action"),
-    (reply({"reasoning": " ", "note": "", "action": "A"}), "no reasoning"),
-    (reply({"reasoning": "Press A.", "note": None, "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Start.", **EMPTY, "action": "START"}), "unknown action"),
+    (reply({"reasoning": "Press A.", **EMPTY, "action": ["A"]}), "unknown action"),
+    (reply({"reasoning": " ", **EMPTY, "action": "A"}), "no reasoning"),
+    (reply({"reasoning": "Press A.", **EMPTY, "notes": None, "action": "A"}), "invalid notes"),
+    (reply({"reasoning": "Press A.", **EMPTY, "notes": [{**SPECS, "kind": "shop"}],
+            "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Press A.", **EMPTY, "notes": [{**SPECS, "source": "heard"}],
+            "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Press A.", **EMPTY, "notes": [{**SPECS, "fact": " "}],
+            "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Press A.", **EMPTY, "notes": ["Sells X-Ray Specs."],
+            "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Press A.", **EMPTY, "progress": {"done": []}, "action": "A"}),
+     "invalid progress"),
+    (reply({"reasoning": "Press A.", **EMPTY, "progress": {"done": [""], "remaining": []},
+            "action": "A"}), "invalid progress"),
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),
@@ -167,7 +199,7 @@ def test_scaled_repeats_each_pixel_across_and_down():
 
 
 def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Blocked.", "note": "", "action": "DOWN"}))
+    sent = answering(monkeypatch, reply({"reasoning": "Blocked.", **EMPTY, "action": "DOWN"}))
     memory = (MemoryEntry(Observation(FRAME, "before.png", GameState((120, 88), None, "west")),
                           Press("LEFT"), "Step left."),)
     context = Context("Find the exit", "", memory, GameState(None, (4, 7), "west"))
@@ -182,7 +214,7 @@ def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
 
 
 def test_on_screen_characters_are_described_relative_to_the_player(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Face it.", "note": "", "action": "DOWN"}))
+    sent = answering(monkeypatch, reply({"reasoning": "Face it.", **EMPTY, "action": "DOWN"}))
     state = GameState((464, 332), None, "west", (
         Character("Granbull", (456, 352), "south"), Character("Lombre", (464, 332), "east")),
         "Quilava")

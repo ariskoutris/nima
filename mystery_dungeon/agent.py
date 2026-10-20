@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Protocol
 from mystery_dungeon.actions import Action, GameAction, Stop
 
 if TYPE_CHECKING:
-    from mystery_dungeon.model import Model
+    from mystery_dungeon.model import Model, Note, Progress
     from mystery_dungeon.session import GameState, Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
@@ -40,7 +40,8 @@ class Context:
     knowledge: str
     memory: tuple[MemoryEntry, ...]
     game_state: GameState | None = None  # with the current frame
-    notes: tuple[str, ...] = ()  # the model's notes since the task began
+    progress: Progress | None = None  # the model's latest; None before its first reply
+    notes: tuple[Note, ...] = ()  # the model's notes since the task began
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,8 @@ class Turn:
     context: Context
     action: Action
     reasoning: str
-    note: str | None = None
+    progress: Progress
+    notes: tuple[Note, ...] = ()  # those this turn added
 
 
 @dataclass(frozen=True)
@@ -63,25 +65,31 @@ class ModelError:
 
 class Agent:
     """Agent that interacts with the game to complete the given task.
-    Chooses actions with a model, keeps recent turns in memory and the task's notes."""
+    Chooses actions with a model, keeps recent turns in memory and the task's progress and
+    notes."""
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
         self._model = model
         self._knowledge = knowledge.strip()
         self._task = ""
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
-        self._notes: list[str] = []
+        self._progress: Progress | None = None
+        self._notes: list[Note] = []
 
     @property
     def memory(self) -> tuple[MemoryEntry, ...]:
         return tuple(self._memory)
 
     @property
-    def notes(self) -> tuple[str, ...]:
+    def progress(self) -> Progress | None:
+        return self._progress
+
+    @property
+    def notes(self) -> tuple[Note, ...]:
         return tuple(self._notes)
 
     def set_task(self, task: str) -> None:
-        """Switch tasks, forgetting the old task's memory and notes."""
+        """Switch tasks, forgetting the old task's memory, progress and notes."""
         task = task.strip()
         if self._task and task != self._task:
             self.clear_memory()
@@ -89,6 +97,7 @@ class Agent:
 
     def clear_memory(self) -> None:
         self._memory.clear()
+        self._progress = None
         self._notes.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
@@ -97,19 +106,20 @@ class Agent:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
         context = Context(self._task, self._knowledge, self.memory, observation.game_state,
-                          self.notes)
+                          self._progress, self.notes)
         try:
             reply = self._model.call(context, observation.frame)
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
-        turn = Turn(observation, context, reply.action, reply.reasoning, reply.note)
+        turn = Turn(observation, context, reply.action, reply.reasoning, reply.progress,
+                    reply.notes)
         match reply.action:
             case Stop():
                 transition = None
             case action:
                 transition = self._apply(session, action, reply.reasoning)
-        if reply.note is not None:
-            self._notes.append(reply.note)
+        self._progress = reply.progress
+        self._notes.extend(reply.notes)
         return turn, transition
 
     def manual(self, session: Session, action: GameAction) -> Transition:

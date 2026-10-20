@@ -18,10 +18,10 @@ if TYPE_CHECKING:
     from emulator import Frame
     from mystery_dungeon.actions import Outcome
     from mystery_dungeon.agent import Context, ModelError, Turn
-    from mystery_dungeon.model import Model, Reply
+    from mystery_dungeon.model import Model, Progress, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
-FORMAT_VERSION = 14  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 15  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
@@ -86,10 +86,10 @@ class RunLog:
         match turn.action:
             case Stop(outcome):
                 self._write_turn("stop", turn.observation, turn.context, {
-                    "reasoning": turn.reasoning, "note": turn.note, "outcome": outcome})
+                    **_reply_fields(turn), "outcome": outcome})
             case action if transition is not None:
                 row = self._write_turn("action", turn.observation, turn.context, {
-                    "reasoning": turn.reasoning, "note": turn.note, "action": to_json(action),
+                    **_reply_fields(turn), "action": to_json(action),
                     **_transition_fields(transition)})
                 self._recent.append(row)
             case _:
@@ -119,7 +119,8 @@ class RunLog:
         """Write the model calls made since the last turn, then the turn row."""
         self._turns += 1
         calls, self._calls[:] = self._calls.copy(), []
-        model_input = {"task": context.task, "notes": list(context.notes),
+        model_input = {"task": context.task, "progress": _json_progress(context.progress),
+                       "notes": [dataclasses.asdict(note) for note in context.notes],
                        "screenshot": observation.screenshot,
                        "game_state": _json_state(context.game_state),
                        "memory": [{"screenshot": entry.observation.screenshot,
@@ -141,6 +142,15 @@ class RunLog:
         return _append(self._output / "turns.jsonl", {
             "event": event, "time": datetime.now().astimezone().isoformat(timespec="seconds"),
             **fields})
+
+
+def _reply_fields(turn: Turn) -> dict:
+    return {"reasoning": turn.reasoning, "progress": _json_progress(turn.progress),
+            "notes": [dataclasses.asdict(note) for note in turn.notes]}
+
+
+def _json_progress(progress: Progress | None) -> dict | None:
+    return None if progress is None else dataclasses.asdict(progress)
 
 
 def _json_state(state: GameState | None) -> dict | None:

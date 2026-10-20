@@ -58,8 +58,10 @@ One term per concept in code, prompts, log fields, flags and docs:
   `GameAction` (Press, Wait) is what the game performs; Stop ends the task with its outcome:
   complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
   reasoning.
-- note: a finding the model records in a reply while it is on screen. A task's notes stay in
-  the context until the task changes.
+- note: one fact about the game (kind, subject, fact, seen or inferred) that the model records
+  in a reply while it is on screen. A task's notes stay in the context until the task changes.
+- progress: what is done and what remains of the task; the model rewrites it every turn and
+  only the latest is in the context.
 - short-term memory: recent reasoning, observations and turns, plus information retrieved for the
   current task.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
@@ -70,7 +72,8 @@ One term per concept in code, prompts, log fields, flags and docs:
 - model: what the agent calls each turn for an action and its reasoning (`Model`, `ChatModel`),
   configured by `[model]` in `config.toml`; `name` is its endpoint id.
 - context: what the model acts on each turn besides the current frame: the task, knowledge,
-  RAM-derived game state and short-term memory (`agent.Context`).
+  RAM-derived game state, short-term memory, and the task's progress and notes
+  (`agent.Context`).
 - RAM-derived game state: the limited facts read from RAM that the model gets with a frame
   (`session.GameState`). A saved emulator state is a save state.
 - frame: an image in memory. screenshot: its saved PNG. tick: one emulated GBA frame; counts

@@ -69,9 +69,14 @@
     .notes summary h2::before { content: '▸ '; color: #91a7a5; }
     .notes details[open] summary h2::before { content: '▾ '; }
     .notes summary:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
-    .notes-list { margin: 0; padding: 0 20px 18px 42px; max-height: 260px; overflow: auto; color: #d3e0da; font-size: .85rem; }
-    .notes-list li { padding: 5px 0; overflow-wrap: anywhere; }
-    .notes-empty { padding: 0 20px 18px; }
+    .notes-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 20px; padding: 0 20px 18px; max-height: 320px; overflow: auto; color: #d3e0da; font-size: .85rem; }
+    .notes-body h3 { margin: 0 0 6px; color: #91a7a5; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .notes-body h4 { margin: 10px 0 2px; color: #adf0c3; font-size: .85rem; }
+    .notes-body ul { margin: 0 0 10px; padding-left: 20px; }
+    .notes-body li { padding: 3px 0; overflow-wrap: anywhere; }
+    .note-kind { color: #91a7a5; }
+    .note-inferred { margin-left: 6px; padding: 0 5px; border: 1px solid #8a7444; border-radius: 4px; color: #ebcf8c; font-size: .72rem; }
+    @media (max-width: 700px) { .notes-body { grid-template-columns: 1fr; } }
     .latest-body { padding: 1px 20px 22px; }
     .choice { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1; margin: 16px 0 7px; font-weight: 800; letter-spacing: -.06em; color: #adf0c3; }
     .choice.manual-choice { color: #ebcf8c; }
@@ -133,9 +138,11 @@
       </section>
       <section class="card notes">
         <details id="notes-panel" open>
-          <summary><h2>Task notes</h2><span id="notes-count" class="muted">None yet</span></summary>
-          <ol id="notes-list" class="notes-list" hidden></ol>
-          <div id="notes-empty" class="notes-empty muted">Findings the agent records during the task will appear here.</div>
+          <summary><h2>Progress and notes</h2><span id="notes-count" class="muted">No notes yet</span></summary>
+          <div class="notes-body">
+            <div><h3>Progress</h3><div id="progress"></div></div>
+            <div><h3>Notes</h3><div id="notes-groups"></div></div>
+          </div>
         </details>
       </section>
       <section class="card history">
@@ -256,7 +263,7 @@
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('history').textContent = 'No actions yet.';
       }
-      renderNotes(state.notes);
+      renderNotes(state.progress, state.notes);
       const latest = state.history[0];
       if (!latest) return;
       if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
@@ -280,16 +287,43 @@
       $('observation-label').hidden = false;
     }
 
-    function renderNotes(notes) {
-      const key = JSON.stringify(notes);
+    function element(tag, text, className) {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      if (className) node.className = className;
+      return node;
+    }
+
+    function list(items) {
+      const container = element('ul');
+      container.replaceChildren(...items.map(item => element('li', item)));
+      return container;
+    }
+
+    function renderNotes(progress, notes) {
+      const key = JSON.stringify([progress, notes]);
       if (key === shownNotes) return;
       shownNotes = key;
-      $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'None yet';
-      $('notes-list').replaceChildren(...notes.map(note => {
-        const item = document.createElement('li'); item.textContent = note; return item;
-      }));
-      $('notes-list').hidden = !notes.length;
-      $('notes-empty').hidden = notes.length > 0;
+      $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'No notes yet';
+      $('progress').replaceChildren(...(progress ? [
+        element('h4', 'Done'), progress.done.length ? list(progress.done) : element('div', 'Nothing yet.', 'muted'),
+        element('h4', 'Remaining'), progress.remaining.length ? list(progress.remaining) : element('div', 'Nothing.', 'muted'),
+      ] : [element('div', 'The agent\'s progress on the task will appear here.', 'muted')]));
+      const subjects = new Map();
+      for (const note of notes) {
+        if (!subjects.has(note.subject)) subjects.set(note.subject, []);
+        subjects.get(note.subject).push(note);
+      }
+      $('notes-groups').replaceChildren(...(notes.length ? [...subjects].flatMap(([subject, entries]) => {
+        const items = element('ul');
+        items.replaceChildren(...entries.map(note => {
+          const item = element('li');
+          item.append(element('span', `(${note.kind}) `, 'note-kind'), note.fact);
+          if (note.source === 'inferred') item.append(element('span', 'inferred', 'note-inferred'));
+          return item;
+        }));
+        return [element('h4', subject), items];
+      }) : [element('div', 'Findings the agent records during the task will appear here.', 'muted')]));
     }
 
     function renderHistory(rows) {

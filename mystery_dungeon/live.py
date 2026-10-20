@@ -147,7 +147,10 @@ class LiveRun:
                     "task": self._task, "running": self._mode != "paused",
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
-                    "history": self._log.recent(), "notes": list(self._agent.notes),
+                    "history": self._log.recent(),
+                    "progress": None if self._agent.progress is None else asdict(
+                        self._agent.progress),
+                    "notes": [asdict(note) for note in self._agent.notes],
                     "model": self._log.model.name,
                     "actions": list(GAME_ACTIONS), "output": str(self.output)}
 
