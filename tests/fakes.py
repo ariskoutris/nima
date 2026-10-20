@@ -18,10 +18,9 @@ FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to
 class ScriptedModel:
     """Answer from fixed scripts and record every call.
 
-    Actions are model-facing names; the last one repeats, and every reply comes
-    with ``reasoning``. ``complete`` is asked during each call, which reports the
-    task complete instead of acting when it answers True. With a
-    ``gate``, each call waits until the gate is set, after setting ``entered``.
+    Actions are model-facing names, and the last one repeats. Each call replies Done
+    instead when ``complete()`` returns True, and raises ``error`` when one is given.
+    With a ``gate``, each call sets ``entered`` and then waits for the gate.
     """
 
     def __init__(self, actions: Sequence[str] = ("A",),

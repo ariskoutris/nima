@@ -1,4 +1,4 @@
-"""Read game facts from RAM for the matching Red Rescue Team GBA ROM."""
+"""Read game state from RAM for the matching Red Rescue Team GBA ROM."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ TEXTBOX = 0x03001B64  # sTextbox
 TEXT_PHASE = 0x0202E778  # observed text printer phase: 1 while characters stream, 2 at page end
 DIALOGUE_TEXT = 0x0202E798  # sDialogueTextBuffer, the formatted text of the open textbox
 DIALOGUE_TEXT_SIZE = 1000
-GROUND_LIVES = 0x03001B84  # gGroundLives: 24 entries of 0x1F0 bytes
+GROUND_LIVES = 0x03001B84  # gGroundLives
 GROUND_LIVE_COUNT, GROUND_LIVE_SIZE = 24, 0x1F0
 GROUND_MAP_ACTION = 0x03001B6C  # gGroundMapAction -> groundMapId at +0xE4
 
@@ -53,7 +53,7 @@ class RamState:
 
 
 class GameRam:
-    """Reads game facts without advancing the emulator.
+    """Read game state from RAM.
 
     Raises:
         ValueError: when the emulator's ROM isn't the one these addresses match.
@@ -78,7 +78,7 @@ class GameRam:
         return lives if _ewram(lives, GROUND_LIVE_COUNT * GROUND_LIVE_SIZE) else None
 
     def textbox_type(self) -> int | None:
-        """The open textbox's type (1 dialogue, 4 dialogue with a menu), or None."""
+        """Return the open textbox's type (1 dialogue, 4 dialogue with a menu), or None."""
         textbox = self._textbox()
         return self._value(textbox, "<I") if textbox is not None else None
 
@@ -86,7 +86,7 @@ class GameRam:
         return self.textbox_type() in (1, 4) and self._value(TEXT_PHASE, "<I") == 1
 
     def textbox_text(self) -> str:
-        """The open textbox's whole page, already complete while it prints; "" when closed."""
+        """Return the open textbox's whole page, complete even while it prints; "" when closed."""
         if self.textbox_type() in (None, 0):
             return ""
         raw = self._game.read_memory(DIALOGUE_TEXT, DIALOGUE_TEXT_SIZE).split(b"\0")[0]
@@ -94,17 +94,17 @@ class GameRam:
         return _CODE.sub("", text)
 
     def speaker(self) -> int | None:
-        """Species shown in the open textbox's speaker portrait, or None."""
+        """Return the species in the open textbox's speaker portrait, or None."""
         textbox = self._textbox()
         return self._value(textbox + 0x462, "<h") if textbox is not None else None
 
     def player_position(self) -> tuple[int, int] | None:
-        """The leader's ground position in pixels, or None outside ground maps."""
+        """Return the leader's ground position in pixels, or None outside ground maps."""
         lives = self._ground_lives()
         return _position(self._game.read_memory(lives + 0x144, 8)) if lives is not None else None
 
     def npc_position(self, species: int) -> tuple[int, int] | None:
-        """The ground position in pixels of the first loaded Pokémon of this species, or None."""
+        """Return the ground position in pixels of the first loaded ``species``, or None."""
         lives = self._ground_lives()
         for index in range(GROUND_LIVE_COUNT if lives is not None else 0):
             entry = lives + index * GROUND_LIVE_SIZE
@@ -113,12 +113,12 @@ class GameRam:
         return None
 
     def ground_map(self) -> int | None:
-        """The current ground map id (1 Pokémon Square, 3 Whiscash Pond), or None."""
+        """Return the current ground map id (1 Pokémon Square, 3 Whiscash Pond), or None."""
         action = self._value(GROUND_MAP_ACTION, "<I")
         return self._value(action + 0xE4, "<h") if _ewram(action, 0xE6) else None
 
     def state(self) -> RamState:
-        """A snapshot for timing captures and showing the operator."""
+        """Return a snapshot for timing captures and showing the operator."""
         main_loop = self._value(MAIN_LOOP, "<I")
         textbox_type = self.textbox_type()
         printing = self.text_printing()

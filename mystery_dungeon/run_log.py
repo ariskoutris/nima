@@ -18,10 +18,8 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import Observation, Transition
 
-# Shared by run and benchmark configs. 10: emulator frame counts are ticks (tick_before,
-# tick_after, hold_ticks, release_ticks); "frame" means only an image.
-FORMAT_VERSION = 10
-RECENT_ROWS = 40
+FORMAT_VERSION = 10  # of run and benchmark output; bump when a field changes
+RECENT_ROWS = 40  # action rows the live view lists
 
 
 class LoggedModel:
@@ -130,7 +128,7 @@ def _transition_fields(transition: Transition) -> dict:
 
 
 def _summary(row: dict) -> dict:
-    """An action row as the live view lists it: model responses and memory replaced by total ms."""
+    """Return an action row as the live view lists it: model calls and memory become total ms."""
     summary = {key: value for key, value in row.items() if key not in ("model_calls", "memory")}
     summary["model_ms"] = sum(call["ms"] for call in row.get("model_calls", ()))
     return summary

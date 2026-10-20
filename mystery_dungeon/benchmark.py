@@ -32,6 +32,8 @@ WHISCASH_POND = 3  # ground map beyond the square's north exit
 
 @dataclass(frozen=True)
 class Case:
+    """A task given to the agent, its start checkpoint, grader criterion and limit."""
+
     id: str
     start: str
     task: str
@@ -133,6 +135,11 @@ class Grader:
 
 
 def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
+    """Read the cases' checkpoints, save them under output/references, and return them.
+
+    Raises:
+        ValueError: when a case already passes at its checkpoint.
+    """
     checkpoints = {name: read_ss0(CHECKPOINTS / f"{name}.ss0") for name in CHECKPOINT_NAMES}
     folder = output / "references"
     folder.mkdir()
@@ -149,6 +156,7 @@ def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
 
 def run_case(game: GbaEmulator, case: Case, model: Model,
              checkpoints: dict[str, Checkpoint], output: Path, knowledge: str = "") -> dict:
+    """Run one case until its limit, Done or a model error, and return its graded result."""
     output.mkdir(parents=True, exist_ok=False)
     log = RunLog(output, model,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,

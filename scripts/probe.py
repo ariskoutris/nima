@@ -22,6 +22,7 @@ VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge fil
 
 
 def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -> list[dict]:
+    """Write summary.json and report.md for variants with results, and return their summaries."""
     summaries = []
     for variant in variants:
         result_file = output / variant / "results.json"

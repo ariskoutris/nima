@@ -33,7 +33,7 @@ class Frame:
         return "data:image/png;base64," + base64.b64encode(self.png_bytes()).decode("ascii")
 
     def png_bytes(self) -> bytes:
-        """Encode an RGBA screenshot without an image dependency."""
+        """Encode the frame as a PNG without an image dependency."""
         def chunk(kind: bytes, data: bytes) -> bytes:
             return (struct.pack(">I", len(data)) + kind + data
                     + struct.pack(">I", zlib.crc32(kind + data)))
@@ -52,7 +52,7 @@ class Frame:
 
 
 def scene_distance(before: Frame, after: Frame) -> float:
-    """Mean RGB change at a sparse grid of screen pixels (0–255 scale)."""
+    """Return the mean RGB change (0–255) at a sparse pixel grid; 255 if the sizes differ."""
     if (before.width, before.height) != (after.width, after.height):
         return 255.0
     total = count = 0
@@ -94,6 +94,11 @@ class GbaEmulator:
         self._session.__exit__(*args)
 
     def step(self, ticks: int = 1, buttons: tuple[str, ...] = ()) -> None:
+        """Run ``ticks`` ticks holding ``buttons``, then release them.
+
+        Raises:
+            ValueError: when ``ticks`` is not positive or a button is not a GBA button.
+        """
         if ticks < 1:
             raise ValueError("ticks must be positive")
         normalized = {button.upper() for button in buttons}

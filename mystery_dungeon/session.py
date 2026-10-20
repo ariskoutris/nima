@@ -12,7 +12,7 @@ from emulator import Frame, GbaEmulator, scene_distance
 from mystery_dungeon.actions import GameAction, Press, Wait, name
 from mystery_dungeon.ram_state import GameRam, RamState
 
-HOLD_TICKS = 8  # ticks each action holds its button
+HOLD_TICKS = 8  # ticks each action holds its input
 RELEASE_TICKS = 4  # ticks with no input after each action
 TEXT_WAIT_LIMIT = 300  # most ticks spent waiting for one page of text to print
 TEXT_POLL_TICKS = 4  # ticks between text-printing checks
@@ -37,17 +37,25 @@ class Checkpoint:
 
 @dataclass(frozen=True)
 class Observation:
+    """A frame and the path of its screenshot relative to the session output."""
+
     frame: Frame
     screenshot: str
 
 
 @dataclass(frozen=True)
 class Transition:
+    """What one action did.
+
+    ``index`` is the image index of ``before``, ``action_number`` counts actions since the
+    last load, and the ticks are the session's tick count when the action started and ended.
+    """
+
     before: Observation
     after: Observation
     index: int
     action_number: int
-    tick_before: int  # ticks run when the action started
+    tick_before: int
     tick_after: int
 
 
@@ -111,7 +119,7 @@ def perform(game: GbaEmulator, action: GameAction, hold_ticks: int,
 
 
 def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
-    """Pick the brighter of the two frames at the strongest local blink."""
+    """Return whichever frame is brighter at the strongest local blink."""
     if (first.width, first.height) != (second.width, second.height):
         return second
     blocks: dict[tuple[int, int], int] = {}
@@ -131,7 +139,7 @@ def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
 
 
 class GameplaySession:
-    """Run the emulator for the agent and save every observed frame under output."""
+    """Run the emulator for the agent and save every captured frame as a screenshot."""
 
     def __init__(self, emulator: GbaEmulator, output: Path,
                  hold_ticks: int = HOLD_TICKS, release_ticks: int = RELEASE_TICKS):
@@ -179,7 +187,7 @@ class GameplaySession:
         self.capture()
 
     def wait_for_text(self) -> None:
-        """Advance silent ticks until the current dialogue page is fully printed."""
+        """Run without input until the current text page is fully printed, then capture it."""
         if self.current is None:
             raise RuntimeError("capture a frame before waiting")
         state = self.ram_state()
@@ -197,7 +205,7 @@ class GameplaySession:
             self.capture()
 
     def capture(self, frame: Frame | None = None) -> Frame:
-        """Save the current or supplied frame as the session observation."""
+        """Make the current or supplied frame the session's current frame and save it."""
         self.image_index += 1
         self.current = frame if frame is not None else self.emulator.screenshot()
         self.current_name = f"frames/{self.image_index:06d}.png"
@@ -206,7 +214,7 @@ class GameplaySession:
         return self.current
 
     def current_frame(self) -> Frame:
-        """Return one observation, waiting through a cursor blink in menus."""
+        """Return the current frame; in menus, wait through a cursor blink to show the cursor."""
         if self.current is None:
             raise RuntimeError("capture a frame before observing")
         state = self.ram_state()
@@ -226,6 +234,7 @@ class GameplaySession:
         return Observation(self.current_frame(), self.current_name)
 
     def apply(self, action: GameAction) -> Transition:
+        """Perform ``action``, capture the result and update the stall warning."""
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
         before, tick_before = Observation(self.current, self.current_name), self.tick

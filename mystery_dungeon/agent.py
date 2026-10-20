@@ -1,4 +1,4 @@
-"""Pursue one task: act on the current frame and recent turns until the model reports DONE."""
+"""Agent that interacts with the game to complete the given task."""
 
 from __future__ import annotations
 
@@ -12,15 +12,12 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model
     from mystery_dungeon.session import GameplaySession, Observation, Transition
 
-MEMORY_TURNS = 5  # earlier turns every model call sees; not yet tuned
+MEMORY_TURNS = 5  # not yet tuned
 
 
 @dataclass(frozen=True)
 class MemoryEntry:
-    """What the agent saw, the action taken right after it, and the reasoning behind it.
-
-    Reasoning is None for operator actions.
-    """
+    """An earlier turn. Reasoning is None when the operator acted."""
 
     observation: Observation
     action: GameAction
@@ -29,10 +26,7 @@ class MemoryEntry:
 
 @dataclass(frozen=True)
 class Context:
-    """What the model acts on besides the current frame.
-
-    The task and knowledge are long-term; memory holds the recent turns, oldest first.
-    """
+    """Everything the model gets besides the current frame."""
 
     task: str
     knowledge: str
@@ -41,8 +35,6 @@ class Context:
 
 @dataclass(frozen=True)
 class Turn:
-    """What the agent saw and acted on in one turn, the action it chose, and why."""
-
     observation: Observation
     context: Context
     action: Action
@@ -51,7 +43,7 @@ class Turn:
 
 @dataclass(frozen=True)
 class ModelError:
-    """A turn that produced no action because the model call failed."""
+    """A turn where the model call failed."""
 
     observation: Observation
     context: Context
@@ -59,11 +51,8 @@ class ModelError:
 
 
 class Agent:
-    """Choose actions for one task until the model reports it complete.
-
-    The agent touches the game only through act() and manual(); the model call in act()
-    works from the observation alone, and its action is applied after it returns.
-    """
+    """Agent that interacts with the game to complete the given task.
+    Chooses actions with a model and keeps recent turns in memory."""
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
         self._model = model
@@ -76,11 +65,7 @@ class Agent:
         return tuple(self._memory)
 
     def set_task(self, task: str) -> None:
-        """Pursue ``task``; replacing another task clears memory, whose reasoning was for it.
-
-        Clearing the task also clears memory; operator actions taken while no task is set
-        stay in memory for the next task.
-        """
+        """Switch tasks, forgetting the old task's memory."""
         task = task.strip()
         if self._task and task != self._task:
             self._memory.clear()
@@ -90,14 +75,7 @@ class Agent:
         self._memory.clear()
 
     def act(self, session: GameplaySession) -> tuple[Turn | ModelError, Transition | None]:
-        """Observe, ask the model, and apply its action unless it is Done.
-
-        Model failures are returned as a ModelError instead of being raised. The transition
-        is None when nothing was applied.
-
-        Raises:
-            ValueError: when the agent has no task.
-        """
+        """Take one turn: observe, ask the model and apply its action."""
         if not self._task:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
@@ -114,7 +92,7 @@ class Agent:
                 return turn, self._apply(session, action, reply.reasoning)
 
     def manual(self, session: GameplaySession, action: GameAction) -> Transition:
-        """Apply an operator's action; it enters memory like the agent's own."""
+        """Apply an operator's action."""
         return self._apply(session, action, None)
 
     def _apply(self, session: GameplaySession, action: GameAction,

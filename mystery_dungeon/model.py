@@ -1,4 +1,4 @@
-"""The model contract and the model behind a chat-completions endpoint."""
+"""The model the agent asks for each action, and its chat-completions implementation."""
 
 from __future__ import annotations
 
@@ -31,55 +31,47 @@ ANSWER_SCHEMA = {
 
 @dataclass(frozen=True)
 class Reply:
-    """The action the model chose, and why."""
+    """The model's action and its reasoning."""
 
     action: Action
     reasoning: str
 
 
 class Model(Protocol):
-    """What the agent asks each turn: a chat endpoint in play, scripted models in tests."""
+    """Choose the next action from the context and current frame."""
 
-    name: str  # recorded in run configs
-    last_response: dict | None  # raw answer to the latest call, kept for the run log
+    name: str
+    last_response: dict | None  # raw response to the latest call, for the run log
 
     def call(self, context: Context, frame: Frame) -> Reply:
-        """Return one action from ACTIONS for the current frame; Done when the task is complete.
+        """Return the next action, or Done when the task is complete.
 
         Raises:
-            Exception: when the endpoint fails or answers outside the actions.
+            Exception: when no valid action comes back.
         """
         ...
 
 
 @dataclass(frozen=True)
 class ChatSettings:
-    """The [model] table: which endpoint to ask, under which name, and how."""
+    """The [model] table of config.toml."""
 
     url: str
     name: str
     api_key_env: str = ""
     max_tokens: int = 4096
-    request: dict = field(default_factory=dict)
+    request: dict = field(default_factory=dict)  # extra fields sent with every request
 
 
 def read_settings(path: Path = CONFIG) -> ChatSettings:
-    """Read the [model] table of a TOML config.
-
-    Raises:
-        KeyError: when the config has no [model] table.
-        TypeError: when the table is missing url or name, or has an unknown key.
-    """
+    """Read the [model] table of a TOML config."""
     return ChatSettings(**tomllib.loads(path.read_text())["model"])
 
 
 class ChatModel:
-    """Ask a model behind an OpenAI-compatible chat-completions endpoint."""
+    """A model behind an OpenAI-compatible chat-completions endpoint."""
 
     def __init__(self, settings: ChatSettings) -> None:
-        """Raises:
-            ValueError: when the settings name an API key variable that is not set.
-        """
         self._settings = settings
         self._api_key = os.getenv(settings.api_key_env) if settings.api_key_env else None
         if settings.api_key_env and not self._api_key:
@@ -98,7 +90,7 @@ class ChatModel:
         return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip())
 
     def _send(self, content: list[dict]) -> object:
-        """Post one request and return the decoded JSON answer."""
+        """Post one request and return the model's answer as decoded JSON."""
         self.last_response = None
         payload = {
             **self._settings.request,
@@ -125,7 +117,7 @@ class ChatModel:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """The task, knowledge and actions, then earlier turns, then the current screenshot."""
+    """Build the user message: task, knowledge and actions, earlier turns, current frame."""
     text = [f"Task: {context.task}"]
     if context.knowledge:
         text.append(f"Knowledge: {context.knowledge}")
