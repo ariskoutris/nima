@@ -11,10 +11,14 @@ current screenshot after turn -1, shows the result of that action. An operator t
 someone else took.
 
 In your reasoning, state briefly:
-1. What the current screenshot shows: where your character is and which way it faces, the \
-characters and objects around it, and any dialogue box or menu with its text and cursor.
-2. What changed since the previous screenshot, and whether your last action did what you \
-expected. If not, say why.
+1. What the current screenshot shows, judged from the screenshot alone: where your character \
+stands relative to the characters and objects around it, which way it faces, and any dialogue \
+box or menu with its text and cursor.
+2. What your last action actually did, found by comparing the current screenshot with the \
+previous one. The view usually scrolls with your character, so judge movement by whether the \
+surroundings shifted, not by where your character is on screen. Actions often have no effect, \
+for example when something blocks the way; if nothing changed, say so. Trust the screenshots \
+over your earlier reasoning and what you expected.
 3. Your plan for the task, the next action, and what you expect the next screenshot to show.
 
 Choose DONE only when the current screenshot shows that every part of the task is complete; \
