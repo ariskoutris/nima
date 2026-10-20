@@ -17,6 +17,7 @@ from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
 
 if TYPE_CHECKING:
     from mystery_dungeon.agent import Context
+    from mystery_dungeon.session import GameState
 
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
@@ -139,14 +140,32 @@ def _content(context: Context, frame: Frame) -> list[dict]:
         text.append("# Earlier turns (oldest first)")
     content = [{"type": "text", "text": "\n\n".join(text)}]
     for age, entry in zip(range(len(context.memory), 0, -1), context.memory, strict=True):
+        after = [] if entry.observation.game_state is None else [
+            f"Game state: {describe(entry.observation.game_state)}"]
         if entry.reasoning is None:
-            heading, after = f"## Turn -{age} (operator)", f"Action: {name(entry.action)}"
+            heading = f"## Turn -{age} (operator)"
         else:
             heading = f"## Turn -{age}"
-            after = f"Reasoning: {entry.reasoning}\nAction: {name(entry.action)}"
+            after.append(f"Reasoning: {entry.reasoning}")
+        after.append(f"Action: {name(entry.action)}")
         content += [{"type": "text", "text": heading}, _image(entry.observation.frame),
-                    {"type": "text", "text": after}]
-    return content + [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
+                    {"type": "text", "text": "\n".join(after)}]
+    current = [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
+    if context.game_state is not None:
+        current.append({"type": "text", "text": f"# Game state\n{describe(context.game_state)}"})
+    return content + current
+
+
+def describe(state: GameState) -> str:
+    """Describe a game state in one line, leaving out what isn't known."""
+    parts = []
+    if state.position is not None:
+        parts.append(f"player position {state.position} pixels")
+    if state.tile is not None:
+        parts.append(f"player tile {state.tile}")
+    if state.direction is not None:
+        parts.append(f"facing {state.direction}")
+    return ", ".join(parts) or "unknown"
 
 
 def _image(frame: Frame) -> dict:

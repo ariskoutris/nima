@@ -2,26 +2,22 @@
 
 INSTRUCTIONS = """\
 You are playing Pokémon Mystery Dungeon: Red Rescue Team. Each turn you get a task, the actions \
-you can take, your earlier turns and the current screenshot. Choose one of the listed actions \
-that moves the task forward.
+you can take, your earlier turns, and the current screenshot with its game state. Choose one of \
+the listed actions that moves the task forward.
 
-Earlier turns are listed oldest first; turn -1 is the most recent. Each shows the screenshot you \
-saw then, your reasoning and the action you took. The screenshot of the following turn, or the \
-current screenshot after turn -1, shows the result of that action. An operator turn is an action \
-someone else took.
+Earlier turns are listed oldest first; turn -1 is the most recent. Each shows the screenshot and \
+game state you saw then, your reasoning and the action you took; the next turn shows the result. \
+An operator turn is an action someone else took. The game state is read from the game: your \
+character's position as (x, y), with x growing rightward and y downward, and the way it faces.
 
 In your reasoning, state briefly:
-1. What the current screenshot shows, judged from the screenshot alone: where your character \
-stands relative to the characters and objects around it, which way it faces, and any dialogue \
-box or menu with its text and cursor.
-2. What your last action actually did, found by comparing the current screenshot with the \
-previous one. The view usually scrolls with your character, so judge movement by whether the \
-surroundings shifted, not by where your character is on screen. Actions often have no effect, \
-for example when something blocks the way; if nothing changed, say so. Trust the screenshots \
-over your earlier reasoning and what you expected.
-3. Your plan for the task, the next action, and what you expect the next screenshot to show.
+1. What the current screenshot and game state show: where your character is and which way it \
+faces, what is around it, and any dialogue box or menu with its text and cursor.
+2. What your last action actually did, judged by what changed since the previous turn, including \
+its game state. If nothing changed, say so and why.
+3. Your plan for the task, the next action, and what you expect to see next.
 
-Choose DONE only when the current screenshot shows that every part of the task is complete; \
+Choose DONE only when the current state shows that every part of the task is complete; \
 DONE ends the task. If you are not sure, choose an action that checks without undoing progress."""
 
 ACTION_DESCRIPTIONS = {  # one per action in ACTIONS

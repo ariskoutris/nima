@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import time
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     from emulator import Frame
     from mystery_dungeon.agent import Context, ModelError, Turn
     from mystery_dungeon.model import Model, Reply
-    from mystery_dungeon.session import Observation, Transition
+    from mystery_dungeon.session import GameState, Observation, Transition
 
 FORMAT_VERSION = 11  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
@@ -113,7 +114,9 @@ class RunLog:
         self._turns += 1
         calls, self._calls[:] = self._calls.copy(), []
         model_input = {"task": context.task, "screenshot": observation.screenshot,
+                       "game_state": _json_state(context.game_state),
                        "memory": [{"screenshot": entry.observation.screenshot,
+                                   "game_state": _json_state(entry.observation.game_state),
                                    "action": to_json(entry.action),
                                    "reasoning": entry.reasoning}
                                   for entry in context.memory]}
@@ -130,6 +133,10 @@ class RunLog:
         return _append(self._output / "turns.jsonl", {
             "event": event, "time": datetime.now().astimezone().isoformat(timespec="seconds"),
             **fields})
+
+
+def _json_state(state: GameState | None) -> dict | None:
+    return None if state is None else dataclasses.asdict(state)
 
 
 def _append(path: Path, row: dict) -> dict:

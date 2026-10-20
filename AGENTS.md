@@ -13,15 +13,15 @@ experiments and deletion over backwards compatibility.
 - Don't start benchmarks, probes or model runs unless asked; give the command instead.
 
 ## Architecture
-- The agent observes the game only through frames and acts only through actions. It has no
-  access to RAM or any other game state.
+- The agent observes the game through frames plus limited RAM-derived game state information
+  from the session, and acts only through actions.
 - `GameplaySession` is the only code that interacts with the game: it executes inputs, captures
   observations and is the only reader of RAM (`session.ram_state()`).
-- One accepted exception: the session uses RAM to time captures. It waits until text finishes
+- The session also uses RAM to time captures. It waits until text finishes
   printing and returns menu frames with the cursor visible. It never skips cutscenes or advances
   dialogue; the agent chooses WAIT.
-- RAM state from the session may go to the operator (live view) and to `benchmark.py` for grading,
-  never to the agent or its model.
+- Full RAM state from the session goes to the operator (live view) and to `benchmark.py` for
+  grading; the agent and its model get only the limited RAM-derived game state information.
 - Game handling covers a kind of behaviour (all text boxes, all menus), never one screen or game
   state; don't write a handler per case. Name measured timings as constants and say in a comment
   what was measured.
@@ -66,8 +66,10 @@ One term per concept in code, prompts, log fields, flags and docs:
   split is fixed.
 - model: what the agent calls each turn for an action and its reasoning (`Model`, `ChatModel`),
   configured by `[model]` in `config.toml`; `name` is its endpoint id.
-- context: what the model acts on each turn besides the current frame: the task, knowledge and
-  short-term memory (`agent.Context`).
+- context: what the model acts on each turn besides the current frame: the task, knowledge,
+  RAM-derived game state and short-term memory (`agent.Context`).
+- RAM-derived game state: the limited facts read from RAM that the model gets with a frame
+  (`session.GameState`). A saved emulator state is a save state.
 - frame: an image in memory. screenshot: its saved PNG. tick: one emulated GBA frame; counts
   and durations of them are ticks, never frames.
 - case: one benchmark task. variant: one probe configuration. limit: a case's action budget.

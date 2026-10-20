@@ -19,7 +19,7 @@ from mystery_dungeon.model import (
     scaled,
 )
 from mystery_dungeon.prompts import INSTRUCTIONS
-from mystery_dungeon.session import Observation
+from mystery_dungeon.session import GameState, Observation
 
 MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to the door."),
           MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
@@ -136,3 +136,18 @@ def test_scaled_repeats_each_pixel_across_and_down():
     big = scaled(Frame(2, 1, red + blue), 2)
     assert (big.width, big.height) == (4, 2)
     assert big.rgba == (red * 2 + blue * 2) * 2
+
+
+def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
+    sent = answering(monkeypatch, reply({"reasoning": "Blocked.", "action": "DOWN"}))
+    memory = (MemoryEntry(Observation(FRAME, "before.png", GameState((120, 88), None, "west")),
+                          Press("LEFT"), "Step left."),)
+    context = Context("Find the exit", "", memory, GameState(None, (4, 7), "west"))
+    ChatModel(SETTINGS).call(context, FRAME)
+    user = json.loads(sent[0].data)["messages"][1]["content"]
+    texts = [part.get("text") for part in user[1:]]
+    assert texts == ["## Turn -1", None,
+                     "Game state: player position (120, 88) pixels, facing west\n"
+                     "Reasoning: Step left.\nAction: LEFT",
+                     "# Current screenshot", None,
+                     "# Game state\nplayer tile (4, 7), facing west"]

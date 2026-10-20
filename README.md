@@ -16,7 +16,7 @@ Open <http://127.0.0.1:8765> and enter a task. Input from the browser runs after
 
 ## How it works
 
-On each turn, the model sees the task, the current screenshot and the last few turns with their screenshots, reasoning and actions. It reasons, then chooses a button press, a wait, or DONE when the task is complete. Live sessions save screenshots, game states, and event logs under `runs/live/`.
+On each turn, the model sees the task, the current screenshot with its RAM-derived game state (e.g. player position), and the last few turns with their screenshots, RAM-derived game state, reasoning and actions. It reasons, then chooses a button press, a wait, or DONE when the task is complete. Live sessions save screenshots, save states, and event logs under `runs/live/`.
 
 ## Test
 

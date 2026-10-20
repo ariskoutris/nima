@@ -244,3 +244,19 @@ def test_textbox_text_reads_the_open_page():
         assert ram.textbox_text().startswith("Granbull:  I've given up")
         restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
         assert ram.textbox_text() == ""
+
+
+def test_observations_carry_the_game_state_before_and_after_a_move(tmp_path):
+    if not all(path.is_file() for path in (ROM, CORE, CHECKPOINTS / "square.ss0")):
+        pytest.skip("local ROM, core, and checkpoint required")
+    with GbaEmulator(ROM, CORE) as game:
+        restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
+        session = GameplaySession(game, tmp_path)
+        session.capture()
+        observed = session.observe().game_state
+        transition = session.apply(Press("DOWN"))
+        assert transition.before.game_state == observed
+        assert observed.tile is None and observed.direction == "south"
+        x, y = observed.position
+        after = transition.after.game_state
+        assert after.position[0] == x and after.position[1] > y

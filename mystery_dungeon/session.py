@@ -36,11 +36,22 @@ class Checkpoint:
 
 
 @dataclass(frozen=True)
+class GameState:
+    """What the model may know from RAM besides the frame. Positions are (x, y), y downward."""
+
+    position: tuple[int, int] | None  # pixels, on ground maps
+    tile: tuple[int, int] | None  # in dungeons
+    direction: str | None
+
+
+@dataclass(frozen=True)
 class Observation:
-    """A frame and the path of its screenshot relative to the session output."""
+    """A frame, the path of its screenshot relative to the session output, and the game state
+    when it was captured (None without RAM)."""
 
     frame: Frame
     screenshot: str
+    game_state: GameState | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +165,7 @@ class GameplaySession:
         self.tick = 0
         self.current: Frame | None = None
         self.current_name = ""
+        self.current_game_state: GameState | None = None
         self.warning: str | None = None
         self._last_action: GameAction | None = None
         self._unchanged_count = 0
@@ -162,6 +174,13 @@ class GameplaySession:
 
     def ram_state(self) -> RamState | None:
         return self.ram.state() if self.ram is not None else None
+
+    def game_state(self) -> GameState | None:
+        """Return the game state the model may know, or None without RAM."""
+        if self.ram is None:
+            return None
+        return GameState(self.ram.player_position(), self.ram.player_tile(),
+                         self.ram.player_direction())
 
     def load(self, checkpoint: Checkpoint) -> None:
         """Restore a checkpoint and start counting ticks and actions again.
@@ -208,6 +227,7 @@ class GameplaySession:
         """Make the current or supplied frame the session's current frame and save it."""
         self.image_index += 1
         self.current = frame if frame is not None else self.emulator.screenshot()
+        self.current_game_state = self.game_state()
         self.current_name = f"frames/{self.image_index:06d}.png"
         (self.output / "frames").mkdir(parents=True, exist_ok=True)
         self.current.save_png(self.output / self.current_name)
@@ -236,13 +256,15 @@ class GameplaySession:
     def observe(self) -> Observation:
         """Return a readable frame without skipping cutscenes or advancing dialogue."""
         self.wait_for_text()
-        return Observation(self.current_frame(), self.current_name)
+        frame = self.current_frame()
+        return Observation(frame, self.current_name, self.current_game_state)
 
     def apply(self, action: GameAction) -> Transition:
         """Perform ``action``, capture the result and update the stall warning."""
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
-        before, tick_before = Observation(self.current, self.current_name), self.tick
+        before = Observation(self.current, self.current_name, self.current_game_state)
+        tick_before = self.tick
         perform(self.emulator, action, self.hold_ticks, self.release_ticks)
         self.tick += self.hold_ticks + self.release_ticks
         after = self.capture()
@@ -255,7 +277,8 @@ class GameplaySession:
         stalled = self._unchanged_count >= STALL_PRESSES
         self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
                         f"{name(action)} presses" if stalled else None)
-        return Transition(before, Observation(after, self.current_name), self.image_index - 1,
+        return Transition(before, Observation(after, self.current_name, self.current_game_state),
+                          self.image_index - 1,
                           self.action_count, tick_before, self.tick)
 
     def save_state(self, filename: str) -> None:

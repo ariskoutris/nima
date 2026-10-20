@@ -10,7 +10,7 @@ from mystery_dungeon.actions import Action, Done, GameAction
 
 if TYPE_CHECKING:
     from mystery_dungeon.model import Model
-    from mystery_dungeon.session import Observation, Transition
+    from mystery_dungeon.session import GameState, Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
 
@@ -39,6 +39,7 @@ class Context:
     task: str
     knowledge: str
     memory: tuple[MemoryEntry, ...]
+    game_state: GameState | None = None  # with the current frame
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,7 @@ class Agent:
         if not self._task:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
-        context = Context(self._task, self._knowledge, self.memory)
+        context = Context(self._task, self._knowledge, self.memory, observation.game_state)
         try:
             reply = self._model.call(context, observation.frame)
         except Exception as exc:

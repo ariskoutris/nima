@@ -172,7 +172,7 @@ class GameRam:
         return self._value(action + 0xE4, "<h") if _ewram(action, 0xE6) else None
 
     def state(self) -> RamState:
-        """Return a snapshot for timing captures and showing the operator."""
+        """Return a snapshot for timing captures, the agent's game state and the operator."""
         main_loop = self._value(MAIN_LOOP, "<I")
         textbox_type = self.textbox_type()
         printing = self.text_printing()
