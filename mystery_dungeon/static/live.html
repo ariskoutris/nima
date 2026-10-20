@@ -213,7 +213,7 @@
         if ($('activity-detail').textContent !== activity[1]) $('activity-detail').textContent = activity[1];
       }
       $('run-button').textContent = state.running ? 'Pause' : state.status === 'thinking' ? 'Pausing…' : 'Resume';
-      $('screen-state').textContent = state.status === 'thinking' ? 'Game paused while the model responds' :
+      $('screen-state').textContent = state.status === 'thinking' ? 'Game running while the model responds' :
         state.status === 'paused' ? 'Paused' : state.status === 'error' ? 'Needs attention' :
         state.status === 'running' ? 'Agent running' : activity?.[0] || '';
       $('output').textContent = `Model: ${state.model} · Session: ${state.output}`;

@@ -25,6 +25,8 @@ from mystery_dungeon.session import (
     RELEASE_TICKS,
     Checkpoint,
     GameplaySession,
+    Observation,
+    Transition,
     read_checkpoint,
     read_ss0,
 )
@@ -53,6 +55,52 @@ class TakeTurn:
 
 Request = Manual | Load
 Work = Request | TakeTurn
+
+
+class RealtimeSession:
+    """Keep the game running without input from each observation until the next action.
+
+    The game doesn't wait for the model, so an action meets the game as it is when the
+    reply arrives, not as the model saw it.
+    """
+
+    def __init__(self, session: GameplaySession) -> None:
+        self._session = session
+        self._running = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._error: Exception | None = None
+
+    def observe(self) -> Observation:
+        observation = self._session.observe()
+        self._running.set()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return observation
+
+    def apply(self, action: GameAction) -> Transition:
+        self.halt()
+        return self._session.apply(action)
+
+    def halt(self) -> None:
+        """Stop the game after its current tick.
+
+        Raises:
+            Exception: the emulator's error if a tick failed while the game ran.
+        """
+        self._running.clear()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+        if (error := self._error) is not None:
+            self._error = None
+            raise error
+
+    def _run(self) -> None:
+        try:
+            while self._running.is_set():
+                self._session.idle()
+        except Exception as exc:
+            self._error = exc
 
 
 class LiveRun:
@@ -223,7 +271,11 @@ class LiveRun:
 
     def _turn(self, session: GameplaySession, task: str) -> None:
         self._agent.set_task(task)
-        result, transition = self._agent.act(session)
+        realtime = RealtimeSession(session)
+        try:
+            result, transition = self._agent.act(realtime)
+        finally:
+            realtime.halt()  # Done and model errors end the turn without an action
         with self._condition:
             match result:
                 case ModelError(message=message):

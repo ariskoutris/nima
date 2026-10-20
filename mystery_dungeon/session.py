@@ -213,6 +213,11 @@ class GameplaySession:
         self.current.save_png(self.output / self.current_name)
         return self.current
 
+    def idle(self, ticks: int = 1) -> None:
+        """Run ticks without input; the current frame stays the last one captured."""
+        self.emulator.step(ticks)
+        self.tick += ticks
+
     def current_frame(self) -> Frame:
         """Return the current frame; in menus, wait through a cursor blink to show the cursor."""
         if self.current is None:

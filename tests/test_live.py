@@ -234,6 +234,23 @@ def test_frames_stream_during_emulator_steps(start_run):
     assert tick == before + 12
 
 
+def test_game_runs_while_the_model_responds(start_run):
+    gate = threading.Event()
+    model = ScriptedModel(gate=gate)
+    run, game = start_run(model)
+    run.control({"task": "Find exit", "command": "turn"})
+    assert model.entered.wait(2)
+    ticks = run.wait_for_screen(None)[2]
+    deadline = time.monotonic() + 2
+    while run.wait_for_screen(None)[2] == ticks and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert run.wait_for_screen(None)[2] > ticks
+    gate.set()
+    wait_until(run, lambda state: idle(state) and state["history"])
+    press = game.steps.index(AGENT_PRESS)
+    assert (1, ()) in game.steps[:press] and (1, ()) not in game.steps[press:]
+
+
 def test_live_screen_shows_streamed_ticks_not_screenshots(start_run):
     run, game = start_run(ScriptedModel())
     screenshot = Frame(16, 16, bytes([255]) * 16 * 16 * 4)

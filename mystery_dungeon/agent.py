@@ -4,15 +4,23 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from mystery_dungeon.actions import Action, Done, GameAction
 
 if TYPE_CHECKING:
     from mystery_dungeon.model import Model
-    from mystery_dungeon.session import GameplaySession, Observation, Transition
+    from mystery_dungeon.session import Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
+
+
+class Session(Protocol):
+    """The game as the agent sees it: GameplaySession, or live's RealtimeSession."""
+
+    def observe(self) -> Observation: ...
+
+    def apply(self, action: GameAction) -> Transition: ...
 
 
 @dataclass(frozen=True)
@@ -74,7 +82,7 @@ class Agent:
     def clear_memory(self) -> None:
         self._memory.clear()
 
-    def act(self, session: GameplaySession) -> tuple[Turn | ModelError, Transition | None]:
+    def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
         """Take one turn: observe, ask the model and apply its action."""
         if not self._task:
             raise ValueError("give the agent a task before it acts")
@@ -91,11 +99,11 @@ class Agent:
             case action:
                 return turn, self._apply(session, action, reply.reasoning)
 
-    def manual(self, session: GameplaySession, action: GameAction) -> Transition:
+    def manual(self, session: Session, action: GameAction) -> Transition:
         """Apply an operator's action."""
         return self._apply(session, action, None)
 
-    def _apply(self, session: GameplaySession, action: GameAction,
+    def _apply(self, session: Session, action: GameAction,
                reasoning: str | None) -> Transition:
         transition = session.apply(action)
         self._memory.append(MemoryEntry(transition.before, action, reasoning))
