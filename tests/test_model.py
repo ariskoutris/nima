@@ -51,14 +51,14 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert payload["reasoning"]["effort"] == "low"  # the settings' request extras
     system, user = payload["messages"]
     assert system["content"] == INSTRUCTIONS
-    assert "Task: Find the exit" in user["content"][0]["text"]
-    assert "Knowledge: Avoid walls" in user["content"][0]["text"]
+    assert "# Task\nFind the exit" in user["content"][0]["text"]
+    assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
+    assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
     assert texts == [user["content"][0]["text"],
-                     "Earlier screenshot 1:", None,
-                     "Your reasoning: Walk up to the door.\nYour action: UP",
-                     "Earlier screenshot 2:", None, "Operator action, not yours: A",
-                     "Current screenshot:", None]
+                     "## Turn -2", None, "Reasoning: Walk up to the door.\nAction: UP",
+                     "## Turn -1 (operator)", None, "Action: A",
+                     "# Current screenshot", None]
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]

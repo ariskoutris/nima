@@ -128,20 +128,23 @@ def internal_reasoning(response: dict | None) -> str | None:
 
 def _content(context: Context, frame: Frame) -> list[dict]:
     """Build the user message: task, knowledge and actions, earlier turns, current frame."""
-    text = [f"Task: {context.task}"]
+    text = [f"# Task\n{context.task}"]
     if context.knowledge:
-        text.append(f"Knowledge: {context.knowledge}")
-    text.append("Actions:\n" + "\n".join(
-        f"{action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
+        text.append(f"# Knowledge\n{context.knowledge}")
+    text.append("# Actions\n" + "\n".join(
+        f"- {action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
+    if context.memory:
+        text.append("# Earlier turns (oldest first)")
     content = [{"type": "text", "text": "\n\n".join(text)}]
-    for index, entry in enumerate(context.memory, 1):
+    for age, entry in zip(range(len(context.memory), 0, -1), context.memory, strict=True):
         if entry.reasoning is None:
-            after = f"Operator action, not yours: {name(entry.action)}"
+            heading, after = f"## Turn -{age} (operator)", f"Action: {name(entry.action)}"
         else:
-            after = f"Your reasoning: {entry.reasoning}\nYour action: {name(entry.action)}"
-        content += [{"type": "text", "text": f"Earlier screenshot {index}:"},
-                    _image(entry.observation.frame), {"type": "text", "text": after}]
-    return content + [{"type": "text", "text": "Current screenshot:"}, _image(frame)]
+            heading = f"## Turn -{age}"
+            after = f"Reasoning: {entry.reasoning}\nAction: {name(entry.action)}"
+        content += [{"type": "text", "text": heading}, _image(entry.observation.frame),
+                    {"type": "text", "text": after}]
+    return content + [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
 
 
 def _image(frame: Frame) -> dict:
