@@ -15,10 +15,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from emulator import Frame, GbaEmulator
+from mystery_dungeon import CORE, ROM, STATE
 from mystery_dungeon.actions import ACTIONS, Action
 from mystery_dungeon.agent import Agent, Turn
-from mystery_dungeon.models import ModelEntry, load_model, read_models
-from mystery_dungeon.models.server import ModelServer
+from mystery_dungeon.models import Model
+from mystery_dungeon.models.glm import MODEL, GlmModel
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
     HOLD_FRAMES,
@@ -33,7 +34,6 @@ COMMANDS = ("start", "pause", "turn", "manual", "reset")
 MAX_INSTRUCTIONS = 1000
 SCREEN_WAIT_SECONDS = 15
 FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
-NO_MODEL = "choose a model first"
 
 
 @dataclass(frozen=True)
@@ -47,16 +47,11 @@ class Load:
 
 
 @dataclass(frozen=True)
-class SwitchModel:
-    name: str
-
-
-@dataclass(frozen=True)
 class TakeTurn:
     instructions: str
 
 
-Request = Manual | Load | SwitchModel
+Request = Manual | Load
 Work = Request | TakeTurn
 
 
@@ -68,28 +63,24 @@ class LiveRun:
     """
 
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 models: dict[str, ModelEntry], model: str, model_server: ModelServer,
-                 hold_frames: int, release_frames: int, knowledge: str = "") -> None:
+                 model: Model, model_name: str, hold_frames: int, release_frames: int,
+                 knowledge: str = "") -> None:
         if output.exists():
             raise FileExistsError(f"session output already exists: {output}")
-        if model not in models:
-            raise ValueError(f"unknown model: {model}")
         self.output = output
-        self._models = models
         self._rom, self._core = rom, core
         self._checkpoint = read_checkpoint(state)
         self._hold_frames, self._release_frames = hold_frames, release_frames
-        self._knowledge = knowledge
-        self._model_server = model_server
-        self._log = RunLog(output, model,
+        self._log = RunLog(output, model_name,
                            {"kind": "live", "rom": str(rom), "core": str(core),
                             "initial_state": str(state), "hold_frames": hold_frames,
                             "release_frames": release_frames}, knowledge)
-        self._agent: Agent | None = None
+        watched = self._log.watch(model)
+        self._agent = Agent(watched, watched, knowledge)
         self._condition = threading.Condition()
         self._instructions = ""
         self._mode = "paused"  # paused | running | one_turn
-        self._requests: deque[Request] = deque([SwitchModel(model)])
+        self._requests: deque[Request] = deque()
         self._current: Work | None = None
         self._interrupted: str | None = None
         self._error = self._notice = ""
@@ -110,8 +101,6 @@ class LiveRun:
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
                     "history": self._log.recent(), "model": self._log.model_name,
-                    "requested_model": self._pending_model(),
-                    "models": {name: entry.label for name, entry in self._models.items()},
                     "actions": list(ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
@@ -154,9 +143,6 @@ class LiveRun:
             keeps_running = command is None and self._mode != "paused"
             if not instructions and (command in ("start", "turn") or keeps_running):
                 raise ValueError("enter instructions before running the agent")
-            if command in ("start", "turn", "manual") and self._agent is None \
-                    and self._pending_model() is None:
-                raise ValueError(NO_MODEL)
             if instructions != self._instructions:
                 self._instructions = instructions
                 self._interrupt("instructions_changed")
@@ -170,22 +156,6 @@ class LiveRun:
                     self._queue("manual_control", Manual(ACTIONS[action]))
                 case "reset":
                     self._queue("reset_requested", Load(None))
-            self._condition.notify_all()
-
-    def request_model(self, name: str) -> None:
-        """Switch both model roles to the configured model ``name``, discarding the current turn.
-
-        Raises:
-            ValueError: for an unknown model or before the emulator is ready.
-        """
-        with self._condition:
-            if name not in self._models:
-                raise ValueError("unknown model")
-            self._require_loaded()
-            target = self._pending_model() or self._log.model_name
-            if name == target and self._agent is not None and not self._error:
-                return
-            self._queue("model_change", SwitchModel(name))
             self._condition.notify_all()
 
     def load_state_upload(self, data: bytes, format: str) -> None:
@@ -236,8 +206,6 @@ class LiveRun:
                             self._manual(session, action)
                         case Load(checkpoint):
                             self._load(session, checkpoint)
-                        case SwitchModel(name):
-                            self._switch_model(name)
                         case TakeTurn(instructions):
                             self._turn(session, instructions)
                 finally:
@@ -282,10 +250,6 @@ class LiveRun:
                 self._mode = "paused"
 
     def _manual(self, session: GameplaySession, action: Action) -> None:
-        if self._agent is None:
-            # Keep the failed model switch that left the agent missing visible.
-            self._fail(self._error or NO_MODEL)
-            return
         transition = self._agent.manual(session, action)
         with self._condition:
             self._log.record_manual(action, transition)
@@ -300,39 +264,13 @@ class LiveRun:
             return
         if checkpoint is not None:
             self._checkpoint = checkpoint
-        if self._agent is not None:
-            self._agent.clear_memory()
+        self._agent.clear_memory()
         with self._condition:
             self._log.record_reset(session.current_name)
             self._reset_count += 1
             self._error = ""
             self._notice = "Loaded state." if checkpoint is not None else "Reset complete."
         self._after_step(session)
-
-    def _switch_model(self, name: str) -> None:
-        entry = self._models[name]
-        current = self._models[self._log.model_name] if self._agent is not None else None
-        try:
-            model = self._log.watch(load_model(entry.spec, self._model_server.start(entry)))
-        except Exception as exc:
-            if entry.serve:
-                self._model_server.stop()
-                if current is not None and current.serve:
-                    # Only one local server runs at a time, so the current model lost its server.
-                    self._agent = None
-            self._fail(f"Could not switch model: {exc}")
-            return
-        if not entry.serve:
-            self._model_server.stop()
-        first = self._agent is None
-        if first:
-            self._agent = Agent(model, model, self._knowledge)
-        else:
-            self._agent.set_models(model, model)
-        with self._condition:
-            self._log.record_model_change(name)
-            if not first:
-                self._notice = f"Switched to {entry.label}."
 
     def _after_step(self, session: GameplaySession) -> None:
         """Save and show the session's state if it captured a frame since the last call."""
@@ -354,10 +292,6 @@ class LiveRun:
             self._error = message
             self._mode = "paused"
             self._condition.notify_all()
-
-    def _pending_model(self) -> str | None:
-        return next((work.name for work in reversed((self._current, *self._requests))
-                     if isinstance(work, SwitchModel)), None)
 
     def _require_loaded(self) -> None:
         if not self._loaded:
@@ -386,8 +320,6 @@ class LiveRun:
                 return "cancelling" if self._interrupted is not None else "thinking"
             case Load():
                 return "resetting"
-            case SwitchModel():
-                return "switching"
         return "paused" if self._mode == "paused" else "running"
 
     def _show(self, frame: Frame) -> None:
@@ -454,7 +386,7 @@ def handler_for(run: LiveRun):
 
         def do_POST(self) -> None:
             request = urlsplit(self.path)
-            if request.path not in ("/api/control", "/api/load-state", "/api/model"):
+            if request.path not in ("/api/control", "/api/load-state"):
                 self.respond(404, b"Not found", "text/plain; charset=utf-8")
                 return
             try:
@@ -463,17 +395,10 @@ def handler_for(run: LiveRun):
                 limit = 16 * 1024 * 1024 if request.path == "/api/load-state" else 16384
                 if length < 1 or length > limit:
                     raise ValueError("invalid request size")
-                if request.path in ("/api/control", "/api/model"):
+                if request.path == "/api/control":
                     if content_type != "application/json":
                         raise ValueError("Content-Type must be application/json")
-                    data = json.loads(self.rfile.read(length))
-                    if request.path == "/api/model":
-                        if (not isinstance(data, dict) or set(data) != {"model"} or
-                                not isinstance(data["model"], str)):
-                            raise ValueError("model must be a model name")
-                        run.request_model(data["model"])
-                    else:
-                        run.control(data)
+                    run.control(json.loads(self.rfile.read(length)))
                 else:
                     if content_type != "application/octet-stream":
                         raise ValueError("Content-Type must be application/octet-stream")
@@ -491,13 +416,10 @@ def handler_for(run: LiveRun):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("rom", type=Path)
-    parser.add_argument("--core", type=Path, required=True)
-    parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--rom", type=Path, default=ROM)
+    parser.add_argument("--core", type=Path, default=CORE)
+    parser.add_argument("--state", type=Path, default=STATE)
     parser.add_argument("--output", type=Path)
-    models = read_models()
-    parser.add_argument("--model", default=next(iter(models)), choices=models,
-                        help="a [models.NAME] table in config.toml (default: the first)")
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-frames", type=int, default=HOLD_FRAMES)
@@ -505,9 +427,9 @@ def main() -> None:
     args = parser.parse_args()
     if min(args.hold_frames, args.release_frames) < 1:
         parser.error("frame counts must be positive")
+    model = GlmModel()  # fails on a missing key before any output exists
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    model_server = ModelServer(output)
-    run = LiveRun(args.rom, args.core, args.state, output, models, args.model, model_server,
+    run = LiveRun(args.rom, args.core, args.state, output, model, MODEL,
                   args.hold_frames, args.release_frames,
                   args.knowledge.read_text() if args.knowledge else "")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
@@ -522,7 +444,6 @@ def main() -> None:
         pass
     finally:
         run.stop()
-        model_server.close()
         server.server_close()
         if worker.ident is not None:
             worker.join(timeout=5)

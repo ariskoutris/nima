@@ -1,4 +1,4 @@
-"""Compare production models on the Pokémon Square game benchmark."""
+"""Compare agent variants on the Pokémon Square game benchmark."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mystery_dungeon.benchmark import CASES  # noqa: E402 (needs ROOT on sys.path)
-from mystery_dungeon.models import read_models  # noqa: E402
+from mystery_dungeon.models.glm import MODEL  # noqa: E402
 
 CONTROLS = ROOT / "mystery_dungeon/knowledge/controls.md"
 VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge file
@@ -70,36 +70,36 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, choices=read_models())
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     parser.add_argument("--variant", action="append", choices=VARIANTS)
     parser.add_argument("--output", type=Path,
                         help="new run directory (default: timestamped under runs/experiments)")
     args = parser.parse_args(argv)
+    model = MODEL
     cases = [case.id for case in CASES if args.case is None or case.id in args.case]
     variants = list(dict.fromkeys(args.variant or VARIANTS))
     output = (args.output or ROOT / "runs/experiments" /
-              f"probe-{args.model}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}").resolve()
+              f"probe-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}").resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "config.json").write_text(json.dumps({
-        "model": args.model, "cases": cases, "variants": variants,
+        "model": model, "cases": cases, "variants": variants,
     }, indent=2) + "\n")
     try:
         for variant in variants:
             knowledge = VARIANTS[variant]
             command = [sys.executable, "-m", "mystery_dungeon.benchmark",
-                       "--output", str(output / variant), "--model", args.model]
+                       "--output", str(output / variant)]
             if knowledge:
                 command += ["--knowledge", str(knowledge)]
             for case in cases:
                 command += ["--case", case]
-            print(f"{args.model}: {variant}", flush=True)
+            print(variant, flush=True)
             subprocess.run(command, cwd=ROOT, check=True)
-            summaries = summarize(output, args.model, variants, cases)
+            summaries = summarize(output, model, variants, cases)
             if summaries[-1]["model_errors"]:
                 raise SystemExit(f"{variant} had model errors; see {output / 'report.md'}")
     except subprocess.CalledProcessError as exc:
-        summarize(output, args.model, variants, cases)
+        summarize(output, model, variants, cases)
         raise SystemExit(exc.returncode) from exc
     print(f"Report: {output / 'report.md'}", flush=True)
 

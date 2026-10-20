@@ -6,16 +6,15 @@ import argparse
 import hashlib
 import json
 import time
-import tomllib
-from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
 from emulator import GbaEmulator
+from mystery_dungeon import CHECKPOINTS, CORE, ROM
 from mystery_dungeon.agent import Agent
-from mystery_dungeon.models import CONFIG, Model, load_model, read_models
-from mystery_dungeon.models.server import ModelServer
+from mystery_dungeon.models import Model
+from mystery_dungeon.models.glm import MODEL, GlmModel
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
@@ -26,8 +25,6 @@ from mystery_dungeon.session import (
     read_ss0,
 )
 
-GAME = tomllib.loads(CONFIG.read_text())["game"]
-ROM, CORE, CHECKPOINTS = (CONFIG.parent / GAME[key] for key in ("rom", "core", "checkpoints"))
 GRANBULL, LOMBRE, WIGGLYTUFF = 235, 296, 40  # species ids
 WHISCASH_POND = 3  # ground map beyond the square's north exit
 
@@ -230,35 +227,30 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     parser.add_argument("--output", type=Path, default=Path("runs/benchmarks") / timestamp,
                         help="run directory (default: timestamped directory in runs/benchmarks)")
-    models = read_models()
-    parser.add_argument("--model", required=True, choices=models,
-                        help="a [models.NAME] table in config.toml")
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
+    model = GlmModel()  # fails on a missing key before any output exists
     selected = [case for case in CASES if args.case is None or case.id in args.case]
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
     knowledge = args.knowledge.read_text() if args.knowledge else ""
-    entry = models[args.model]
     files = (args.rom, args.core, *(CHECKPOINTS / f"{name}.ss0" for name in CHECKPOINT_NAMES),
-             *(CONFIG.parent / path for path in entry.files),
              *((args.knowledge,) if args.knowledge else ()))
     hashes = {str(path): sha256(path) for path in files}
     (args.output / "config.json").write_text(json.dumps({
         "format_version": FORMAT_VERSION, "layout": "benchmark", "grader": "pmd-red-ram-v1",
-        "model": asdict(entry), "cases": [asdict(c) for c in selected],
+        "model": MODEL, "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES,
     }, indent=2) + "\n")
-    with GbaEmulator(args.rom, args.core) as game, closing(ModelServer(args.output)) as server:
-        url = server.start(entry)
+    with GbaEmulator(args.rom, args.core) as game:
         checkpoints = build_fixtures(game, args.output)
         results = []
         for case in selected:
             print(case.id, flush=True)
-            result = run_case(game, case, load_model(entry.spec, url), checkpoints,
-                              args.output / "cases" / case.id, knowledge, args.model)
+            result = run_case(game, case, model, checkpoints, args.output / "cases" / case.id,
+                              knowledge, MODEL)
             results.append(result)
             report(results, args.output)
             print(f"  {result['stop_reason']} after {result['actions']} actions", flush=True)

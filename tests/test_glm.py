@@ -8,7 +8,7 @@ from fakes import FRAME
 
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import MemoryEntry
-from mystery_dungeon.models import glm, load_model
+from mystery_dungeon.models import glm
 from mystery_dungeon.prompts import ACT, COMPLETE
 
 MEMORY = (MemoryEntry(FRAME, "before.png", Press("UP")),)
@@ -35,7 +35,7 @@ def reply(answer, finish_reason="stop"):
 
 def test_action_request_uses_shared_prompt_knowledge_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({"action": "DOWN"}))
-    model = load_model("mystery_dungeon.models.glm:GlmModel")
+    model = glm.GlmModel()
     assert model.choose_action("Find the exit", "Avoid walls", FRAME, MEMORY) == Press("DOWN")
     payload = sent[0]
     system, user = payload["messages"]

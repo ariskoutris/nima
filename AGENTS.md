@@ -4,14 +4,12 @@ Vision agent for Pokémon Mystery Dungeon: Red Rescue Team. A solo research proj
 experiments and deletion over backwards compatibility.
 
 ## Commands
-- Test: `uv run --extra onejev python -m pytest -q`
+- Test: `uv run python -m pytest -q`
 - Lint: `uv run ruff check` (`--fix` sorts imports)
-- Play: `uv run --extra onejev -m mystery_dungeon play [--model NAME]`
-- Serve a model: `uv run --extra onejev -m mystery_dungeon serve NAME --port 8080`
-- Benchmark: `uv run -m mystery_dungeon.benchmark --model NAME [--case ID]`
-- Probe: `uv run -m scripts.probe --model NAME [--case ID] [--variant NAME]`
-- `--extra onejev` installs `qev`, which only the onejev models need; onejev is the default model.
-  `--env-file .env` supplies `OPENROUTER_API_KEY`, which only glm needs.
+- Play: `uv run --env-file .env -m mystery_dungeon.live`
+- Benchmark: `uv run --env-file .env -m mystery_dungeon.benchmark [--case ID]`
+- Probe: `uv run --env-file .env -m scripts.probe [--case ID] [--variant NAME]`
+- `--env-file .env` supplies `OPENROUTER_API_KEY`.
 - Don't start benchmarks, probes or model runs unless asked; give the command instead.
 
 ## Architecture
@@ -42,7 +40,7 @@ experiments and deletion over backwards compatibility.
 
 ## Object design
 - Give each module and class one responsibility: the agent decides, the session drives the emulator, runners own logging and run output, the live server coordinates operator input. Call another object's public methods instead of reaching into its state.
-- Add a Protocol only at a seam with two or more real implementations (e.g. model adapters plus scripted test models). For a single implementation, use the concrete class; no ABCs, factories or registries.
+- Add a Protocol only at a seam with two or more real implementations (e.g. the GLM model plus scripted test models). For a single implementation, use the concrete class; no ABCs, factories or registries.
 - `PlanningModel` and `ActionModel` are separate roles that one object may fill: a deliberate exception that keeps room for a separate planner.
 - Compose objects instead of inheriting. To share code, write a module-level function, not a base class.
 - Use `@dataclass(frozen=True)` for values passed between components. Only the owning class mutates its state.
@@ -79,7 +77,7 @@ One term per concept in code, prompts, log fields, flags and docs:
 
 ## General practice
 - Type-hint every public signature. Put constants in UPPER_CASE at module top.
-- Define each path, hash, timing and model setting once: paths and models in `config.toml`, the
+- Define each path, hash, timing and model setting once: paths in `config.toml`, the
   rest as a constant in its owning module.
 - Keep functions small with early returns. Replace boolean parameters that switch behaviour with two functions or an explicit value.
 - Prefer the standard library; ask before adding a dependency.

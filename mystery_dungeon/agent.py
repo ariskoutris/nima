@@ -87,10 +87,6 @@ class Agent:
     def set_instructions(self, instructions: str) -> None:
         self._instructions = instructions.strip()
 
-    def set_models(self, planning_model: PlanningModel, action_model: ActionModel) -> None:
-        self._planning_model = planning_model
-        self._action_model = action_model
-
     def clear_memory(self) -> None:
         self._memory.clear()
 

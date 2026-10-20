@@ -74,8 +74,6 @@ def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):
     assert recent[0]["source"] == "manual"
     log.record_reset("frames/000000.png")
     assert log.recent() == []
-    log.record_model_change("other:Model")
     log.record_run_stop("turn_limit", "frames/000001.png")
-    names = [row["event"] for row in events(tmp_path / "run")[-3:]]
-    assert names == ["reset", "model_change", "run_stop"]
-    assert events(tmp_path / "run")[-2]["to"] == "other:Model"
+    names = [row["event"] for row in events(tmp_path / "run")[-2:]]
+    assert names == ["reset", "run_stop"]

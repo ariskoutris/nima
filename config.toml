@@ -3,37 +3,3 @@ rom = "data/game/roms/red-rescue-team.gba"
 core = "data/engines/cores/mgba_libretro.dylib"
 state = "data/game/checkpoints/square.ss0"
 checkpoints = "data/game/checkpoints"
-
-# Each [models.NAME] table names an adapter (spec) and how to reach it: a serve command
-# that the app runs on a free {port} until it answers its ready path, or the url of a
-# server you run yourself. {python} is this project's interpreter, and relative paths
-# are relative to this file. files lists local weights for the benchmark to hash.
-# The first table is the default for play.
-
-[models.onejev]
-label = "OneJev 0.8B (local)"
-spec = "mystery_dungeon.models.onejev:OneJevModel"
-serve = ["{python}", "-m", "qev.cli", "serve", "--host", "127.0.0.1", "--port", "{port}",
-         "--gguf", "data/engines/models/onejev-0.8b-q4_k_m.gguf",
-         "--mmproj", "data/engines/models/onejev-0.8b-mmproj-q8_0.gguf"]
-ready = "/v1/models"
-files = ["data/engines/models/onejev-0.8b-q4_k_m.gguf", "data/engines/models/onejev-0.8b-mmproj-q8_0.gguf"]
-
-[models.onejev-4b]
-label = "OneJev 4B (local)"
-spec = "mystery_dungeon.models.onejev:OneJevModel"
-serve = ["{python}", "-m", "qev.cli", "serve", "--host", "127.0.0.1", "--port", "{port}",
-         "--gguf", "data/engines/models/OneJev-4B.Q4_K_M.gguf",
-         "--mmproj", "data/engines/models/OneJev-4B.mmproj-Q8_0.gguf"]
-ready = "/v1/models"
-files = ["data/engines/models/OneJev-4B.Q4_K_M.gguf", "data/engines/models/OneJev-4B.mmproj-Q8_0.gguf"]
-
-[models.d1]
-label = "d1-3B (local)"
-spec = "mystery_dungeon.models.d1:D1Model"
-serve = ["llama-server", "-hf", "LiquidAI/d1-3B-GGUF:Q4_K_M", "--host", "127.0.0.1", "--port", "{port}"]
-ready = "/health"
-
-[models.glm]
-label = "GLM-5.3-Flash (OpenRouter)"
-spec = "mystery_dungeon.models.glm:GlmModel"

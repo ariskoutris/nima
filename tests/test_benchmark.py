@@ -21,7 +21,6 @@ from mystery_dungeon.benchmark import (
     build_fixtures,
     run_case,
 )
-from mystery_dungeon.models import ModelEntry
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
@@ -222,59 +221,33 @@ def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monk
     assert result["seconds"] == 181
 
 
-def test_main_loads_a_fresh_model_for_each_case(tmp_path, monkeypatch):
-    rom, core, model_file = (tmp_path / name for name in ("game.gba", "core", "model.gguf"))
+def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
+    rom, core = tmp_path / "game.gba", tmp_path / "core"
     checkpoints = (tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)
-    for path in (rom, core, model_file, *checkpoints):
+    for path in (rom, core, *checkpoints):
         path.write_bytes(b"test")
-    models = [object(), object()]
+    model = object()
     cases = (Case("one", "square", "Task one", "down", 1),
              Case("two", "square", "Task two", "down", 1))
     monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
-                                  "--output", str(tmp_path / "run"), "--model", "local"])
-    entry = ModelEntry("local", "Local", "fake:Model", ("llama-server", "-m", "model.gguf"),
-                       "/health", files=(str(model_file),))
-    monkeypatch.setattr(benchmark, "read_models", lambda: {"local": entry})
-    served = []
-
-    class Server:
-        def __init__(self, output):
-            pass
-
-        def start(self, entry):
-            served.append(entry)
-            return "http://127.0.0.1:9000"
-
-        def stop(self):
-            pass
-
-        def close(self):
-            served.append("closed")
-
-    monkeypatch.setattr(benchmark, "ModelServer", Server)
+                                      "--output", str(tmp_path / "run")])
+    monkeypatch.setattr(benchmark, "GlmModel", Mock(return_value=model))
     monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
     monkeypatch.setattr(benchmark, "CASES", cases)
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
-    load = Mock(side_effect=models)
     run = Mock(return_value={"stop_reason": "limit", "actions": 0})
-    monkeypatch.setattr(benchmark, "load_model", load)
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     benchmark.main()
-    assert served == [entry, "closed"]
-    loaded = [call.args for call in load.call_args_list]
-    assert loaded == [("fake:Model", "http://127.0.0.1:9000")] * 2
-    assert run.call_args_list[0].args[2] is models[0]
-    assert run.call_args_list[1].args[2] is models[1]
+    assert [call.args[2] for call in run.call_args_list] == [model, model]
     assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"
     assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
     assert config["format_version"] == FORMAT_VERSION
-    assert config["model"]["name"] == "local"
+    assert config["model"] == benchmark.MODEL
     assert "time_limit_seconds" not in config
     assert "recognition_window" not in config
-    assert config["hashes"][str(model_file)] == benchmark.sha256(model_file)
 
 
 def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
@@ -286,14 +259,14 @@ def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "CASES", (Case("one", "square", "Move", "down", 1),))
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
-    monkeypatch.setattr(benchmark, "load_model", Mock(return_value=object()))
+    monkeypatch.setattr(benchmark, "GlmModel", Mock(return_value=object()))
     run = Mock(return_value={"stop_reason": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     for name, extra in (("none", []), ("controls", ["--knowledge", str(knowledge)])):
         output = tmp_path / name
         monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
-                                      "--output", str(output), "--model", "glm", *extra])
+                                      "--output", str(output), *extra])
         benchmark.main()
         config = json.loads((output / "config.json").read_text())
         assert config["knowledge"] == (str(knowledge) if extra else None)

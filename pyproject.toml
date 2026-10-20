@@ -6,12 +6,6 @@ dependencies = [
     "libretro.py==0.10.0",
 ]
 
-[project.optional-dependencies]
-onejev = ["qev"]
-
-[tool.uv.sources]
-qev = { git = "https://github.com/OmniJev/OneJev.git", rev = "81ce62f1597c91e46767d4d02d6ac2e18534fe94" }
-
 [dependency-groups]
 dev = [
     "pytest>=8,<10",

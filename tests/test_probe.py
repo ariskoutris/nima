@@ -24,7 +24,7 @@ def write_result(command, reason="recognized"):
         else json.dumps({"event": "model_error"}) + "\n")
 
 
-def test_glm_variants_and_summary(tmp_path, monkeypatch):
+def test_variants_and_summary(tmp_path, monkeypatch):
     calls = []
 
     def run(command, **kwargs):
@@ -33,10 +33,9 @@ def test_glm_variants_and_summary(tmp_path, monkeypatch):
 
     monkeypatch.setattr(probe.subprocess, "run", run)
     output = tmp_path / "probe"
-    probe.main(["--model", "glm", "--case", "square_down", "--variant", "baseline",
+    probe.main(["--case", "square_down", "--variant", "baseline",
                 "--variant", "controls", "--output", str(output)])
     assert len(calls) == 2
-    assert calls[0][0][calls[0][0].index("--model") + 1] == "glm"
     assert "--knowledge" not in calls[0][0]
     assert calls[1][0][calls[1][0].index("--knowledge") + 1] == str(probe.CONTROLS)
     assert probe.CONTROLS.is_file()
@@ -47,7 +46,7 @@ def test_glm_variants_and_summary(tmp_path, monkeypatch):
                item["median_turn_ms"] == 100 for item in summary["variants"])
 
 
-def test_local_model_is_passed_by_name_and_stops_after_model_error(tmp_path, monkeypatch):
+def test_probe_stops_after_model_error(tmp_path, monkeypatch):
     calls = []
 
     def run(command, **kwargs):
@@ -57,7 +56,6 @@ def test_local_model_is_passed_by_name_and_stops_after_model_error(tmp_path, mon
     monkeypatch.setattr(probe.subprocess, "run", run)
     output = tmp_path / "probe"
     with pytest.raises(SystemExit, match="model errors"):
-        probe.main(["--model", "onejev", "--case", "square_down", "--output", str(output)])
+        probe.main(["--case", "square_down", "--output", str(output)])
     assert len(calls) == 1
-    assert calls[0][calls[0].index("--model") + 1] == "onejev"
     assert json.loads((output / "summary.json").read_text())["variants"][0]["model_errors"] == 1

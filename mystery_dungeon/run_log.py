@@ -111,12 +111,6 @@ class RunLog:
         self._recent.clear()
         self._write("reset", {"screenshot": screenshot})
 
-    def record_model_change(self, model_name: str) -> None:
-        if model_name == self._model_name:
-            return
-        self._write("model_change", {"from": self._model_name, "to": model_name})
-        self._model_name = model_name
-
     def record_run_stop(self, reason: str, screenshot: str) -> None:
         self._write("run_stop", {"reason": reason, "screenshot": screenshot})
 
