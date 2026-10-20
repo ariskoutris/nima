@@ -30,4 +30,4 @@ uv run python -m pytest -q
 uv run --env-file .env -m mystery_dungeon.benchmark
 ```
 
-It records the model settings, memory length, an instructions hash and the hashes of the ROM, core, checkpoints and knowledge in `config.json`. Results are saved under `runs/benchmarks/`. For background, see [game context](docs/game-context.md), [one-step diagnosis](docs/one-step-diagnosis.md), [historical benchmark results](docs/benchmark-vision-context.md), and [reasoning window and single model](docs/reasoning-window-and-single-model.md).
+It records the model settings, memory length, an instructions hash and the hashes of the ROM, core, checkpoints and knowledge in `config.json`. Results are saved under `runs/benchmarks/`.
