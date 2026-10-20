@@ -51,7 +51,9 @@ def test_turn_rows_carry_the_task_and_action(tmp_path):
 
 def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
     model = ScriptedModel()
-    response = {"choices": [{"message": {"content": "{}", "reasoning": "Thinking."}}]}
+    response = {"choices": [{"message": {"content": "{}", "reasoning": "Thinking."}}],
+                "usage": {"prompt_tokens": 900, "completion_tokens": 60,
+                          "completion_tokens_details": {"reasoning_tokens": 20}}}
     model.last_response = response
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
@@ -60,6 +62,7 @@ def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
     assert [first["turn"], second["turn"]] == [1, 2]
     assert second["ms"] >= 0 and second["response"] == response
     assert second["internal_reasoning"] == "Thinking."
+    assert second["tokens"] == {"prompt": 900, "output": 40, "reasoning": 20}
     assert second["input"] == {
         "task": "Find exit", "screenshot": "frames/000001.png", "game_state": None,
         "memory": [{"screenshot": "frames/000000.png", "game_state": None,

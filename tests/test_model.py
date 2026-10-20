@@ -17,6 +17,7 @@ from mystery_dungeon.model import (
     internal_reasoning,
     read_settings,
     scaled,
+    token_usage,
 )
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.session import Character, GameState, Observation
@@ -129,6 +130,19 @@ def test_invalid_answers_raise_and_keep_the_response(monkeypatch, response, mess
 def test_internal_reasoning_reads_either_provider_field(message, expected):
     assert internal_reasoning({"choices": [{"message": message}]}) == expected
     assert internal_reasoning(None) is None
+
+
+def test_token_usage_splits_reasoning_out_of_output():
+    usage = {"prompt_tokens": 900, "completion_tokens": 60,
+             "completion_tokens_details": {"reasoning_tokens": 20}}
+    assert token_usage({"usage": usage}) == {"prompt": 900, "output": 40, "reasoning": 20}
+
+
+def test_token_usage_without_reasoning_or_usage():
+    usage = {"prompt_tokens": 900, "completion_tokens": 60}
+    assert token_usage({"usage": usage}) == {"prompt": 900, "output": 60, "reasoning": None}
+    assert token_usage({"choices": []}) is None
+    assert token_usage(None) is None
 
 
 def test_scaled_repeats_each_pixel_across_and_down():

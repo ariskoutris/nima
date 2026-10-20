@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 from mystery_dungeon.actions import Done, GameAction, to_json
-from mystery_dungeon.model import internal_reasoning
+from mystery_dungeon.model import internal_reasoning, token_usage
 
 if TYPE_CHECKING:
     from emulator import Frame
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
-FORMAT_VERSION = 11  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 12  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 
@@ -122,7 +122,8 @@ class RunLog:
                                   for entry in context.memory]}
         for call in calls:
             _append(self._output / "model_calls.jsonl", {
-                "turn": self._turns, "ms": call["ms"], "input": model_input,
+                "turn": self._turns, "ms": call["ms"], "tokens": token_usage(call["response"]),
+                "input": model_input,
                 "internal_reasoning": internal_reasoning(call["response"]),
                 "response": call["response"]})
         return self._write(event, {"source": "agent", "turn": self._turns,

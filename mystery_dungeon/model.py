@@ -129,6 +129,21 @@ def internal_reasoning(response: dict | None) -> str | None:
     return message.get("reasoning") or message.get("reasoning_content")
 
 
+def token_usage(response: dict | None) -> dict | None:
+    """Return a response's tokens as prompt, output and reasoning, or None if unreported.
+
+    Output excludes reasoning, so the three sum to the total. Reasoning is None when the
+    endpoint doesn't report it.
+    """
+    usage = (response or {}).get("usage")
+    if not usage:
+        return None
+    reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    return {"prompt": usage["prompt_tokens"],
+            "output": usage["completion_tokens"] - (reasoning or 0),
+            "reasoning": reasoning}
+
+
 def _content(context: Context, frame: Frame) -> list[dict]:
     """Build the user message: task, knowledge and actions, earlier turns, current frame."""
     text = [f"# Task\n{context.task}"]
