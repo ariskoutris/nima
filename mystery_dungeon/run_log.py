@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
-from mystery_dungeon.actions import Done, GameAction, to_json
+from mystery_dungeon.actions import GameAction, Stop, to_json
 from mystery_dungeon.model import internal_reasoning, token_usage
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
-FORMAT_VERSION = 12  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 13  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 
@@ -75,18 +75,18 @@ class RunLog:
         return list(reversed(self._recent))
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
-        """Record an agent turn; transition is what its game action did, None for Done.
+        """Record an agent turn; transition is what its game action did, None for Stop.
 
         Raises:
             ValueError: when a game action comes without its transition.
         """
         match turn.action:
-            case Done():
-                self._write_turn("completion", turn.observation, turn.context,
-                                 {"reasoning": turn.reasoning})
+            case Stop():  # its reason is the note
+                self._write_turn("stop", turn.observation, turn.context,
+                                 {"reasoning": turn.reasoning, "note": turn.note})
             case action if transition is not None:
                 row = self._write_turn("action", turn.observation, turn.context, {
-                    "reasoning": turn.reasoning, "action": to_json(action),
+                    "reasoning": turn.reasoning, "note": turn.note, "action": to_json(action),
                     **_transition_fields(transition)})
                 self._recent.append(row)
             case _:
@@ -113,7 +113,8 @@ class RunLog:
         """Write the model calls made since the last turn, then the turn row."""
         self._turns += 1
         calls, self._calls[:] = self._calls.copy(), []
-        model_input = {"task": context.task, "screenshot": observation.screenshot,
+        model_input = {"task": context.task, "notes": list(context.notes),
+                       "screenshot": observation.screenshot,
                        "game_state": _json_state(context.game_state),
                        "memory": [{"screenshot": entry.observation.screenshot,
                                    "game_state": _json_state(entry.observation.game_state),

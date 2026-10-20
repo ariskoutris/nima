@@ -66,15 +66,15 @@ def test_case_is_reachable_by_scripted_play(town, case):
     game, seeds, output = town
     route = ROUTES[case.id]
 
-    def done():
+    def stop():
         earlier_calls = sum(call[0] == "call" for call in model.calls) - 1
         return case.criterion in ("finish", "finish_lombre") and earlier_calls == len(route)
 
-    model = ScriptedModel(route, done)
+    model = ScriptedModel(route, stop)
     result = run_case(game, case, model, seeds, output / case.id)
     assert result["reached"], result
     if case.criterion in ("finish", "finish_lombre"):
-        assert result["recognized"], result
+        assert result["stopped_reached"], result
 
 
 def test_lombre_finish_requires_closed_dialogue(town, tmp_path):
@@ -101,7 +101,7 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     assert result["actions"] == 14
     assert result["stop_reason"] == "limit"
     assert not result["reached"]
-    assert not result["recognized"]
+    assert not result["stopped_reached"]
     assert Grader(case, GameRam(game)).talking(235)
 
 
@@ -191,16 +191,17 @@ def test_movement_grader_tolerates_waiting(town, case_id, route):
     assert grader.reached()
 
 
-def test_dialogue_reach_and_completion_are_separate(town):
+def test_dialogue_reach_and_stop_are_separate(town):
     game, seeds, output = town
     case = next(case for case in CASES if case.id == "face_npc_talk")
 
-    early = run_case(game, case, ScriptedModel(["A"], votes(True)), seeds,
-                     output / "premature_completion")
-    assert early["false_completion"] and not early["reached"]
+    early = run_case(game, case, ScriptedModel(["A"], votes(True), reasoning="Too soon."),
+                     seeds, output / "premature_stop")
+    assert early["stopped_unreached"] and not early["reached"]
+    assert early["stop_text"] == "Too soon."
     finished = run_case(game, case, ScriptedModel(["A"], votes(False, True)), seeds,
-                        output / "correct_completion")
-    assert finished["recognized"] and finished["actions"] == 1
+                        output / "correct_stop")
+    assert finished["stopped_reached"] and finished["actions"] == 1
 
 
 def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monkeypatch):

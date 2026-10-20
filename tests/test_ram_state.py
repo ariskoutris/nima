@@ -6,7 +6,7 @@ import pytest
 from fakes import ScriptedModel, press
 
 from emulator import GbaEmulator
-from mystery_dungeon.actions import Done, Press
+from mystery_dungeon.actions import Press, Stop
 from mystery_dungeon.agent import Agent
 from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
 from mystery_dungeon.ram_state import (
@@ -189,14 +189,14 @@ def test_agent_plans_only_after_text_finishes(tmp_path):
         session.apply(Press("A"))
         assert GameRam(game).state().text_printing
 
-        def complete():
+        def stop():
             assert not GameRam(game).state().text_printing
             return True
 
-        model = ScriptedModel(complete=complete)
+        model = ScriptedModel(stop=stop)
         agent = Agent(model)
         agent.set_task("Read Granbull's line")
-        assert agent.act(session)[0].action == Done()
+        assert isinstance(agent.act(session)[0].action, Stop)
         assert session.action_count == 1
 
 
@@ -210,18 +210,18 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
         session = GameplaySession(game, tmp_path)
         session.capture()
 
-        def complete():
+        def stop():
             state = GameRam(game).state()
             assert not state.text_printing
             assert model.calls[-1][2].rgba == game.screenshot().rgba
             return state.mode == "field" and session.action_count > 0
 
-        model = ScriptedModel(["A"], complete)
+        model = ScriptedModel(["A"], stop)
         agent = Agent(model)
         agent.set_task("Finish talking to Lombre")
         for _ in range(9):
             assert agent.act(session)[0].action == Press("A")
-        assert agent.act(session)[0].action == Done()
+        assert isinstance(agent.act(session)[0].action, Stop)
         assert session.action_count == 9
 
 

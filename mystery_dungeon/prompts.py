@@ -2,8 +2,8 @@
 
 INSTRUCTIONS = """\
 You are playing Pokémon Mystery Dungeon: Red Rescue Team. Each turn you get a task, the actions \
-you can take, your earlier turns, and the current screenshot with its game state. Choose one of \
-the listed actions that moves the task forward.
+you can take, your notes and earlier turns, and the current screenshot with its game state. \
+Choose one of the listed actions that moves the task forward.
 
 Earlier turns are listed oldest first; turn -1 is the most recent. Each shows the screenshot and \
 game state you saw then, your reasoning and the action you took; the next turn shows the result. \
@@ -18,10 +18,17 @@ faces, what is around it, and any dialogue box or menu with its text and cursor.
 its game state. If nothing changed, say so and why.
 3. Your plan for the task, the next action, and what you expect to see next.
 
-Choose DONE only when the current state shows that every part of the task is complete; \
-DONE ends the task. If you are not sure, choose an action that checks without undoing progress."""
+Use the note to record a finding while it is on screen, such as what someone said, a price, or \
+what a place contains. Notes stay with you for the whole task, while earlier turns are \
+forgotten. Leave the note empty on most turns.
 
-ACTION_DESCRIPTIONS = {  # one per action in ACTIONS
+Choose STOP to end the task in one of three cases, and say in the note which case applies and why:
+- The current state shows that every part of the task is complete; say what shows it.
+- You are stuck: say what you tried and what blocks you.
+- You learned something that makes the task wrong or pointless; say what.
+If you are not sure the task is complete, choose an action that checks without undoing progress."""
+
+ACTION_DESCRIPTIONS = {  # one per action in ACTION_NAMES
     "UP": "move one tile up, or move the menu cursor up",
     "DOWN": "move one tile down, or move the menu cursor down",
     "LEFT": "move one tile left, or move the menu cursor left",
@@ -31,5 +38,5 @@ ACTION_DESCRIPTIONS = {  # one per action in ACTIONS
     "B": "open the menu, cancel, or go back",
     "SELECT": "show the dungeon map",
     "WAIT": "press nothing and let the game run",
-    "DONE": "report that the task is complete; this ends the task",
+    "STOP": "end the task, giving the reason in the note",
 }

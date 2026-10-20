@@ -34,14 +34,14 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
             turns = output / variant / "cases" / row["case"] / "turns.jsonl"
             for line in turns.read_text().splitlines():
                 turn = json.loads(line)
-                if turn["event"] in ("action", "completion") and turn["source"] == "agent":
+                if turn["event"] in ("action", "stop") and turn["source"] == "agent":
                     latencies.append(turn["model_ms"])
         summaries.append({
             "variant": variant, "cases": rows,
             "reached": sum(row["reached"] for row in rows),
-            "recognized": sum(row["recognized"] for row in rows),
+            "stopped_reached": sum(row["stopped_reached"] for row in rows),
             "missed": sum(row["missed"] for row in rows),
-            "false_completion": sum(row["false_completion"] for row in rows),
+            "stopped_unreached": sum(row["stopped_unreached"] for row in rows),
             "model_errors": sum(row["stop_reason"] == "model_error" for row in rows),
             "median_turn_ms": round(statistics.median(latencies)) if latencies else None,
         })
@@ -49,21 +49,21 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         "model": model, "selected_cases": cases, "variants": summaries,
     }, indent=2) + "\n")
     lines = ["# Probe comparison", "", f"Model: {model}", "",
-             "| Variant | Cases | Reached | Recognized | Missed | False completion | Model errors "
-             "| Median turn ms |",
+             "| Variant | Cases | Reached | Stopped reached | Missed | Stopped unreached "
+             "| Model errors | Median turn ms |",
              "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for item in summaries:
         lines.append(f"| {item['variant']} | {len(item['cases'])}/{len(cases)} | "
-                     f"{item['reached']} | {item['recognized']} | {item['missed']} | "
-                     f"{item['false_completion']} | {item['model_errors']} | "
+                     f"{item['reached']} | {item['stopped_reached']} | {item['missed']} | "
+                     f"{item['stopped_unreached']} | {item['model_errors']} | "
                      f"{item['median_turn_ms'] if item['median_turn_ms'] is not None else '—'} |")
     lines += ["", "## Case outcomes", "",
-              "| Variant | Case | Reached | Recognized | Stop reason | Actions | Seconds |",
+              "| Variant | Case | Reached | Stopped reached | Stop reason | Actions | Seconds |",
               "|---|---|:---:|:---:|---|---:|---:|"]
     for item in summaries:
         for row in item["cases"]:
             lines.append(f"| {item['variant']} | {row['case']} | {row['reached']} | "
-                         f"{row['recognized']} | {row['stop_reason']} | {row['actions']} | "
+                         f"{row['stopped_reached']} | {row['stop_reason']} | {row['actions']} | "
                          f"{row['seconds']} |")
     (output / "report.md").write_text("\n".join(lines) + "\n")
     return summaries

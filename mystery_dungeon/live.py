@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from emulator import Frame, GbaEmulator
 from mystery_dungeon import CORE, KNOWLEDGE, ROM, STATE
-from mystery_dungeon.actions import GAME_ACTIONS, Done, GameAction
+from mystery_dungeon.actions import GAME_ACTIONS, GameAction, Stop
 from mystery_dungeon.agent import Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.run_log import RunLog
@@ -275,18 +275,18 @@ class LiveRun:
         try:
             result, transition = self._agent.act(realtime)
         finally:
-            realtime.halt()  # Done and model errors end the turn without an action
+            realtime.halt()  # Stop and model errors end the turn without an action
         with self._condition:
             match result:
                 case ModelError(message=message):
                     self._log.record_model_error(result)
                     self._mode = "paused"
                     self._error = f"Model failed: {message}"
-                # Done for a task the operator replaced during the turn doesn't end the new one.
-                case Turn(action=Done()) if result.context.task == self._task:
+                # Stop for a task the operator replaced during the turn doesn't end the new one.
+                case Turn(action=Stop(reason)) if result.context.task == self._task:
                     self._log.record_turn(result, transition)
                     self._mode = "paused"
-                    self._notice = f"Completed: {result.context.task}"
+                    self._notice = f"Stopped: {reason}"
                 case Turn():
                     self._log.record_turn(result, transition)
                     if self._mode == "one_turn":

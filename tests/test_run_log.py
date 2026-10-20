@@ -64,7 +64,7 @@ def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
     assert second["internal_reasoning"] == "Thinking."
     assert second["tokens"] == {"prompt": 900, "output": 40, "reasoning": 20}
     assert second["input"] == {
-        "task": "Find exit", "screenshot": "frames/000001.png", "game_state": None,
+        "task": "Find exit", "notes": [], "screenshot": "frames/000001.png", "game_state": None,
         "memory": [{"screenshot": "frames/000000.png", "game_state": None,
                     "action": {"type": "press", "button": "A"}, "reasoning": "Scripted."}]}
 
@@ -74,21 +74,21 @@ def test_agent_rows_carry_the_model_reasoning(tmp_path):
     log.record_turn(*agent.act(session))
     log.record_manual(Press("B"), agent.manual(session, Press("B")))
     action, manual = turns(tmp_path)
-    assert action["reasoning"] == "Door ahead."
+    assert action["reasoning"] == "Door ahead." and action["note"] is None
     assert "reasoning" not in manual
     assert log.recent()[1]["reasoning"] == "Door ahead."  # the live view shows it
 
 
-def test_completion_and_model_error_rows(tmp_path):
-    model = ScriptedModel(complete=votes(True), reasoning="Done talking.")
+def test_stop_and_model_error_rows(tmp_path):
+    model = ScriptedModel(stop=votes(True), reasoning="Done talking.")
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
     model.error = RuntimeError("down")
     error, _ = agent.act(session)
     log.record_model_error(error)
-    completion, error_row = turns(tmp_path)
-    assert [completion["event"], error_row["event"]] == ["completion", "model_error"]
-    assert "action" not in completion and completion["reasoning"] == "Done talking."
+    stop, error_row = turns(tmp_path)
+    assert [stop["event"], error_row["event"]] == ["stop", "model_error"]
+    assert "action" not in stop and stop["reasoning"] == stop["note"] == "Done talking."
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()

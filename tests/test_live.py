@@ -170,7 +170,7 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
 
 def test_done_for_a_replaced_task_does_not_end_the_new_one(start_run):
     gate = threading.Event()
-    model = ScriptedModel(complete=votes(True), gate=gate)
+    model = ScriptedModel(stop=votes(True), gate=gate)
     run, game = start_run(model)
     run.control({"task": "Find exit", "command": "start"})
     assert model.entered.wait(2)
@@ -194,10 +194,10 @@ def test_one_turn_runs_exactly_one_turn(start_run):
     assert game.steps.count(AGENT_PRESS) == 1
 
 
-def test_completion_pauses_without_pressing(start_run):
-    run, game = start_run(ScriptedModel(complete=votes(True)))
-    run.control({"task": "Done", "command": "start"})
-    state = wait_until(run, lambda state: state["notice"] == "Completed: Done")
+def test_stop_pauses_with_its_reason_without_pressing(start_run):
+    run, game = start_run(ScriptedModel(stop=votes(True), reasoning="Exit reached."))
+    run.control({"task": "Find exit", "command": "start"})
+    state = wait_until(run, lambda state: state["notice"] == "Stopped: Exit reached.")
     assert state["status"] == "paused" and state["history"] == []
     assert AGENT_PRESS not in game.steps
 
@@ -219,7 +219,7 @@ def test_control_validation(start_run):
     with pytest.raises(ValueError, match="invalid manual action"):
         run.control({"command": "manual", "action": "START"})
     with pytest.raises(ValueError, match="invalid manual action"):
-        run.control({"command": "manual", "action": "DONE"})
+        run.control({"command": "manual", "action": "STOP"})
     with pytest.raises(ValueError, match="unknown control field"):
         run.control({"goal": "Find exit"})
 

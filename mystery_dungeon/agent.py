@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from mystery_dungeon.actions import Action, Done, GameAction
+from mystery_dungeon.actions import Action, GameAction, Stop
 
 if TYPE_CHECKING:
     from mystery_dungeon.model import Model
@@ -40,6 +40,7 @@ class Context:
     knowledge: str
     memory: tuple[MemoryEntry, ...]
     game_state: GameState | None = None  # with the current frame
+    notes: tuple[str, ...] = ()  # the model's notes since the task began
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class Turn:
     context: Context
     action: Action
     reasoning: str
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,44 +63,54 @@ class ModelError:
 
 class Agent:
     """Agent that interacts with the game to complete the given task.
-    Chooses actions with a model and keeps recent turns in memory."""
+    Chooses actions with a model, keeps recent turns in memory and the task's notes."""
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
         self._model = model
         self._knowledge = knowledge.strip()
         self._task = ""
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
+        self._notes: list[str] = []
 
     @property
     def memory(self) -> tuple[MemoryEntry, ...]:
         return tuple(self._memory)
 
+    @property
+    def notes(self) -> tuple[str, ...]:
+        return tuple(self._notes)
+
     def set_task(self, task: str) -> None:
-        """Switch tasks, forgetting the old task's memory."""
+        """Switch tasks, forgetting the old task's memory and notes."""
         task = task.strip()
         if self._task and task != self._task:
-            self._memory.clear()
+            self.clear_memory()
         self._task = task
 
     def clear_memory(self) -> None:
         self._memory.clear()
+        self._notes.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
         """Take one turn: observe, ask the model and apply its action."""
         if not self._task:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
-        context = Context(self._task, self._knowledge, self.memory, observation.game_state)
+        context = Context(self._task, self._knowledge, self.memory, observation.game_state,
+                          self.notes)
         try:
             reply = self._model.call(context, observation.frame)
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
-        turn = Turn(observation, context, reply.action, reply.reasoning)
+        turn = Turn(observation, context, reply.action, reply.reasoning, reply.note)
         match reply.action:
-            case Done():
-                return turn, None
+            case Stop():
+                transition = None
             case action:
-                return turn, self._apply(session, action, reply.reasoning)
+                transition = self._apply(session, action, reply.reasoning)
+        if reply.note is not None:
+            self._notes.append(reply.note)
+        return turn, transition
 
     def manual(self, session: Session, action: GameAction) -> Transition:
         """Apply an operator's action."""

@@ -8,14 +8,14 @@ import pytest
 from scripts import probe
 
 
-def write_result(command, reason="recognized"):
+def write_result(command, reason="stopped_reached"):
     output = Path(command[command.index("--output") + 1])
     case = command[command.index("--case") + 1]
     folder = output / "cases" / case
     folder.mkdir(parents=True)
-    row = {"case": case, "reached": reason == "recognized",
-           "recognized": reason == "recognized", "missed": False,
-           "false_completion": False, "stop_reason": reason,
+    row = {"case": case, "reached": reason == "stopped_reached",
+           "stopped_reached": reason == "stopped_reached", "missed": False,
+           "stopped_unreached": False, "stop_reason": reason,
            "actions": 1, "seconds": 2.0}
     (output / "results.json").write_text(json.dumps([row]))
     (folder / "turns.jsonl").write_text(
@@ -42,7 +42,7 @@ def test_variants_and_summary(tmp_path, monkeypatch):
     assert all(call[1]["check"] for call in calls)
     summary = json.loads((output / "summary.json").read_text())
     assert [item["variant"] for item in summary["variants"]] == list(probe.VARIANTS)
-    assert all(item["reached"] == item["recognized"] == 1 and
+    assert all(item["reached"] == item["stopped_reached"] == 1 and
                item["median_turn_ms"] == 100 for item in summary["variants"])
 
 

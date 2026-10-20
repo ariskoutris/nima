@@ -8,7 +8,7 @@ from fakes import FRAME
 
 from emulator import Frame
 from mystery_dungeon import model
-from mystery_dungeon.actions import Done, Press
+from mystery_dungeon.actions import Press, Stop
 from mystery_dungeon.agent import Context, MemoryEntry
 from mystery_dungeon.model import (
     ChatModel,
@@ -49,10 +49,13 @@ def reply(answer, finish_reason="stop"):
 
 
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": " The door is ahead. ", "action": "DOWN"}))
+    sent = answering(monkeypatch, reply({"reasoning": " The door is ahead. ",
+                                         "note": " Door is south. ", "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
-    answer = chat_model.call(Context("Find the exit", "Avoid walls", MEMORY), FRAME)
-    assert answer == Reply(Press("DOWN"), "The door is ahead.")
+    context = Context("Find the exit", "Avoid walls", MEMORY,
+                      notes=("Exit is south.", "Map is small."))
+    answer = chat_model.call(context, FRAME)
+    assert answer == Reply(Press("DOWN"), "The door is ahead.", "Door is south.")
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
     payload = json.loads(sent[0].data)
@@ -62,6 +65,8 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert system["content"] == INSTRUCTIONS
     assert "# Task\nFind the exit" in user["content"][0]["text"]
     assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
+    assert ("# Your notes for this task (oldest first)\n- Exit is south.\n- Map is small."
+            in user["content"][0]["text"])
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
     assert texts == [user["content"][0]["text"],
@@ -71,20 +76,33 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]
-    assert list(schema["properties"]) == ["reasoning", "action"]
-    assert schema["required"] == ["reasoning", "action"]
-    assert {"WAIT", "DONE"} <= set(schema["properties"]["action"]["enum"])
+    assert list(schema["properties"]) == ["reasoning", "note", "action"]
+    assert schema["required"] == ["reasoning", "note", "action"]
+    assert {"WAIT", "STOP"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
 
-def test_done_reports_completion_with_its_reasoning(monkeypatch):
-    answering(monkeypatch, reply({"reasoning": "The dialogue closed.", "action": "DONE"}))
+def test_stop_takes_its_reason_from_the_note(monkeypatch):
+    answering(monkeypatch, reply({"reasoning": "The dialogue closed.",
+                                  "note": "Talked to Granbull.", "action": "STOP"}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
-    assert answer == Reply(Done(), "The dialogue closed.")
+    assert answer == Reply(Stop("Talked to Granbull."), "The dialogue closed.",
+                           "Talked to Granbull.")
+
+
+def test_stop_without_a_note_is_rejected(monkeypatch):
+    answering(monkeypatch, reply({"reasoning": "Done.", "note": " ", "action": "STOP"}))
+    with pytest.raises(ValueError, match="STOP without a reason"):
+        ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
+
+
+def test_an_empty_note_is_none(monkeypatch):
+    answering(monkeypatch, reply({"reasoning": "Wait.", "note": "", "action": "WAIT"}))
+    assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).note is None
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Wait.", "action": "WAIT"}))
+    sent = answering(monkeypatch, reply({"reasoning": "Wait.", "note": "", "action": "WAIT"}))
     local = ChatModel(ChatSettings("http://localhost/v1/chat/completions", "local"))
     local.call(Context("Talk", "", ()), FRAME)
     assert sent[0].get_header("Authorization") is None
@@ -107,9 +125,10 @@ def test_settings_come_from_the_model_table(tmp_path):
 
 
 @pytest.mark.parametrize("response,message", [
-    (reply({"reasoning": "Start.", "action": "START"}), "unknown action"),
-    (reply({"reasoning": "Press A.", "action": ["A"]}), "unknown action"),
-    (reply({"reasoning": " ", "action": "A"}), "no reasoning"),
+    (reply({"reasoning": "Start.", "note": "", "action": "START"}), "unknown action"),
+    (reply({"reasoning": "Press A.", "note": "", "action": ["A"]}), "unknown action"),
+    (reply({"reasoning": " ", "note": "", "action": "A"}), "no reasoning"),
+    (reply({"reasoning": "Press A.", "note": None, "action": "A"}), "invalid note"),
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),
@@ -153,7 +172,7 @@ def test_scaled_repeats_each_pixel_across_and_down():
 
 
 def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Blocked.", "action": "DOWN"}))
+    sent = answering(monkeypatch, reply({"reasoning": "Blocked.", "note": "", "action": "DOWN"}))
     memory = (MemoryEntry(Observation(FRAME, "before.png", GameState((120, 88), None, "west")),
                           Press("LEFT"), "Step left."),)
     context = Context("Find the exit", "", memory, GameState(None, (4, 7), "west"))
@@ -168,7 +187,7 @@ def test_game_state_follows_each_screenshot_it_belongs_to(monkeypatch):
 
 
 def test_on_screen_characters_are_described_relative_to_the_player(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Face it.", "action": "DOWN"}))
+    sent = answering(monkeypatch, reply({"reasoning": "Face it.", "note": "", "action": "DOWN"}))
     state = GameState((464, 332), None, "west", (
         Character("Granbull", (456, 352), "south"), Character("Lombre", (464, 332), "east")),
         "Quilava")

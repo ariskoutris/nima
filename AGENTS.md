@@ -50,13 +50,15 @@ experiments and deletion over backwards compatibility.
 
 ## Names
 One term per concept in code, prompts, log fields, flags and docs:
-- task: what the agent is currently pursuing; the model decides when it is complete by
-  choosing the action `Done`.
+- task: what the agent is currently pursuing; the model ends it by choosing the action `Stop`.
 - task list: a tree of tasks rooted at "beat the game". A task's children are prerequisites that
   must be completed first (e.g. level up before a boss). The agent maintains it because what to
   attempt next isn't always clear. The design is pending; this core idea is fixed.
-- action: one `Press(button)`, `Wait()` or `Done()`, the closed set in `actions.py`. `GameAction`
-  (Press, Wait) is what the game performs; Done reports the task complete to the runner.
+- action: one `Press(button)`, `Wait()` or `Stop(reason)`, the closed set in `actions.py`.
+  `GameAction` (Press, Wait) is what the game performs; Stop ends the task and tells the runner
+  why: complete, stuck, or the task no longer makes sense.
+- note: a finding the model records in a reply while it is on screen. A task's notes stay in
+  the context until the task changes; a Stop's reason is its note.
 - short-term memory: recent reasoning, observations and turns, plus information retrieved for the
   current task.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered

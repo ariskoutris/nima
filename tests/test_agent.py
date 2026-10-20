@@ -5,7 +5,7 @@ from dataclasses import fields
 import pytest
 from fakes import Game, ScriptedModel, start, votes
 
-from mystery_dungeon.actions import Done, Press, Wait
+from mystery_dungeon.actions import Press, Stop, Wait
 from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, Turn
 
 
@@ -34,6 +34,28 @@ def test_a_new_task_clears_memory(tmp_path):
     assert len(agent.memory) == 1  # the same task keeps its turns
     agent.set_task("Talk to Granbull")
     assert agent.memory == ()
+
+
+def test_notes_stay_in_context_until_the_task_changes(tmp_path):
+    model = ScriptedModel(["A"], notes=["Kecleon sells Oran Berries.", None, "Shop closes."])
+    agent = agent_with(model)
+    session = start(tmp_path)
+    for _ in range(3):
+        turn, _ = agent.act(session)
+    assert turn.note == "Shop closes."
+    assert model.calls[-1][1].notes == ("Kecleon sells Oran Berries.",)
+    assert agent.notes == ("Kecleon sells Oran Berries.", "Shop closes.")
+    agent.set_task("Find exit")
+    assert len(agent.notes) == 2  # the same task keeps its notes
+    agent.set_task("Talk to Granbull")
+    assert agent.notes == ()
+
+
+def test_clearing_memory_forgets_notes(tmp_path):
+    agent = agent_with(ScriptedModel(notes=["A note."]))
+    agent.act(start(tmp_path))
+    agent.clear_memory()
+    assert agent.notes == ()
 
 
 def test_the_first_task_keeps_earlier_manual_actions(tmp_path):
@@ -79,11 +101,11 @@ def test_manual_actions_enter_memory_until_cleared(tmp_path):
     assert agent.memory == ()
 
 
-def test_completion_applies_nothing(tmp_path):
+def test_stop_applies_nothing(tmp_path):
     game = Game()
-    model = ScriptedModel(complete=votes(True))
+    model = ScriptedModel(stop=votes(True))
     turn, transition = agent_with(model).act(start(tmp_path, game))
-    assert turn.action == Done()
+    assert turn.action == Stop("Scripted.")
     assert transition is None
     assert game.steps == []
     assert [call[0] for call in model.calls] == ["call"]
@@ -113,10 +135,13 @@ def test_each_turn_makes_one_model_call(tmp_path):
     assert [call[0] for call in model.calls] == ["call"]
 
 
-def test_reasoning_of_a_completion_is_kept_on_the_turn(tmp_path):
-    model = ScriptedModel(complete=votes(True), reasoning="The dialogue has closed.")
-    turn, _ = agent_with(model).act(start(tmp_path))
-    assert turn.action == Done() and turn.reasoning == "The dialogue has closed."
+def test_a_stop_keeps_its_reasoning_and_its_reason_as_a_note(tmp_path):
+    model = ScriptedModel(stop=votes(True), reasoning="The dialogue has closed.")
+    agent = agent_with(model)
+    turn, _ = agent.act(start(tmp_path))
+    assert turn.action == Stop("The dialogue has closed.")
+    assert turn.reasoning == turn.note == "The dialogue has closed."
+    assert agent.notes == ("The dialogue has closed.",)
 
 
 def test_missing_task_fails_before_any_model_call(tmp_path):
@@ -129,7 +154,7 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "context", "action", "reasoning"}
+        "observation", "context", "action", "reasoning", "note"}
 
 
 def test_agent_writes_no_files(tmp_path):

@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from emulator import Frame
 from mystery_dungeon import CONFIG
-from mystery_dungeon.actions import ACTIONS, Action, name
+from mystery_dungeon.actions import ACTION_NAMES, GAME_ACTIONS, Action, Stop, name
 from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
 
 if TYPE_CHECKING:
@@ -22,22 +22,25 @@ if TYPE_CHECKING:
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
-# Reasoning comes first so the model writes it before it commits to an action.
+# Reasoning comes first so the model writes it before it commits to an action; the note comes
+# before the action because STOP takes its reason from it.
 ANSWER_SCHEMA = {
     "type": "object",
-    "properties": {"reasoning": {"type": "string"},
-                   "action": {"type": "string", "enum": list(ACTIONS)}},
-    "required": ["reasoning", "action"],
+    "properties": {"reasoning": {"type": "string"}, "note": {"type": "string"},
+                   "action": {"type": "string", "enum": list(ACTION_NAMES)}},
+    "required": ["reasoning", "note", "action"],
     "additionalProperties": False,
 }
 
 
 @dataclass(frozen=True)
 class Reply:
-    """The model's action and its reasoning."""
+    """The model's action, its reasoning and its note (None when it wrote none; a Stop's
+    reason is its note)."""
 
     action: Action
     reasoning: str
+    note: str | None = None
 
 
 class Model(Protocol):
@@ -47,7 +50,7 @@ class Model(Protocol):
     last_response: dict | None  # raw response to the latest call, for the run log
 
     def call(self, context: Context, frame: Frame) -> Reply:
-        """Return the next action, or Done when the task is complete.
+        """Return the next action, or Stop with the note as its reason.
 
         Raises:
             Exception: when no valid action comes back.
@@ -86,11 +89,18 @@ class ChatModel:
         answer = self._send(_content(context, frame))
         if not isinstance(answer, dict) or answer.keys() != ANSWER_SCHEMA["properties"].keys():
             raise ValueError(f"{self.name} returned an invalid answer: {answer!r}")
-        if not isinstance(answer["action"], str) or answer["action"] not in ACTIONS:
+        if not isinstance(answer["action"], str) or answer["action"] not in ACTION_NAMES:
             raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
         if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
-        return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip())
+        if not isinstance(answer["note"], str):
+            raise ValueError(f"{self.name} returned an invalid note: {answer['note']!r}")
+        reasoning, note = answer["reasoning"].strip(), answer["note"].strip() or None
+        if answer["action"] != "STOP":
+            return Reply(GAME_ACTIONS[answer["action"]], reasoning, note)
+        if note is None:
+            raise ValueError(f"{self.name} chose STOP without a reason in its note")
+        return Reply(Stop(note), reasoning, note)
 
     def _send(self, content: list[dict]) -> object:
         """Post one request and return the model's answer as decoded JSON."""
@@ -145,10 +155,13 @@ def token_usage(response: dict | None) -> dict | None:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """Build the user message: task, knowledge and actions, earlier turns, current frame."""
+    """Build the user message: task, knowledge, notes and actions, earlier turns, current frame."""
     text = [f"# Task\n{context.task}"]
     if context.knowledge:
         text.append(f"# Knowledge\n{context.knowledge}")
+    if context.notes:
+        text.append("# Your notes for this task (oldest first)\n" +
+                    "\n".join(f"- {note}" for note in context.notes))
     text.append("# Actions\n" + "\n".join(
         f"- {action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
     if context.memory:
