@@ -147,7 +147,8 @@ class LiveRun:
                     "task": self._task, "running": self._mode != "paused",
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
-                    "history": self._log.recent(), "model": self._log.model.name,
+                    "history": self._log.recent(), "notes": list(self._agent.notes),
+                    "model": self._log.model.name,
                     "actions": list(GAME_ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:

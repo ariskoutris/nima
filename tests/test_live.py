@@ -168,7 +168,17 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
     assert AGENT_PRESS in game.steps
 
 
-def test_done_for_a_replaced_task_does_not_end_the_new_one(start_run):
+def test_the_view_lists_the_task_notes(start_run):
+    run, _ = start_run(ScriptedModel(notes=["Kecleon sells Oran Berries."]))
+    run.control({"task": "Find exit", "command": "turn"})
+    state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
+    assert state["notes"] == ["Kecleon sells Oran Berries."]
+    run.control({"task": "Talk to Granbull", "command": "turn"})
+    state = wait_until(run, lambda state: len(state["history"]) == 2 and idle(state))
+    assert state["notes"] == []
+
+
+def test_stop_for_a_replaced_task_does_not_end_the_new_one(start_run):
     gate = threading.Event()
     model = ScriptedModel(stop=votes(True), gate=gate)
     run, game = start_run(model)

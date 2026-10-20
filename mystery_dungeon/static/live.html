@@ -63,7 +63,15 @@
     .pad { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
     .pad .button { min-width: 43px; padding: 7px 9px; font-size: .78rem; }
     .feedback { min-height: 18px; margin: 12px 20px 0; color: #ffb9ad; font-size: .78rem; }
-    .latest, .history { grid-column: 1 / -1; }
+    .latest, .notes, .history { grid-column: 1 / -1; }
+    .notes summary { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 18px 20px; cursor: pointer; list-style: none; }
+    .notes summary::-webkit-details-marker { display: none; }
+    .notes summary h2::before { content: '▸ '; color: #91a7a5; }
+    .notes details[open] summary h2::before { content: '▾ '; }
+    .notes summary:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
+    .notes-list { margin: 0; padding: 0 20px 18px 42px; max-height: 260px; overflow: auto; color: #d3e0da; font-size: .85rem; }
+    .notes-list li { padding: 5px 0; overflow-wrap: anywhere; }
+    .notes-empty { padding: 0 20px 18px; }
     .latest-body { padding: 1px 20px 22px; }
     .choice { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1; margin: 16px 0 7px; font-weight: 800; letter-spacing: -.06em; color: #adf0c3; }
     .choice.manual-choice { color: #ebcf8c; }
@@ -123,6 +131,13 @@
           <div><div id="choice" class="choice">—</div><div id="choice-detail" class="detail">The agent's chosen action will appear here.</div><p id="reasoning" class="reasoning" hidden></p><img id="observation" class="observation" alt="Screen the latest action was chosen from" hidden><div id="observation-label" class="hint" hidden>Screen the action was chosen from</div></div>
         </div>
       </section>
+      <section class="card notes">
+        <details id="notes-panel" open>
+          <summary><h2>Task notes</h2><span id="notes-count" class="muted">None yet</span></summary>
+          <ol id="notes-list" class="notes-list" hidden></ol>
+          <div id="notes-empty" class="notes-empty muted">Findings the agent records during the task will appear here.</div>
+        </details>
+      </section>
       <section class="card history">
         <div class="card-head"><h2>Action history</h2><span class="muted">Latest 40 actions</span></div>
         <div id="history" class="history-list"><span class="muted">No actions yet.</span></div>
@@ -137,7 +152,7 @@
     const GOOD = '#a9d9b8', BAD = '#ffb9ad', NOTE = '#ebcf8c';
     const say = (text, color) => { $('feedback').style.color = color; $('feedback').textContent = text; };
     let screenRevision = 0, screenUrl = null, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
-    let taskDirty = false, sending = false;
+    let taskDirty = false, sending = false, shownNotes = null;
     task.addEventListener('input', () => taskDirty = true);
     task.addEventListener('keydown', event => {
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
@@ -241,6 +256,7 @@
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('history').textContent = 'No actions yet.';
       }
+      renderNotes(state.notes);
       const latest = state.history[0];
       if (!latest) return;
       if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
@@ -262,6 +278,18 @@
       $('observation').src = `/api/observation/${item.index}`;
       $('observation').hidden = false;
       $('observation-label').hidden = false;
+    }
+
+    function renderNotes(notes) {
+      const key = JSON.stringify(notes);
+      if (key === shownNotes) return;
+      shownNotes = key;
+      $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'None yet';
+      $('notes-list').replaceChildren(...notes.map(note => {
+        const item = document.createElement('li'); item.textContent = note; return item;
+      }));
+      $('notes-list').hidden = !notes.length;
+      $('notes-empty').hidden = notes.length > 0;
     }
 
     function renderHistory(rows) {
