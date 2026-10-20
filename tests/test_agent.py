@@ -52,7 +52,7 @@ def test_memory_keeps_the_latest_turns_with_their_reasoning(tmp_path):
         turn, _ = agent.act(session)
     assert turn.reasoning == "Head for the door."
     assert len(agent.memory) == MEMORY_TURNS
-    assert agent.memory[-1].screenshot == f"frames/{MEMORY_TURNS + 1:06d}.png"
+    assert agent.memory[-1].observation.screenshot == f"frames/{MEMORY_TURNS + 1:06d}.png"
     assert all(entry.reasoning == "Head for the door." for entry in agent.memory)
     assert model.calls[-1][1].memory == turn.context.memory
 
@@ -72,7 +72,7 @@ def test_manual_actions_enter_memory_until_cleared(tmp_path):
     session = start(tmp_path)
     agent.manual(session, Press("RIGHT"))
     assert [entry.action for entry in agent.memory] == [Press("RIGHT")]
-    assert agent.memory[0].screenshot == "frames/000000.png"
+    assert agent.memory[0].observation.screenshot == "frames/000000.png"
     agent.act(session)
     assert model.calls[-1][1].memory[0].action == Press("RIGHT")
     agent.clear_memory()

@@ -11,9 +11,10 @@ from mystery_dungeon.actions import Done, Press
 from mystery_dungeon.agent import Context, MemoryEntry
 from mystery_dungeon.model import ChatModel, ChatSettings, Reply, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
+from mystery_dungeon.session import Observation
 
-MEMORY = (MemoryEntry(FRAME, "before.png", Press("UP"), "Walk up to the door."),
-          MemoryEntry(FRAME, "manual.png", Press("A"), None))
+MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to the door."),
+          MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
 

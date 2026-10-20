@@ -43,10 +43,8 @@ class Observation:
 
 @dataclass(frozen=True)
 class Transition:
-    before: Frame
-    before_name: str
-    after: Frame
-    after_name: str
+    before: Observation
+    after: Observation
     index: int
     action_number: int
     frame_before: int
@@ -230,12 +228,12 @@ class GameplaySession:
     def apply(self, action: GameAction) -> Transition:
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
-        before, before_name, frame_before = self.current, self.current_name, self.frame_count
+        before, frame_before = Observation(self.current, self.current_name), self.frame_count
         perform(self.emulator, action, self.hold_frames, self.release_frames)
         self.frame_count += self.hold_frames + self.release_frames
         after = self.capture()
         self.action_count += 1
-        if isinstance(action, Press) and scene_distance(before, after) < STALL_SCENE_DISTANCE:
+        if isinstance(action, Press) and scene_distance(before.frame, after) < STALL_SCENE_DISTANCE:
             self._unchanged_count = self._unchanged_count + 1 if action == self._last_action else 1
         else:
             self._unchanged_count = 0
@@ -243,9 +241,8 @@ class GameplaySession:
         stalled = self._unchanged_count >= STALL_PRESSES
         self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
                         f"{name(action)} presses" if stalled else None)
-        return Transition(before, before_name, after, self.current_name,
-                          self.image_index - 1, self.action_count,
-                          frame_before, self.frame_count)
+        return Transition(before, Observation(after, self.current_name), self.image_index - 1,
+                          self.action_count, frame_before, self.frame_count)
 
     def save_state(self, filename: str) -> None:
         """Write the core state to states/<filename>, replacing any earlier file atomically."""

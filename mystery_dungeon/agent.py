@@ -6,7 +6,6 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from emulator import Frame
 from mystery_dungeon.actions import Action, Done, GameAction
 
 if TYPE_CHECKING:
@@ -18,13 +17,12 @@ MEMORY_TURNS = 5  # earlier turns every model call sees; not yet tuned
 
 @dataclass(frozen=True)
 class MemoryEntry:
-    """A screenshot, the action taken right after it, and the reasoning behind that action.
+    """What the agent saw, the action taken right after it, and the reasoning behind it.
 
     Reasoning is None for operator actions.
     """
 
-    frame: Frame
-    screenshot: str
+    observation: Observation
     action: GameAction
     reasoning: str | None
 
@@ -122,6 +120,5 @@ class Agent:
     def _apply(self, session: GameplaySession, action: GameAction,
                reasoning: str | None) -> Transition:
         transition = session.apply(action)
-        self._memory.append(MemoryEntry(transition.before, transition.before_name, action,
-                                        reasoning))
+        self._memory.append(MemoryEntry(transition.before, action, reasoning))
         return transition

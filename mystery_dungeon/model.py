@@ -138,7 +138,7 @@ def _content(context: Context, frame: Frame) -> list[dict]:
         else:
             after = f"Your reasoning: {entry.reasoning}\nYour action: {name(entry.action)}"
         content += [{"type": "text", "text": f"Earlier screenshot {index}:"},
-                    _image(entry.frame), {"type": "text", "text": after}]
+                    _image(entry.observation.frame), {"type": "text", "text": after}]
     return content + [{"type": "text", "text": "Current screenshot:"}, _image(frame)]
 
 

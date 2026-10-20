@@ -110,8 +110,9 @@ class RunLog:
         """Describe what the agent acted on and take the model calls made since the last row."""
         calls, self._calls[:] = self._calls.copy(), []
         return {"source": "agent", "task": context.task, "screenshot": observation.screenshot,
-                "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action),
-                            "reasoning": entry.reasoning} for entry in context.memory],
+                "memory": [{"screenshot": entry.observation.screenshot,
+                            "action": to_json(entry.action), "reasoning": entry.reasoning}
+                           for entry in context.memory],
                 "model_calls": calls}
 
     def _write(self, event: str, fields: dict) -> dict:
@@ -123,7 +124,7 @@ class RunLog:
 
 
 def _transition_fields(transition: Transition) -> dict:
-    return {"screenshot": transition.before_name, "after": transition.after_name,
+    return {"screenshot": transition.before.screenshot, "after": transition.after.screenshot,
             "index": transition.index, "action_number": transition.action_number,
             "frame_before": transition.frame_before, "frame_after": transition.frame_after}
 
