@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import Observation, Transition
 
-# Shared by run and benchmark configs. 9: no discarded rows; operator input waits for the
-# turn in progress instead of cancelling it.
-FORMAT_VERSION = 9
+# Shared by run and benchmark configs. 10: emulator frame counts are ticks (tick_before,
+# tick_after, hold_ticks, release_ticks); "frame" means only an image.
+FORMAT_VERSION = 10
 RECENT_ROWS = 40
 
 
@@ -126,7 +126,7 @@ class RunLog:
 def _transition_fields(transition: Transition) -> dict:
     return {"screenshot": transition.before.screenshot, "after": transition.after.screenshot,
             "index": transition.index, "action_number": transition.action_number,
-            "frame_before": transition.frame_before, "frame_after": transition.frame_after}
+            "tick_before": transition.tick_before, "tick_after": transition.tick_after}
 
 
 def _summary(row: dict) -> dict:

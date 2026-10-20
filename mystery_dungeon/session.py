@@ -12,15 +12,15 @@ from emulator import Frame, GbaEmulator, scene_distance
 from mystery_dungeon.actions import GameAction, Press, Wait, name
 from mystery_dungeon.ram_state import GameRam, RamState
 
-HOLD_FRAMES = 8  # frames each action holds its button
-RELEASE_FRAMES = 4  # frames with no input after each action
-TEXT_WAIT_LIMIT = 300  # most frames spent waiting for one page of text to print
-TEXT_POLL_FRAMES = 4  # frames between text-printing checks
-# Menus that follow dialogue (e.g. the shop's choices) open a few frames after the last glyph.
-MENU_AFTER_TEXT_FRAMES = 12
-# Frames between the two menu captures, so one of them shows the blinking cursor;
+HOLD_TICKS = 8  # ticks each action holds its button
+RELEASE_TICKS = 4  # ticks with no input after each action
+TEXT_WAIT_LIMIT = 300  # most ticks spent waiting for one page of text to print
+TEXT_POLL_TICKS = 4  # ticks between text-printing checks
+# Menus that follow dialogue (e.g. the shop's choices) open a few ticks after the last glyph.
+MENU_AFTER_TEXT_TICKS = 12
+# Ticks between the two menu captures, so one of them shows the blinking cursor;
 # test_menu_observation_shows_blinking_cursor_without_an_action covers it.
-CURSOR_BLINK_FRAMES = 8
+CURSOR_BLINK_TICKS = 8
 BLINK_PIXEL_DELTA = 100  # summed RGB difference for a pixel to count as blinking
 BLINK_BLOCK_PIXELS = 16  # side of the square regions compared for the strongest blink
 STALL_SCENE_DISTANCE = 3  # scene_distance below which a press barely changed the screen
@@ -47,8 +47,8 @@ class Transition:
     after: Observation
     index: int
     action_number: int
-    frame_before: int
-    frame_after: int
+    tick_before: int  # ticks run when the action started
+    tick_after: int
 
 
 def read_ss0(path: Path | bytes) -> Checkpoint:
@@ -90,24 +90,24 @@ def read_checkpoint(path: Path) -> Checkpoint:
 
 
 def restore(game: GbaEmulator, checkpoint: Checkpoint) -> None:
-    """Load a checkpoint and advance one frame so the core presents it."""
+    """Load a checkpoint and advance one tick so the core presents it."""
     if checkpoint.save_ram is not None:
         game.load_save_ram(checkpoint.save_ram)
     game.load_state(checkpoint.state)
     game.step()
 
 
-def perform(game: GbaEmulator, action: GameAction, hold_frames: int,
-            release_frames: int) -> None:
-    """Hold the action's input for hold_frames, then release it for release_frames."""
+def perform(game: GbaEmulator, action: GameAction, hold_ticks: int,
+            release_ticks: int) -> None:
+    """Hold the action's input for hold_ticks, then release it for release_ticks."""
     match action:
         case Press(button):
-            game.step(hold_frames, (button,))
+            game.step(hold_ticks, (button,))
         case Wait():
-            game.step(hold_frames)
+            game.step(hold_ticks)
         case _:
             assert_never(action)
-    game.step(release_frames)
+    game.step(release_ticks)
 
 
 def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
@@ -134,16 +134,16 @@ class GameplaySession:
     """Run the emulator for the agent and save every observed frame under output."""
 
     def __init__(self, emulator: GbaEmulator, output: Path,
-                 hold_frames: int = HOLD_FRAMES, release_frames: int = RELEASE_FRAMES):
-        if min(hold_frames, release_frames) < 1:
-            raise ValueError("frame counts must be positive")
+                 hold_ticks: int = HOLD_TICKS, release_ticks: int = RELEASE_TICKS):
+        if min(hold_ticks, release_ticks) < 1:
+            raise ValueError("tick counts must be positive")
         self.emulator = emulator
         self.output = output
-        self.hold_frames = hold_frames
-        self.release_frames = release_frames
+        self.hold_ticks = hold_ticks
+        self.release_ticks = release_ticks
         self.image_index = -1
         self.action_count = 0
-        self.frame_count = 0
+        self.tick = 0
         self.current: Frame | None = None
         self.current_name = ""
         self.warning: str | None = None
@@ -156,7 +156,7 @@ class GameplaySession:
         return self.ram.state() if self.ram is not None else None
 
     def load(self, checkpoint: Checkpoint) -> None:
-        """Restore a checkpoint and start counting frames and actions again.
+        """Restore a checkpoint and start counting ticks and actions again.
 
         Raises:
             Exception: the core's error for an unusable checkpoint, after the
@@ -171,7 +171,7 @@ class GameplaySession:
                 self.emulator.load_save_ram(previous_ram)
             self.emulator.load_state(previous_state)
             raise
-        self.frame_count = 1
+        self.tick = 1
         self.action_count = 0
         self.warning = None
         self._last_action = None
@@ -179,21 +179,21 @@ class GameplaySession:
         self.capture()
 
     def wait_for_text(self) -> None:
-        """Advance silent frames until the current dialogue page is fully printed."""
+        """Advance silent ticks until the current dialogue page is fully printed."""
         if self.current is None:
             raise RuntimeError("capture a frame before waiting")
         state = self.ram_state()
         waited = 0
         while state is not None and state.text_printing and waited < TEXT_WAIT_LIMIT:
-            frames = min(TEXT_POLL_FRAMES, TEXT_WAIT_LIMIT - waited)
-            self.emulator.step(frames)
-            self.frame_count += frames
-            waited += frames
+            ticks = min(TEXT_POLL_TICKS, TEXT_WAIT_LIMIT - waited)
+            self.emulator.step(ticks)
+            self.tick += ticks
+            waited += ticks
             state = self.ram_state()
         if waited:
             if state is not None and not state.text_printing and state.mode == "menu":
-                self.emulator.step(MENU_AFTER_TEXT_FRAMES)
-                self.frame_count += MENU_AFTER_TEXT_FRAMES
+                self.emulator.step(MENU_AFTER_TEXT_TICKS)
+                self.tick += MENU_AFTER_TEXT_TICKS
             self.capture()
 
     def capture(self, frame: Frame | None = None) -> Frame:
@@ -213,8 +213,8 @@ class GameplaySession:
         if state is None or state.mode != "menu":
             return self.current
         first = self.current
-        self.emulator.step(CURSOR_BLINK_FRAMES)
-        self.frame_count += CURSOR_BLINK_FRAMES
+        self.emulator.step(CURSOR_BLINK_TICKS)
+        self.tick += CURSOR_BLINK_TICKS
         second = self.emulator.screenshot()
         if (next_state := self.ram_state()) is None or next_state.mode != "menu":
             return self.capture(second)
@@ -228,9 +228,9 @@ class GameplaySession:
     def apply(self, action: GameAction) -> Transition:
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
-        before, frame_before = Observation(self.current, self.current_name), self.frame_count
-        perform(self.emulator, action, self.hold_frames, self.release_frames)
-        self.frame_count += self.hold_frames + self.release_frames
+        before, tick_before = Observation(self.current, self.current_name), self.tick
+        perform(self.emulator, action, self.hold_ticks, self.release_ticks)
+        self.tick += self.hold_ticks + self.release_ticks
         after = self.capture()
         self.action_count += 1
         if isinstance(action, Press) and scene_distance(before.frame, after) < STALL_SCENE_DISTANCE:
@@ -242,7 +242,7 @@ class GameplaySession:
         self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
                         f"{name(action)} presses" if stalled else None)
         return Transition(before, Observation(after, self.current_name), self.image_index - 1,
-                          self.action_count, frame_before, self.frame_count)
+                          self.action_count, tick_before, self.tick)
 
     def save_state(self, filename: str) -> None:
         """Write the core state to states/<filename>, replacing any earlier file atomically."""

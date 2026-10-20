@@ -68,7 +68,8 @@ One term per concept in code, prompts, log fields, flags and docs:
   configured by `[model]` in `config.toml`; `name` is its endpoint id.
 - context: what the model acts on each turn besides the current frame: the task, knowledge and
   short-term memory (`agent.Context`).
-- frame: an image in memory. screenshot: its saved PNG.
+- frame: an image in memory. screenshot: its saved PNG. tick: one emulated GBA frame; counts
+  and durations of them are ticks, never frames.
 - case: one benchmark task. variant: one probe configuration. limit: a case's action budget.
 - Don't use "goal" or "decision". "steering" is reserved for future mid-run operator guidance.
 

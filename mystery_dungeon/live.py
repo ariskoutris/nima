@@ -21,8 +21,8 @@ from mystery_dungeon.agent import Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
-    HOLD_FRAMES,
-    RELEASE_FRAMES,
+    HOLD_TICKS,
+    RELEASE_TICKS,
     Checkpoint,
     GameplaySession,
     read_checkpoint,
@@ -32,7 +32,7 @@ from mystery_dungeon.session import (
 COMMANDS = ("start", "pause", "turn", "manual", "reset")
 MAX_TASK_LENGTH = 1000
 SCREEN_WAIT_SECONDS = 15
-FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
+TICK_SECONDS = 1 / 60  # one tick at the GBA's refresh rate, to pace streamed frames
 
 
 @dataclass(frozen=True)
@@ -64,18 +64,18 @@ class LiveRun:
     """
 
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 model: Model, hold_frames: int, release_frames: int,
+                 model: Model, hold_ticks: int, release_ticks: int,
                  knowledge: str = "") -> None:
         if output.exists():
             raise FileExistsError(f"session output already exists: {output}")
         self.output = output
         self._rom, self._core = rom, core
         self._checkpoint = read_checkpoint(state)
-        self._hold_frames, self._release_frames = hold_frames, release_frames
+        self._hold_ticks, self._release_ticks = hold_ticks, release_ticks
         self._log = RunLog(output, model,
                            {"kind": "live", "rom": str(rom), "core": str(core),
-                            "initial_state": str(state), "hold_frames": hold_frames,
-                            "release_frames": release_frames}, knowledge)
+                            "initial_state": str(state), "hold_ticks": hold_ticks,
+                            "release_ticks": release_ticks}, knowledge)
         self._agent = Agent(self._log.model, knowledge)
         self._condition = threading.Condition()
         self._task = ""
@@ -91,7 +91,7 @@ class LiveRun:
         self._screen_condition = threading.Condition()
         self._screen: Frame | None = None
         self._screen_revision = 0
-        self._stream_frame = 0
+        self._stream_tick = 0
 
     def snapshot(self) -> dict:
         with self._condition:
@@ -103,7 +103,7 @@ class LiveRun:
                     "actions": list(GAME_ACTIONS), "output": str(self.output)}
 
     def wait_for_screen(self, after: int | None) -> tuple[bytes, int, int]:
-        """Return the screen PNG, its revision and game frame once it is newer than ``after``.
+        """Return the screen PNG, its revision and tick once it is newer than ``after``.
 
         Returns the current screen immediately when ``after`` is None, and after
         SCREEN_WAIT_SECONDS at the latest.
@@ -113,8 +113,8 @@ class LiveRun:
                 self._screen_condition.wait_for(
                     lambda: self._screen_revision > after or self._stopping,
                     timeout=SCREEN_WAIT_SECONDS)
-            screen, revision, frame = self._screen, self._screen_revision, self._stream_frame
-        return (screen.png_bytes() if screen else b""), revision, frame
+            screen, revision, tick = self._screen, self._screen_revision, self._stream_tick
+        return (screen.png_bytes() if screen else b""), revision, tick
 
     def control(self, data: dict) -> None:
         """Apply operator input from the live view.
@@ -188,7 +188,7 @@ class LiveRun:
         with GbaEmulator(self._rom, self._core) as emulator:
             emulator.on_frame = self._stream
             session = GameplaySession(emulator, self.output,
-                                      self._hold_frames, self._release_frames)
+                                      self._hold_ticks, self._release_ticks)
             session.load(self._checkpoint)
             self._after_step(session)
             with self._condition:
@@ -277,7 +277,7 @@ class LiveRun:
             self._warning = session.warning
             self._condition.notify_all()
         with self._screen_condition:
-            self._stream_frame = session.frame_count
+            self._stream_tick = session.tick
         self._show(session.current)
 
     def _fail(self, message: str) -> None:
@@ -316,9 +316,9 @@ class LiveRun:
 
     def _stream(self, frame: Frame) -> None:
         with self._screen_condition:
-            self._stream_frame += 1
+            self._stream_tick += 1
         self._show(frame)
-        time.sleep(FRAME_SECONDS)
+        time.sleep(TICK_SECONDS)
 
 
 def handler_for(run: LiveRun):
@@ -351,10 +351,10 @@ def handler_for(run: LiveRun):
                 if request.query and not valid:
                     self.respond(400, b"Invalid screen revision", "text/plain; charset=utf-8")
                     return
-                screen, revision, frame = run.wait_for_screen(int(after) if request.query else None)
+                screen, revision, tick = run.wait_for_screen(int(after) if request.query else None)
                 if screen and (not request.query or revision > int(after)):
                     self.respond(200, screen, "image/png", {
-                        "X-Screen-Revision": str(revision), "X-Game-Frame": str(frame)})
+                        "X-Screen-Revision": str(revision), "X-Game-Tick": str(tick)})
                 elif screen:
                     self.respond(204, b"", "image/png")
                 else:
@@ -407,15 +407,15 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--hold-frames", type=int, default=HOLD_FRAMES)
-    parser.add_argument("--release-frames", type=int, default=RELEASE_FRAMES)
+    parser.add_argument("--hold-ticks", type=int, default=HOLD_TICKS)
+    parser.add_argument("--release-ticks", type=int, default=RELEASE_TICKS)
     args = parser.parse_args()
-    if min(args.hold_frames, args.release_frames) < 1:
-        parser.error("frame counts must be positive")
+    if min(args.hold_ticks, args.release_ticks) < 1:
+        parser.error("tick counts must be positive")
     model = ChatModel(read_settings())  # fails on a missing key before any output exists
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     run = LiveRun(args.rom, args.core, args.state, output, model,
-                  args.hold_frames, args.release_frames,
+                  args.hold_ticks, args.release_ticks,
                   args.knowledge.read_text() if args.knowledge else "")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))
     worker = threading.Thread(target=run.run, daemon=True)

@@ -68,6 +68,7 @@
     .choice { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1; margin: 16px 0 7px; font-weight: 800; letter-spacing: -.06em; color: #adf0c3; }
     .choice.manual-choice { color: #ebcf8c; }
     .detail { color: #a4b9b2; font-size: .85rem; }
+    .reasoning { max-width: 75ch; margin: 14px 0 0; padding: 11px 14px; border-left: 3px solid #4f8a72; border-radius: 6px; background: #0f1a1f; color: #d3e0da; font-size: .88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
     .observation { display: block; width: min(100%, 240px); margin-top: 16px; border: 1px solid #39504d; border-radius: 6px; image-rendering: pixelated; }
     .history-list { padding: 0 20px 18px; max-height: 290px; overflow: auto; }
     .history-row { display: grid; grid-template-columns: 52px 85px 95px minmax(0, 1fr) 90px; gap: 10px; align-items: center; border-top: 1px solid #2a3a3c; padding: 10px 0; font-size: .79rem; }
@@ -91,7 +92,7 @@
     </header>
     <main class="layout">
       <section class="card">
-        <div class="card-head"><h2>Live game</h2><span id="frame" class="muted mono">Frame —</span></div>
+        <div class="card-head"><h2>Live game</h2><span id="tick" class="muted mono">Tick —</span></div>
         <div class="screen-wrap"><div id="screen-empty" class="screen-empty">Waiting for emulator…</div><img id="screen" alt="Live game screen" hidden><div id="screen-activity" class="screen-activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><span><strong id="activity-title"></strong><small id="activity-detail"></small></span></div></div>
         <div class="screen-foot"><span>Latest game view</span><span id="screen-state">Connecting…</span></div>
       </section>
@@ -119,7 +120,7 @@
       <section class="card latest">
         <div class="card-head"><h2 id="action-title">Latest action</h2><div><button id="latest-button" class="button" type="button" hidden>Back to latest</button> <span id="action-meta" class="muted">Waiting for first action</span></div></div>
         <div class="latest-body">
-          <div><div id="choice" class="choice">—</div><div id="choice-detail" class="detail">The agent's chosen action will appear here.</div><img id="observation" class="observation" alt="Screen the latest action was chosen from" hidden><div id="observation-label" class="hint" hidden>Screen the action was chosen from</div></div>
+          <div><div id="choice" class="choice">—</div><div id="choice-detail" class="detail">The agent's chosen action will appear here.</div><p id="reasoning" class="reasoning" hidden></p><img id="observation" class="observation" alt="Screen the latest action was chosen from" hidden><div id="observation-label" class="hint" hidden>Screen the action was chosen from</div></div>
         </div>
       </section>
       <section class="card history">
@@ -236,6 +237,7 @@
         $('action-meta').textContent = 'Waiting for first action';
         $('choice').textContent = '—'; $('choice').className = 'choice';
         $('choice-detail').textContent = 'The agent\'s chosen action will appear here.';
+        $('reasoning').hidden = true;
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('history').textContent = 'No actions yet.';
       }
@@ -253,8 +255,10 @@
       $('latest-button').hidden = selectedIndex === null;
       $('choice').textContent = actionName(item.action);
       $('choice').className = `choice ${item.source === 'manual' ? 'manual-choice' : ''}`;
-      $('action-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms · frame ${item.frame_before}`;
+      $('action-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms · tick ${item.tick_before}`;
       $('choice-detail').textContent = item.source === 'manual' ? 'Manual move' : `Task: ${item.task}`;
+      $('reasoning').textContent = item.reasoning || '';
+      $('reasoning').hidden = !item.reasoning;
       $('observation').src = `/api/observation/${item.index}`;
       $('observation').hidden = false;
       $('observation-label').hidden = false;
@@ -281,8 +285,8 @@
         if (response.status === 204) return;
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         screenRevision = Number(response.headers.get('X-Screen-Revision'));
-        const frame = Number(response.headers.get('X-Game-Frame'));
-        $('frame').textContent = frame ? `Frame ${frame.toLocaleString()}` : 'Frame —';
+        const tick = Number(response.headers.get('X-Game-Tick'));
+        $('tick').textContent = tick ? `Tick ${tick.toLocaleString()}` : 'Tick —';
         const url = URL.createObjectURL(await response.blob());
         $('screen').src = url;
         $('screen').hidden = false;

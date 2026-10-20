@@ -14,7 +14,7 @@ def test_load_resets_counters_and_restores_save_ram(tmp_path):
     session.apply(Press("A"))
     session.load(Checkpoint(b"seed-state", b"seed-ram"))
     assert (game.state, game.ram) == (b"seed-state", b"seed-ram")
-    assert (session.frame_count, session.action_count, session.warning) == (1, 0, None)
+    assert (session.tick, session.action_count, session.warning) == (1, 0, None)
     assert session.observe().screenshot == session.current_name
 
 

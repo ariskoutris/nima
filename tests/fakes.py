@@ -10,7 +10,7 @@ from typing import Callable, Sequence
 from emulator import Frame
 from mystery_dungeon.actions import ACTIONS, GAME_ACTIONS, Done
 from mystery_dungeon.model import Reply
-from mystery_dungeon.session import HOLD_FRAMES, RELEASE_FRAMES, GameplaySession, perform
+from mystery_dungeon.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to sample
 
@@ -81,9 +81,9 @@ class Game:
     def screenshot(self) -> Frame:
         return self.frame
 
-    def step(self, frames: int = 1, buttons: tuple[str, ...] = ()) -> None:
-        self.steps.append((frames, tuple(buttons)))
-        for _ in range(frames if self.on_frame else 0):
+    def step(self, ticks: int = 1, buttons: tuple[str, ...] = ()) -> None:
+        self.steps.append((ticks, tuple(buttons)))
+        for _ in range(ticks if self.on_frame else 0):
             self.on_frame(self.frame)
 
     def save_state(self) -> bytes:
@@ -116,4 +116,4 @@ def events(output: Path) -> list[dict]:
 
 def press(game, action: str) -> None:
     """Perform a named action on a real emulator with the benchmark's timing."""
-    perform(game, GAME_ACTIONS[action], HOLD_FRAMES, RELEASE_FRAMES)
+    perform(game, GAME_ACTIONS[action], HOLD_TICKS, RELEASE_TICKS)

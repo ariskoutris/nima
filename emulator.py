@@ -1,4 +1,4 @@
-"""Small frame-by-frame Game Boy Advance adapter for a Libretro core."""
+"""Small Game Boy Advance adapter for a Libretro core, stepped one tick at a time."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def scene_distance(before: Frame, after: Frame) -> float:
 
 
 class GbaEmulator:
-    """Run a GBA ROM in mGBA, one controlled batch of frames at a time."""
+    """Run a GBA ROM in mGBA, one controlled batch of ticks at a time."""
 
     def __init__(self, rom: str | Path, core: str | Path):
         self.rom = Path(rom).resolve()
@@ -93,15 +93,15 @@ class GbaEmulator:
     def __exit__(self, *args) -> None:
         self._session.__exit__(*args)
 
-    def step(self, frames: int = 1, buttons: tuple[str, ...] = ()) -> None:
-        if frames < 1:
-            raise ValueError("frames must be positive")
+    def step(self, ticks: int = 1, buttons: tuple[str, ...] = ()) -> None:
+        if ticks < 1:
+            raise ValueError("ticks must be positive")
         normalized = {button.upper() for button in buttons}
         if invalid := normalized - BUTTONS:
             raise ValueError(f"invalid GBA button(s): {', '.join(sorted(invalid))}")
         self._buttons = normalized
         try:
-            for _ in range(frames):
+            for _ in range(ticks):
                 self._session.run()
                 if self.on_frame:
                     self.on_frame(self.screenshot())
@@ -159,12 +159,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check a GBA ROM with the mGBA adapter")
     parser.add_argument("rom", type=Path)
     parser.add_argument("--core", type=Path, required=True)
-    parser.add_argument("--boot-frames", type=int, default=120)
+    parser.add_argument("--boot-ticks", type=int, default=120)
     parser.add_argument("--screenshot", type=Path, default=Path("runs/smoke.png"))
     args = parser.parse_args()
 
     with GbaEmulator(args.rom, args.core) as emulator:
-        emulator.step(args.boot_frames)
+        emulator.step(args.boot_ticks)
         checkpoint = emulator.save_state()
         emulator.step(15)
         no_input = emulator.screenshot()

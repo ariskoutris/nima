@@ -28,9 +28,9 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         assert initial.mode == "dialogue" and initial.text_printing
         partial = session.current.rgba
         actions = session.action_count
-        frames = session.frame_count
+        ticks = session.tick
         session.wait_for_text()
-        assert session.frame_count > frames
+        assert session.tick > ticks
         assert session.action_count == actions
         assert GameRam(game).state().mode == ready_mode
         assert not GameRam(game).state().text_printing
@@ -99,7 +99,7 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
                 observed = session.current_frame()
                 assert light_pixels(observed, rect) > threshold
                 assert session.action_count == 0
-                assert session.frame_count == 8
+                assert session.tick == 8
                 assert (session.output / session.current_name).is_file()
 
 

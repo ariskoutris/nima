@@ -33,7 +33,7 @@ def idle(state):
 def start_run(tmp_path, monkeypatch):
     """Start a LiveRun over a fake game and the given model."""
     threads = []
-    monkeypatch.setattr(live, "FRAME_SECONDS", 0)
+    monkeypatch.setattr(live, "TICK_SECONDS", 0)
 
     def start(model):
         game = Game()
@@ -228,6 +228,6 @@ def test_frames_stream_during_emulator_steps(start_run):
     before = run.wait_for_screen(None)[2]
     run.control({"command": "manual", "action": "WAIT"})
     wait_until(run, lambda state: len(state["history"]) == 1)
-    screen, revision, frame = run.wait_for_screen(None)
+    screen, revision, tick = run.wait_for_screen(None)
     assert screen == game.frame.png_bytes() and revision >= 1
-    assert frame == before + 12
+    assert tick == before + 12

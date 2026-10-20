@@ -41,7 +41,7 @@ def test_turn_rows_carry_the_task_and_model_calls(tmp_path):
     assert all(call["ms"] >= 0 and call["response"] == {"reasoning": "door ahead"}
                for call in action["model_calls"])
     assert {"time", "task", "screenshot", "after", "memory", "index",
-            "action_number", "frame_before", "frame_after"} <= action.keys()
+            "action_number", "tick_before", "tick_after"} <= action.keys()
     log.record_turn(*agent.act(session))
     assert events(tmp_path / "run")[-1]["memory"] == [{
         "screenshot": "frames/000000.png", "action": {"type": "press", "button": "A"},
@@ -55,6 +55,7 @@ def test_agent_rows_carry_the_model_reasoning(tmp_path):
     action, manual = events(tmp_path / "run")
     assert action["reasoning"] == "Door ahead."
     assert "reasoning" not in manual
+    assert log.recent()[1]["reasoning"] == "Door ahead."  # the live view shows it
 
 
 def test_completion_and_model_error_rows(tmp_path):

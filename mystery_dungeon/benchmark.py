@@ -19,8 +19,8 @@ from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
-    HOLD_FRAMES,
-    RELEASE_FRAMES,
+    HOLD_TICKS,
+    RELEASE_TICKS,
     Checkpoint,
     GameplaySession,
     read_ss0,
@@ -153,7 +153,7 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     log = RunLog(output, model,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
                   "criterion": case.criterion, "limit": case.limit,
-                  "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES},
+                  "hold_ticks": HOLD_TICKS, "release_ticks": RELEASE_TICKS},
                  knowledge)
     agent = Agent(log.model, knowledge)
     agent.set_task(case.task)
@@ -250,7 +250,7 @@ def main() -> None:
         "instructions_sha256": hashlib.sha256(INSTRUCTIONS.encode()).hexdigest(),
         "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
-        "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES,
+        "hold_ticks": HOLD_TICKS, "release_ticks": RELEASE_TICKS,
     }, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game:
         checkpoints = build_fixtures(game, args.output)
