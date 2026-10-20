@@ -9,7 +9,7 @@ from fakes import FRAME
 from mystery_dungeon import model
 from mystery_dungeon.actions import Done, Press
 from mystery_dungeon.agent import Context, MemoryEntry
-from mystery_dungeon.model import ChatModel, ChatSettings, Reply, read_settings
+from mystery_dungeon.model import ChatModel, ChatSettings, Reply, internal_reasoning, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.session import Observation
 
@@ -111,3 +111,13 @@ def test_invalid_answers_raise_and_keep_the_response(monkeypatch, response, mess
     with pytest.raises(ValueError, match=message):
         chat_model.call(Context("Talk", "", ()), FRAME)
     assert chat_model.last_response == response
+
+
+@pytest.mark.parametrize("message, expected", [
+    ({"content": "{}", "reasoning": "OpenRouter."}, "OpenRouter."),
+    ({"content": "{}", "reasoning_content": "vLLM."}, "vLLM."),
+    ({"content": "{}"}, None),
+])
+def test_internal_reasoning_reads_either_provider_field(message, expected):
+    assert internal_reasoning({"choices": [{"message": message}]}) == expected
+    assert internal_reasoning(None) is None

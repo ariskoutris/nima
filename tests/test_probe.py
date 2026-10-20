@@ -18,9 +18,9 @@ def write_result(command, reason="recognized"):
            "false_completion": False, "stop_reason": reason,
            "actions": 1, "seconds": 2.0}
     (output / "results.json").write_text(json.dumps([row]))
-    (folder / "events.jsonl").write_text(
-        json.dumps({"event": "action", "source": "agent",
-                    "model_calls": [{"ms": 40}, {"ms": 60}]}) + "\n" if reason != "model_error"
+    (folder / "turns.jsonl").write_text(
+        json.dumps({"event": "action", "source": "agent", "model_ms": 100}) + "\n"
+        if reason != "model_error"
         else json.dumps({"event": "model_error"}) + "\n")
 
 

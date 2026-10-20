@@ -116,6 +116,16 @@ class ChatModel:
             raise ValueError(f"{self.name} returned an invalid answer") from exc
 
 
+def internal_reasoning(response: dict | None) -> str | None:
+    """Return the reasoning a chat response carries besides its answer, if any."""
+    try:
+        message = response["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    # OpenRouter names the field "reasoning"; vLLM and others name it "reasoning_content".
+    return message.get("reasoning") or message.get("reasoning_content")
+
+
 def _content(context: Context, frame: Frame) -> list[dict]:
     """Build the user message: task, knowledge and actions, earlier turns, current frame."""
     text = [f"Task: {context.task}"]

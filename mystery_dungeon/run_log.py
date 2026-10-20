@@ -1,4 +1,4 @@
-"""Record a run's configuration and events."""
+"""Record a run's configuration, turns and model calls."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 from mystery_dungeon.actions import Done, GameAction, to_json
+from mystery_dungeon.model import internal_reasoning
 
 if TYPE_CHECKING:
     from emulator import Frame
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import Observation, Transition
 
-FORMAT_VERSION = 10  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 11  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 
@@ -44,9 +45,10 @@ class LoggedModel:
 
 
 class RunLog:
-    """Write config.json once, then append one events.jsonl row per event.
+    """Write config.json once, then append rows to turns.jsonl and model_calls.jsonl.
 
-    Calls made through ``model`` are attached to the next recorded turn.
+    turns.jsonl holds what happened in the game; model_calls.jsonl holds what the model
+    saw and answered, linked to its turn row by ``turn``.
     """
 
     def __init__(self, output: Path, model: Model, run: Mapping[str, str | int],
@@ -55,6 +57,7 @@ class RunLog:
         self._output = output
         self._calls: list[dict] = []
         self.model = LoggedModel(model, self._calls)
+        self._turns = 0
         self._recent: deque[dict] = deque(maxlen=RECENT_ROWS)
         snapshot = None
         if knowledge:
@@ -67,7 +70,7 @@ class RunLog:
         }, indent=2) + "\n")
 
     def recent(self) -> list[dict]:
-        """Return action rows since the last reset, newest first, without responses or memory."""
+        """Return action rows since the last reset, newest first."""
         return list(reversed(self._recent))
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
@@ -76,26 +79,26 @@ class RunLog:
         Raises:
             ValueError: when a game action comes without its transition.
         """
-        fields = {**self._step_fields(turn.observation, turn.context),
-                  "reasoning": turn.reasoning}
         match turn.action:
             case Done():
-                self._write("completion", fields)
+                self._write_turn("completion", turn.observation, turn.context,
+                                 {"reasoning": turn.reasoning})
             case action if transition is not None:
-                row = self._write("action", {**fields, "action": to_json(action),
-                                             **_transition_fields(transition)})
-                self._recent.append(_summary(row))
+                row = self._write_turn("action", turn.observation, turn.context, {
+                    "reasoning": turn.reasoning, "action": to_json(action),
+                    **_transition_fields(transition)})
+                self._recent.append(row)
             case _:
                 raise ValueError("a game action needs the transition it caused")
 
     def record_model_error(self, error: ModelError) -> None:
-        self._write("model_error", {**self._step_fields(error.observation, error.context),
-                                    "error": error.message})
+        self._write_turn("model_error", error.observation, error.context,
+                         {"error": error.message})
 
     def record_manual(self, action: GameAction, transition: Transition) -> None:
-        self._recent.append(_summary(self._write("action", {
-            "source": "manual", "action": to_json(action),
-            **_transition_fields(transition)})))
+        self._recent.append(self._write("action", {
+            "source": "manual", "action": to_json(action), "model_ms": 0,
+            **_transition_fields(transition)}))
 
     def record_reset(self, screenshot: str) -> None:
         self._recent.clear()
@@ -104,31 +107,38 @@ class RunLog:
     def record_run_stop(self, reason: str, screenshot: str) -> None:
         self._write("run_stop", {"reason": reason, "screenshot": screenshot})
 
-    def _step_fields(self, observation: Observation, context: Context) -> dict:
-        """Describe what the agent acted on and take the model calls made since the last row."""
+    def _write_turn(self, event: str, observation: Observation, context: Context,
+                    fields: dict) -> dict:
+        """Write the model calls made since the last turn, then the turn row."""
+        self._turns += 1
         calls, self._calls[:] = self._calls.copy(), []
-        return {"source": "agent", "task": context.task, "screenshot": observation.screenshot,
-                "memory": [{"screenshot": entry.observation.screenshot,
-                            "action": to_json(entry.action), "reasoning": entry.reasoning}
-                           for entry in context.memory],
-                "model_calls": calls}
+        model_input = {"task": context.task, "screenshot": observation.screenshot,
+                       "memory": [{"screenshot": entry.observation.screenshot,
+                                   "action": to_json(entry.action),
+                                   "reasoning": entry.reasoning}
+                                  for entry in context.memory]}
+        for call in calls:
+            _append(self._output / "model_calls.jsonl", {
+                "turn": self._turns, "ms": call["ms"], "input": model_input,
+                "internal_reasoning": internal_reasoning(call["response"]),
+                "response": call["response"]})
+        return self._write(event, {"source": "agent", "turn": self._turns,
+                                   "task": context.task, "screenshot": observation.screenshot,
+                                   "model_ms": sum(call["ms"] for call in calls), **fields})
 
     def _write(self, event: str, fields: dict) -> dict:
-        row = {"event": event, "time": datetime.now().astimezone().isoformat(timespec="seconds"),
-               **fields}
-        with (self._output / "events.jsonl").open("a") as log:
-            log.write(json.dumps(row) + "\n")
-        return row
+        return _append(self._output / "turns.jsonl", {
+            "event": event, "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+            **fields})
+
+
+def _append(path: Path, row: dict) -> dict:
+    with path.open("a") as log:
+        log.write(json.dumps(row) + "\n")
+    return row
 
 
 def _transition_fields(transition: Transition) -> dict:
     return {"screenshot": transition.before.screenshot, "after": transition.after.screenshot,
             "index": transition.index, "action_number": transition.action_number,
             "tick_before": transition.tick_before, "tick_after": transition.tick_after}
-
-
-def _summary(row: dict) -> dict:
-    """Return an action row as the live view lists it: model calls and memory become total ms."""
-    summary = {key: value for key, value in row.items() if key not in ("model_calls", "memory")}
-    summary["model_ms"] = sum(call["ms"] for call in row.get("model_calls", ()))
-    return summary

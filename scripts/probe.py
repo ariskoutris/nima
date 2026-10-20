@@ -31,11 +31,11 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         rows = json.loads(result_file.read_text())
         latencies = []
         for row in rows:
-            events = output / variant / "cases" / row["case"] / "events.jsonl"
-            for line in events.read_text().splitlines():
-                event = json.loads(line)
-                if event["event"] in ("action", "completion") and event["source"] == "agent":
-                    latencies.append(sum(call["ms"] for call in event["model_calls"]))
+            turns = output / variant / "cases" / row["case"] / "turns.jsonl"
+            for line in turns.read_text().splitlines():
+                turn = json.loads(line)
+                if turn["event"] in ("action", "completion") and turn["source"] == "agent":
+                    latencies.append(turn["model_ms"])
         summaries.append({
             "variant": variant, "cases": rows,
             "reached": sum(row["reached"] for row in rows),

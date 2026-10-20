@@ -1,14 +1,22 @@
-"""Run configuration and event rows."""
+"""Run configuration, turn rows and model call rows."""
 
 import hashlib
 import json
 
 import pytest
-from fakes import ScriptedModel, events, start, votes
+from fakes import ScriptedModel, rows, start, votes
 
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import Agent
 from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
+
+
+def turns(tmp_path):
+    return rows(tmp_path / "run/turns.jsonl")
+
+
+def model_calls(tmp_path):
+    return rows(tmp_path / "run/model_calls.jsonl")
 
 
 def setup(tmp_path, model, knowledge=""):
@@ -28,31 +36,41 @@ def test_config_snapshots_knowledge(tmp_path):
     assert (tmp_path / "knowledge.txt").read_text() == "Use the map."
 
 
-def test_turn_rows_carry_the_task_and_model_calls(tmp_path):
-    model = ScriptedModel()
-    model.last_response = {"reasoning": "door ahead"}
-    log, agent, session = setup(tmp_path, model, "Use the map.")
+def test_turn_rows_carry_the_task_and_action(tmp_path):
+    log, agent, session = setup(tmp_path, ScriptedModel(), "Use the map.")
     log.record_turn(*agent.act(session))
-    [action] = events(tmp_path / "run")
+    [action] = turns(tmp_path)
     assert action["event"] == "action" and action["source"] == "agent"
+    assert action["turn"] == 1 and action["model_ms"] >= 0
     assert action["task"] == "Find exit" and "knowledge" not in action
     assert action["action"] == {"type": "press", "button": "A"}
-    assert len(action["model_calls"]) == 1
-    assert all(call["ms"] >= 0 and call["response"] == {"reasoning": "door ahead"}
-               for call in action["model_calls"])
-    assert {"time", "task", "screenshot", "after", "memory", "index",
+    assert {"time", "screenshot", "after", "index",
             "action_number", "tick_before", "tick_after"} <= action.keys()
+    assert not {"memory", "response"} & action.keys()
+
+
+def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
+    model = ScriptedModel()
+    response = {"choices": [{"message": {"content": "{}", "reasoning": "Thinking."}}]}
+    model.last_response = response
+    log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
-    assert events(tmp_path / "run")[-1]["memory"] == [{
-        "screenshot": "frames/000000.png", "action": {"type": "press", "button": "A"},
-        "reasoning": "Scripted."}]
+    log.record_turn(*agent.act(session))
+    first, second = model_calls(tmp_path)
+    assert [first["turn"], second["turn"]] == [1, 2]
+    assert second["ms"] >= 0 and second["response"] == response
+    assert second["internal_reasoning"] == "Thinking."
+    assert second["input"] == {
+        "task": "Find exit", "screenshot": "frames/000001.png",
+        "memory": [{"screenshot": "frames/000000.png",
+                    "action": {"type": "press", "button": "A"}, "reasoning": "Scripted."}]}
 
 
 def test_agent_rows_carry_the_model_reasoning(tmp_path):
     log, agent, session = setup(tmp_path, ScriptedModel(reasoning="Door ahead."))
     log.record_turn(*agent.act(session))
     log.record_manual(Press("B"), agent.manual(session, Press("B")))
-    action, manual = events(tmp_path / "run")
+    action, manual = turns(tmp_path)
     assert action["reasoning"] == "Door ahead."
     assert "reasoning" not in manual
     assert log.recent()[1]["reasoning"] == "Door ahead."  # the live view shows it
@@ -65,10 +83,11 @@ def test_completion_and_model_error_rows(tmp_path):
     model.error = RuntimeError("down")
     error, _ = agent.act(session)
     log.record_model_error(error)
-    rows = events(tmp_path / "run")
-    assert [row["event"] for row in rows] == ["completion", "model_error"]
-    assert "action" not in rows[0] and rows[0]["reasoning"] == "Done talking."
-    assert rows[1]["error"] == "RuntimeError: down" and rows[1]["task"] == "Find exit"
+    completion, error_row = turns(tmp_path)
+    assert [completion["event"], error_row["event"]] == ["completion", "model_error"]
+    assert "action" not in completion and completion["reasoning"] == "Done talking."
+    assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
+    assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()
 
 
@@ -90,5 +109,5 @@ def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):
     log.record_reset("frames/000000.png")
     assert log.recent() == []
     log.record_run_stop("turn_limit", "frames/000001.png")
-    names = [row["event"] for row in events(tmp_path / "run")[-2:]]
+    names = [row["event"] for row in turns(tmp_path)[-2:]]
     assert names == ["reset", "run_stop"]

@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from fakes import Game, ScriptedModel, events, votes
+from fakes import Game, ScriptedModel, rows, votes
 
 from mystery_dungeon import live
 from mystery_dungeon.session import Checkpoint
@@ -162,8 +162,8 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
     gate.set()
     run.control({"command": "pause"})
     wait_until(run, lambda state: idle(state) and took_effect(state))
-    rows = events(run.output)
-    assert rows[0]["event"] == "action" and rows[0]["source"] == "agent"
+    [first, *_] = rows(run.output / "turns.jsonl")
+    assert first["event"] == "action" and first["source"] == "agent"
     assert AGENT_PRESS in game.steps
 
 

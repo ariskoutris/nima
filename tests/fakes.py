@@ -107,9 +107,8 @@ def start(tmp_path, game=None) -> GameplaySession:
     return session
 
 
-def events(output: Path) -> list[dict]:
-    """Rows of a run's events.jsonl, or none before the first event."""
-    path = output / "events.jsonl"
+def rows(path: Path) -> list[dict]:
+    """Return the rows of a JSON Lines log, or none before the first row."""
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
