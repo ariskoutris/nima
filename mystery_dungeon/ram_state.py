@@ -22,6 +22,20 @@ DIALOGUE_TEXT_SIZE = 1000
 GROUND_LIVES = 0x03001B84  # gGroundLives
 GROUND_LIVE_COUNT, GROUND_LIVE_SIZE = 24, 0x1F0
 GROUND_MAP_ACTION = 0x03001B6C  # gGroundMapAction -> groundMapId at +0xE4
+GROUND_LIVE_POSITION, GROUND_LIVE_DIRECTION = 0x144, 0x142  # GroundLive unk144, direction1
+# pmd-red names gDungeon without an address; this is the EWRAM_INIT pointer whose team slot 0
+# points at its own teamPokemonEntities, found by scanning RAM in normal-maze.ss0.
+DUNGEON = 0x0203B418  # gDungeon
+TEAM_POKEMON, TEAM_SIZE = 0x1357C, 4  # Dungeon.teamPokemon
+ENTITY_MONSTER = 1
+ENTITY_POSITION, ENTITY_INFO = 0x4, 0x70  # Entity.pos (tiles), Entity.axObj.info.monster
+INFO_IS_LEADER, INFO_DIRECTION = 0x7, 0x46  # EntityInfo.isTeamLeader, .action.direction
+# enum Direction. The cardinal values were measured on square.ss0 and normal-maze.ss0 by
+# walking each way; the diagonals follow the enum order. The game masks direction bytes
+# with DIRECTION_MASK because higher bits can carry flags.
+DIRECTION_MASK = 7
+DIRECTIONS = ("south", "southeast", "east", "northeast",
+              "north", "northwest", "west", "southwest")
 
 # Formatting codes in dialogue text: "~27" is a hex-escaped character, "#c\x06" and
 # "#C5" set a colour, and other "#X" codes reset colour or pause printing.
@@ -50,6 +64,8 @@ class RamState:
     text_printing: bool
     speaker_species: int | None
     player_position: tuple[int, int] | None
+    player_tile: tuple[int, int] | None
+    player_direction: str | None
 
 
 class GameRam:
@@ -77,6 +93,22 @@ class GameRam:
         lives = self._value(GROUND_LIVES, "<I")
         return lives if _ewram(lives, GROUND_LIVE_COUNT * GROUND_LIVE_SIZE) else None
 
+    def _dungeon_leader(self) -> tuple[int, int] | None:
+        """Return the leader's Entity and EntityInfo addresses, or None outside dungeons."""
+        if self._value(MAIN_LOOP, "<I") != 1:
+            return None
+        dungeon = self._value(DUNGEON, "<I")
+        if not _ewram(dungeon, TEAM_POKEMON + TEAM_SIZE * 4):
+            return None
+        for slot in range(TEAM_SIZE):
+            entity = self._value(dungeon + TEAM_POKEMON + slot * 4, "<I")
+            if not _ewram(entity, ENTITY_INFO + 4) or self._value(entity, "<I") != ENTITY_MONSTER:
+                continue
+            info = self._value(entity + ENTITY_INFO, "<I")
+            if _ewram(info, INFO_DIRECTION + 1) and self._value(info + INFO_IS_LEADER, "<B"):
+                return entity, info
+        return None
+
     def textbox_type(self) -> int | None:
         """Return the open textbox's type (1 dialogue, 4 dialogue with a menu), or None."""
         textbox = self._textbox()
@@ -101,7 +133,29 @@ class GameRam:
     def player_position(self) -> tuple[int, int] | None:
         """Return the leader's ground position in pixels, or None outside ground maps."""
         lives = self._ground_lives()
-        return _position(self._game.read_memory(lives + 0x144, 8)) if lives is not None else None
+        if lives is None:
+            return None
+        return _position(self._game.read_memory(lives + GROUND_LIVE_POSITION, 8))
+
+    def player_tile(self) -> tuple[int, int] | None:
+        """Return the leader's dungeon tile as (x, y), or None outside dungeons."""
+        leader = self._dungeon_leader()
+        if leader is None:
+            return None
+        x, y = struct.unpack("<hh", self._game.read_memory(leader[0] + ENTITY_POSITION, 4))
+        return x, y
+
+    def player_direction(self) -> str | None:
+        """Return the way the leader faces on ground maps and in dungeons, or None elsewhere."""
+        if (lives := self._ground_lives()) is not None:
+            if self._value(lives + 2, "<h") == -1:  # the leader's live isn't spawned yet
+                return None
+            direction = self._value(lives + GROUND_LIVE_DIRECTION, "<B")
+        elif (leader := self._dungeon_leader()) is not None:
+            direction = self._value(leader[1] + INFO_DIRECTION, "<B")
+        else:
+            return None
+        return DIRECTIONS[direction & DIRECTION_MASK]
 
     def npc_position(self, species: int) -> tuple[int, int] | None:
         """Return the ground position in pixels of the first loaded ``species``, or None."""
@@ -109,7 +163,7 @@ class GameRam:
         for index in range(GROUND_LIVE_COUNT if lives is not None else 0):
             entry = lives + index * GROUND_LIVE_SIZE
             if self._value(entry + 2, "<h") != -1 and self._value(entry + 8, "<h") == species:
-                return _position(self._game.read_memory(entry + 0x144, 8))
+                return _position(self._game.read_memory(entry + GROUND_LIVE_POSITION, 8))
         return None
 
     def ground_map(self) -> int | None:
@@ -134,4 +188,5 @@ class GameRam:
         else:
             mode = "field"
         speaker = self.speaker() if mode == "dialogue" else None
-        return RamState(mode, textbox_type, printing, speaker, self.player_position())
+        return RamState(mode, textbox_type, printing, speaker, self.player_position(),
+                        self.player_tile(), self.player_direction())

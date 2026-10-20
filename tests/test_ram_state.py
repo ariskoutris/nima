@@ -1,5 +1,7 @@
 """RAM observations against the checked-in Red Rescue Team checkpoints."""
 
+import struct
+
 import pytest
 from fakes import ScriptedModel, press
 
@@ -7,7 +9,13 @@ from emulator import GbaEmulator
 from mystery_dungeon.actions import Done, Press
 from mystery_dungeon.agent import Agent
 from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
-from mystery_dungeon.ram_state import GameRam
+from mystery_dungeon.ram_state import (
+    DUNGEON,
+    GROUND_LIVE_DIRECTION,
+    GROUND_LIVES,
+    TEAM_POKEMON,
+    GameRam,
+)
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
 
@@ -52,6 +60,72 @@ def test_field_menu_and_dungeon_modes():
         assert GameRam(game).state().mode == "menu"
         restore(game, read_ss0(CHECKPOINTS / "normal-maze.ss0"))
         assert GameRam(game).state().mode == "dungeon"
+
+
+@pytest.mark.parametrize("checkpoint,read", [
+    ("square", GameRam.player_position), ("normal-maze", GameRam.player_tile),
+])
+def test_player_direction_follows_the_dpad(checkpoint, read):
+    paths = (ROM, CORE, CHECKPOINTS / f"{checkpoint}.ss0")
+    if not all(path.is_file() for path in paths):
+        pytest.skip("local ROM, core, and checkpoint required")
+    with GbaEmulator(ROM, CORE) as game:
+        ram = GameRam(game)
+        restore(game, read_ss0(CHECKPOINTS / f"{checkpoint}.ss0"))
+        assert ram.player_direction() == "south"
+        for button, direction, axis, sign in (
+            ("RIGHT", "east", 0, 1), ("UP", "north", 1, -1),
+            ("LEFT", "west", 0, -1), ("DOWN", "south", 1, 1),
+        ):
+            before = read(ram)
+            game.step(20, (button,))
+            game.step(40)
+            after = read(ram)
+            assert ram.player_direction() == direction
+            assert (after[axis] - before[axis]) * sign > 0
+        state = ram.state()
+        assert state.player_direction == "south"
+        assert (state.player_position is None) == (checkpoint == "normal-maze")
+        assert (state.player_tile is None) == (checkpoint == "square")
+
+
+class PatchedRam:
+    """A real emulator whose memory reads see ``patches`` laid over RAM."""
+
+    def __init__(self, game: GbaEmulator, patches: dict[int, bytes]) -> None:
+        self.rom = game.rom
+        self._game = game
+        self._patches = patches
+
+    def read_memory(self, address: int, size: int) -> bytes:
+        data = bytearray(self._game.read_memory(address, size))
+        for start, raw in self._patches.items():
+            for offset, byte in enumerate(raw):
+                if 0 <= start + offset - address < size:
+                    data[start + offset - address] = byte
+        return bytes(data)
+
+
+def _u32(game: GbaEmulator, address: int) -> int:
+    return struct.unpack("<I", game.read_memory(address, 4))[0]
+
+
+def test_player_direction_masks_flag_bits_and_skips_unspawned_leader():
+    paths = (ROM, CORE, CHECKPOINTS / "square.ss0", CHECKPOINTS / "normal-maze.ss0")
+    if not all(path.is_file() for path in paths):
+        pytest.skip("local ROM, core, and checkpoints required")
+    with GbaEmulator(ROM, CORE) as game:
+        restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
+        lives = _u32(game, GROUND_LIVES)
+        flagged = PatchedRam(game, {lives + GROUND_LIVE_DIRECTION: b"\xf2"})
+        assert GameRam(flagged).player_direction() == "east"
+        unspawned = PatchedRam(game, {lives + 2: struct.pack("<h", -1)})
+        assert GameRam(unspawned).player_direction() is None
+
+        restore(game, read_ss0(CHECKPOINTS / "normal-maze.ss0"))
+        stale = PatchedRam(game, {DUNGEON: struct.pack("<I", 0x02000000 - TEAM_POKEMON)})
+        assert GameRam(stale).player_direction() is None
+        assert GameRam(stale).player_tile() is None
 
 
 def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
