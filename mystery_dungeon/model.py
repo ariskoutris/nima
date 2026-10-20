@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from emulator import Frame
 from mystery_dungeon import CONFIG
 from mystery_dungeon.actions import ACTION_NAMES, GAME_ACTIONS, Action, Stop, name
-from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
+from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS, REPORT_INSTRUCTIONS
 
 if TYPE_CHECKING:
     from mystery_dungeon.agent import Context
@@ -29,6 +29,12 @@ ANSWER_SCHEMA = {
     "properties": {"reasoning": {"type": "string"}, "note": {"type": "string"},
                    "action": {"type": "string", "enum": list(ACTION_NAMES)}},
     "required": ["reasoning", "note", "action"],
+    "additionalProperties": False,
+}
+REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {"reason": {"type": "string"}},
+    "required": ["reason"],
     "additionalProperties": False,
 }
 
@@ -54,6 +60,14 @@ class Model(Protocol):
 
         Raises:
             Exception: when no valid action comes back.
+        """
+        ...
+
+    def report(self, context: Context, frame: Frame) -> str:
+        """Return where the task stands once its action budget has run out.
+
+        Raises:
+            Exception: when no report comes back.
         """
         ...
 
@@ -86,7 +100,7 @@ class ChatModel:
         self.last_response: dict | None = None
 
     def call(self, context: Context, frame: Frame) -> Reply:
-        answer = self._send(_content(context, frame))
+        answer = self._send(INSTRUCTIONS, ANSWER_SCHEMA, _content(context, frame))
         if not isinstance(answer, dict) or answer.keys() != ANSWER_SCHEMA["properties"].keys():
             raise ValueError(f"{self.name} returned an invalid answer: {answer!r}")
         if not isinstance(answer["action"], str) or answer["action"] not in ACTION_NAMES:
@@ -102,16 +116,24 @@ class ChatModel:
             raise ValueError(f"{self.name} chose STOP without a reason in its note")
         return Reply(Stop(note), reasoning, note)
 
-    def _send(self, content: list[dict]) -> object:
+    def report(self, context: Context, frame: Frame) -> str:
+        answer = self._send(REPORT_INSTRUCTIONS, REPORT_SCHEMA, _content(context, frame))
+        if not isinstance(answer, dict) or answer.keys() != REPORT_SCHEMA["properties"].keys():
+            raise ValueError(f"{self.name} returned an invalid report: {answer!r}")
+        if not isinstance(answer["reason"], str) or not answer["reason"].strip():
+            raise ValueError(f"{self.name} returned no reason: {answer['reason']!r}")
+        return answer["reason"].strip()
+
+    def _send(self, instructions: str, schema: dict, content: list[dict]) -> object:
         """Post one request and return the model's answer as decoded JSON."""
         self.last_response = None
         payload = {
             **self._settings.request,
             "model": self._settings.name,
-            "messages": [{"role": "system", "content": INSTRUCTIONS},
+            "messages": [{"role": "system", "content": instructions},
                          {"role": "user", "content": content}],
             "response_format": {"type": "json_schema", "json_schema": {
-                "name": "answer", "strict": True, "schema": ANSWER_SCHEMA}},
+                "name": "answer", "strict": True, "schema": schema}},
             "max_tokens": self._settings.max_tokens,
         }
         headers = {"Content-Type": "application/json"}

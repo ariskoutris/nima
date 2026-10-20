@@ -20,7 +20,8 @@ class ScriptedModel:
 
     Actions are model-facing names, and the last one repeats; notes go with the actions in
     order and run out. Each call replies Stop, with the reasoning as its reason, instead when
-    ``stop()`` returns True, and raises ``error`` when one is given.
+    ``stop()`` returns True, and raises ``error`` when one is given. Reports add the reasoning
+    to a fixed text.
     With a ``gate``, each call sets ``entered`` and then waits for the gate.
     """
 
@@ -48,6 +49,10 @@ class ScriptedModel:
         note = self.notes[self._chosen] if self._chosen < len(self.notes) else None
         self._chosen += 1
         return Reply(GAME_ACTIONS[action], self.reasoning, note)
+
+    def report(self, context, frame) -> str:
+        self._called("report", context, frame)
+        return f"Out of budget. {self.reasoning}"
 
     def _called(self, *call) -> None:
         self.calls.append(call)

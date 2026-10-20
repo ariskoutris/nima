@@ -94,6 +94,14 @@ def test_stop_and_model_error_rows(tmp_path):
     assert not log.recent()
 
 
+def test_budget_report_rows_carry_the_reason_and_model_call(tmp_path):
+    log, agent, session = setup(tmp_path, ScriptedModel())
+    log.record_report(agent.report(session))
+    (row,) = turns(tmp_path)
+    assert row["event"] == "budget_report" and row["reason"] == "Out of budget. Scripted."
+    assert [call["turn"] for call in model_calls(tmp_path)] == [row["turn"]]
+
+
 def test_a_game_action_without_its_transition_is_rejected(tmp_path):
     log, agent, session = setup(tmp_path, ScriptedModel())
     turn, _ = agent.act(session)

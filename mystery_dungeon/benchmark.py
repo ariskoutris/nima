@@ -13,7 +13,7 @@ from pathlib import Path
 from emulator import GbaEmulator
 from mystery_dungeon import CHECKPOINTS, CORE, KNOWLEDGE, ROM
 from mystery_dungeon.actions import Stop
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Report, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.ram_state import GameRam
@@ -183,7 +183,6 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         elif success and reached_at is None:
             reached_at = turns
         if session.action_count >= case.limit:
-            reason = "limit"
             break
         result, transition = agent.act(session)
         match result:
@@ -191,21 +190,33 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
                 log.record_model_error(result)
                 reason, error = "model_error", message
                 break
-            case Turn(action=Stop(reason=stop_text)):
+            case Turn(action=Stop(reason=text)):
                 log.record_turn(result, transition)
                 turns += 1
                 reason = "stopped_reached" if reached_at is not None else "stopped_unreached"
+                stop_text = text
                 break
             case Turn():
                 log.record_turn(result, transition)
                 turns += 1
     final = session.current
+    final_name = session.current_name
     final.save_png(output / "frames/final.png")
     (output / "states").mkdir(exist_ok=True)
     (output / "states/final.state").write_bytes(game.save_state())
     (output / "states/final.sav").write_bytes(game.save_ram())
+    if reason == "limit":
+        # After the final state is saved: observing for the report may run the game on until
+        # text finishes printing, past the state that was graded.
+        match agent.report(session):
+            case ModelError(message=message) as failed:
+                log.record_model_error(failed)
+                error = message
+            case Report(reason=text) as budget_report:
+                log.record_report(budget_report)
+                stop_text = text
     public_reason = "stopped" if reason.startswith("stopped_") else reason
-    log.record_run_stop(public_reason, session.current_name)
+    log.record_run_stop(public_reason, final_name)
     reached = reached_at is not None
     result = {"case": case.id, "task": case.task, "reached": reached,
               "stopped_reached": reason == "stopped_reached",

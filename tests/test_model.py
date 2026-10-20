@@ -19,7 +19,7 @@ from mystery_dungeon.model import (
     scaled,
     token_usage,
 )
-from mystery_dungeon.prompts import INSTRUCTIONS
+from mystery_dungeon.prompts import INSTRUCTIONS, REPORT_INSTRUCTIONS
 from mystery_dungeon.session import Character, GameState, Observation
 
 MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to the door."),
@@ -99,6 +99,27 @@ def test_stop_without_a_note_is_rejected(monkeypatch):
 def test_an_empty_note_is_none(monkeypatch):
     answering(monkeypatch, reply({"reasoning": "Wait.", "note": "", "action": "WAIT"}))
     assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).note is None
+
+
+def test_report_sends_the_report_instructions_with_the_same_context(monkeypatch):
+    sent = answering(monkeypatch, reply({"reason": " Stuck at the wall. "}))
+    context = Context("Find the exit", "", MEMORY, notes=("Exit is south.",))
+    assert ChatModel(SETTINGS).report(context, FRAME) == "Stuck at the wall."
+    payload = json.loads(sent[0].data)
+    system, user = payload["messages"]
+    assert system["content"] == REPORT_INSTRUCTIONS
+    assert "- Exit is south." in user["content"][0]["text"]
+    assert payload["response_format"]["json_schema"]["schema"]["required"] == ["reason"]
+
+
+@pytest.mark.parametrize("answer,message", [
+    ({"reason": " "}, "no reason"),
+    ({"reasoning": "x", "note": "", "action": "A"}, "invalid report"),
+])
+def test_invalid_reports_raise(monkeypatch, answer, message):
+    answering(monkeypatch, reply(answer))
+    with pytest.raises(ValueError, match=message):
+        ChatModel(SETTINGS).report(Context("Talk", "", ()), FRAME)
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):

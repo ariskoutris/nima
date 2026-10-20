@@ -144,6 +144,25 @@ def test_a_stop_keeps_its_reasoning_and_its_reason_as_a_note(tmp_path):
     assert agent.notes == ("The dialogue has closed.",)
 
 
+def test_a_report_sees_the_context_and_applies_nothing(tmp_path):
+    game = Game()
+    model = ScriptedModel(notes=["Exit is south."])
+    agent = agent_with(model)
+    session = start(tmp_path, game)
+    agent.act(session)
+    steps = list(game.steps)
+    report = agent.report(session)
+    assert report.reason == "Out of budget. Scripted."
+    assert report.context.notes == ("Exit is south.",) and len(report.context.memory) == 1
+    assert model.calls[-1] == ("report", report.context, report.observation.frame)
+    assert game.steps == steps
+
+
+def test_a_failed_report_becomes_a_model_error(tmp_path):
+    error = agent_with(ScriptedModel(error=RuntimeError("down"))).report(start(tmp_path))
+    assert isinstance(error, ModelError) and error.message == "RuntimeError: down"
+
+
 def test_missing_task_fails_before_any_model_call(tmp_path):
     model = ScriptedModel()
     agent = Agent(model)

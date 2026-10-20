@@ -16,7 +16,7 @@ from mystery_dungeon.model import internal_reasoning, token_usage
 
 if TYPE_CHECKING:
     from emulator import Frame
-    from mystery_dungeon.agent import Context, ModelError, Turn
+    from mystery_dungeon.agent import Context, ModelError, Report, Turn
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
@@ -41,8 +41,18 @@ class LoggedModel:
         try:
             return self._model.call(context, frame)
         finally:
-            self._calls.append({"ms": round((time.perf_counter() - started) * 1000),
-                                "response": self._model.last_response})
+            self._record(started)
+
+    def report(self, context: Context, frame: Frame) -> str:
+        started = time.perf_counter()
+        try:
+            return self._model.report(context, frame)
+        finally:
+            self._record(started)
+
+    def _record(self, started: float) -> None:
+        self._calls.append({"ms": round((time.perf_counter() - started) * 1000),
+                            "response": self._model.last_response})
 
 
 class RunLog:
@@ -95,6 +105,10 @@ class RunLog:
     def record_model_error(self, error: ModelError) -> None:
         self._write_turn("model_error", error.observation, error.context,
                          {"error": error.message})
+
+    def record_report(self, report: Report) -> None:
+        self._write_turn("budget_report", report.observation, report.context,
+                         {"reason": report.reason})
 
     def record_manual(self, action: GameAction, transition: Transition) -> None:
         self._recent.append(self._write("action", {

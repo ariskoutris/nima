@@ -5,7 +5,7 @@ import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from fakes import ScriptedModel, press, votes
+from fakes import ScriptedModel, press, rows, votes
 
 from emulator import GbaEmulator
 from mystery_dungeon import benchmark
@@ -102,6 +102,10 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     assert result["stop_reason"] == "limit"
     assert not result["reached"]
     assert not result["stopped_reached"]
+    assert result["stop_text"] == "Out of budget. Scripted."
+    assert {"event": "budget_report", "reason": "Out of budget. Scripted."}.items() <= next(
+        row for row in rows(output / case.id / "turns.jsonl")
+        if row["event"] == "budget_report").items()
     assert Grader(case, GameRam(game)).talking(235)
 
 
