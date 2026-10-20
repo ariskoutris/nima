@@ -12,8 +12,9 @@ from pathlib import Path
 
 from emulator import GbaEmulator
 from mystery_dungeon import CHECKPOINTS, CORE, ROM
-from mystery_dungeon.agent import Agent
+from mystery_dungeon.agent import MEMORY_TURNS, Agent
 from mystery_dungeon.model import ChatModel, Model, read_settings
+from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.ram_state import GameRam
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
@@ -153,8 +154,8 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
                   "criterion": case.criterion, "limit": case.limit,
                   "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES},
                  knowledge)
-    agent = Agent(log.model, log.model, knowledge)
-    agent.set_instructions(case.task)
+    agent = Agent(log.model, knowledge)
+    agent.set_task(case.task)
     session = GameplaySession(game, output)
     session.load(checkpoints[case.start])
     if session.ram is None:
@@ -211,9 +212,10 @@ def report(results: list[dict], output: Path) -> None:
         lines.append(f"| {row['case']} | {row['reached']} | {row['recognized']} | "
                      f"{row['missed']} | {row['false_completion']} | {row['actions']} | "
                      f"{row['seconds']} |")
-    lines += ["", "The hidden grader measures reach independently from model completion.",
-              "Each turn makes separate completion and action requests, so latency is not "
-              "comparable with earlier benchmark reports.", ""]
+    lines += ["", "The hidden grader measures reach independently from the model's completion.",
+              f"Each turn is one request with up to {MEMORY_TURNS} earlier screenshots, so "
+              "latency is not comparable with format 7 reports, which sent two screenshots and "
+              "made a separate completion request.", ""]
     (output / "report.md").write_text("\n".join(lines))
 
 
@@ -238,7 +240,9 @@ def main() -> None:
     hashes = {str(path): sha256(path) for path in files}
     (args.output / "config.json").write_text(json.dumps({
         "format_version": FORMAT_VERSION, "layout": "benchmark", "grader": "pmd-red-ram-v1",
-        "model": asdict(settings), "cases": [asdict(c) for c in selected],
+        "model": asdict(settings), "memory_turns": MEMORY_TURNS,
+        "instructions_sha256": hashlib.sha256(INSTRUCTIONS.encode()).hexdigest(),
+        "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_frames": HOLD_FRAMES, "release_frames": RELEASE_FRAMES,
     }, indent=2) + "\n")

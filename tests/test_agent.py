@@ -1,4 +1,4 @@
-"""Agent planning, acting and memory through its public API."""
+"""Agent acting and memory through its public API."""
 
 from dataclasses import fields
 
@@ -6,27 +6,64 @@ import pytest
 from fakes import Game, ScriptedModel, start, votes
 
 from mystery_dungeon.actions import Press, Wait
-from mystery_dungeon.agent import Agent, Turn
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, Turn
 
 
-def agent_with(model, instructions="Find exit", knowledge=""):
-    agent = Agent(model, model, knowledge)
-    agent.set_instructions(instructions)
+def agent_with(model, task="Find exit", knowledge=""):
+    agent = Agent(model, knowledge)
+    agent.set_task(task)
     return agent
 
 
-def test_new_instructions_start_a_new_task_and_keep_memory(tmp_path):
+def test_turns_act_on_the_task_knowledge_and_memory(tmp_path):
     model = ScriptedModel()
-    agent = agent_with(model, knowledge="  Use the map.  ")
+    agent = agent_with(model, task="  Find exit ", knowledge="  Use the map.  ")
     session = start(tmp_path)
     agent.take_turn(session)
-    assert agent.task.description == "Find exit"
-    assert agent.task.knowledge == "Use the map."
-    agent.set_instructions("Talk to Granbull")
     turn, _ = agent.take_turn(session)
-    assert turn.task.description == "Talk to Granbull"
-    assert turn.task.knowledge == "Use the map."
-    assert [entry.action for entry in turn.memory] == [Press("A")]
+    assert turn.context == Context("Find exit", "Use the map.", turn.context.memory)
+    assert [entry.action for entry in turn.context.memory] == [Press("A")]
+    assert model.calls[-1] == ("choose", turn.context, turn.observation.frame)
+
+
+def test_a_new_task_clears_memory(tmp_path):
+    agent = agent_with(ScriptedModel())
+    session = start(tmp_path)
+    agent.take_turn(session)
+    agent.set_task("Find exit")
+    assert len(agent.memory) == 1  # the same task keeps its turns
+    agent.set_task("Talk to Granbull")
+    assert agent.memory == ()
+
+
+def test_the_first_task_keeps_earlier_manual_actions(tmp_path):
+    agent = Agent(ScriptedModel())
+    session = start(tmp_path)
+    agent.manual(session, Press("RIGHT"))
+    agent.set_task("Find exit")
+    assert [entry.action for entry in agent.memory] == [Press("RIGHT")]
+
+
+def test_memory_keeps_the_latest_turns_with_their_reasoning(tmp_path):
+    model = ScriptedModel(["UP", "DOWN"], reasoning="Head for the door.")
+    agent = agent_with(model)
+    session = start(tmp_path)
+    for _ in range(MEMORY_TURNS + 2):
+        turn, _ = agent.take_turn(session)
+    assert turn.reasoning == "Head for the door."
+    assert len(agent.memory) == MEMORY_TURNS
+    assert agent.memory[-1].screenshot == f"frames/{MEMORY_TURNS + 1:06d}.png"
+    assert all(entry.reasoning == "Head for the door." for entry in agent.memory)
+    assert model.calls[-1][1].memory == turn.context.memory
+
+
+def test_manual_actions_enter_memory_without_reasoning(tmp_path):
+    agent = agent_with(ScriptedModel(reasoning="Press A."))
+    session = start(tmp_path)
+    agent.take_turn(session)
+    agent.manual(session, Press("B"))
+    assert [(entry.action, entry.reasoning) for entry in agent.memory] == [
+        (Press("A"), "Press A."), (Press("B"), None)]
 
 
 def test_manual_actions_enter_memory_until_cleared(tmp_path):
@@ -37,7 +74,7 @@ def test_manual_actions_enter_memory_until_cleared(tmp_path):
     assert [entry.action for entry in agent.memory] == [Press("RIGHT")]
     assert agent.memory[0].screenshot == "frames/000000.png"
     agent.take_turn(session)
-    assert model.calls[-1][4][0].action == Press("RIGHT")
+    assert model.calls[-1][1].memory[0].action == Press("RIGHT")
     agent.clear_memory()
     assert agent.memory == ()
 
@@ -49,7 +86,7 @@ def test_completion_applies_nothing(tmp_path):
     assert turn.status == "completion"
     assert transition is None
     assert game.steps == []
-    assert [call[0] for call in model.calls] == ["is_complete"]
+    assert [call[0] for call in model.calls] == ["choose"]
 
 
 def test_incomplete_task_applies_the_chosen_action(tmp_path):
@@ -61,19 +98,13 @@ def test_incomplete_task_applies_the_chosen_action(tmp_path):
     assert game.steps == [(8, ()), (4, ())]
 
 
-@pytest.mark.parametrize("failing", ["is_complete", "choose_action"])
-def test_model_failures_become_model_errors(tmp_path, failing):
-    model = ScriptedModel()
-
-    def fail(*args):
-        raise RuntimeError("model down")
-
-    setattr(model, failing, fail)
+def test_model_failures_become_model_errors(tmp_path):
+    model = ScriptedModel(error=RuntimeError("model down"))
     game = Game()
     turn, transition = agent_with(model).take_turn(start(tmp_path, game))
     assert turn.status == "model_error"
     assert turn.error == "RuntimeError: model down"
-    assert turn.task.description == "Find exit"
+    assert turn.context.task == "Find exit"
     assert transition is None and game.steps == []
 
 
@@ -85,24 +116,30 @@ def test_propose_never_touches_the_game(tmp_path):
     assert game.steps == []
 
 
-def test_only_the_action_model_receives_knowledge(tmp_path):
+def test_each_turn_makes_one_model_call(tmp_path):
     model = ScriptedModel()
-    agent_with(model, knowledge="Doors are at the top.").take_turn(start(tmp_path))
-    assert model.calls[0][0] == "is_complete" and "Doors are at the top." not in model.calls[0]
-    assert model.calls[1][:3] == ("choose_action", "Find exit", "Doors are at the top.")
+    agent_with(model).take_turn(start(tmp_path))
+    assert [call[0] for call in model.calls] == ["choose"]
 
 
-def test_missing_instructions_fail_before_any_model_call(tmp_path):
+def test_reasoning_of_a_completion_is_kept_on_the_turn(tmp_path):
+    model = ScriptedModel(complete=votes(True), reasoning="The dialogue has closed.")
+    turn, _ = agent_with(model).take_turn(start(tmp_path))
+    assert turn.status == "completion" and turn.action is None
+    assert turn.reasoning == "The dialogue has closed."
+
+
+def test_missing_task_fails_before_any_model_call(tmp_path):
     model = ScriptedModel()
-    agent = Agent(model, model)
-    with pytest.raises(ValueError, match="instructions"):
+    agent = Agent(model)
+    with pytest.raises(ValueError, match="task"):
         agent.take_turn(start(tmp_path))
     assert model.calls == []
 
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "task", "memory", "complete", "action", "error"}
+        "observation", "context", "action", "reasoning", "error"}
 
 
 def test_agent_writes_no_files(tmp_path):

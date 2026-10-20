@@ -120,8 +120,8 @@ def test_agent_plans_only_after_text_finishes(tmp_path):
             return True
 
         model = ScriptedModel(complete=complete)
-        agent = Agent(model, model)
-        agent.set_instructions("Read Granbull's line")
+        agent = Agent(model)
+        agent.set_task("Read Granbull's line")
         assert agent.take_turn(session)[0].status == "completion"
         assert session.action_count == 1
 
@@ -143,8 +143,8 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
             return state.mode == "field" and session.action_count > 0
 
         model = ScriptedModel(["A"], complete)
-        agent = Agent(model, model)
-        agent.set_instructions("Finish talking to Lombre")
+        agent = Agent(model)
+        agent.set_task("Finish talking to Lombre")
         for _ in range(9):
             assert agent.take_turn(session)[0].status == "action"
         assert agent.take_turn(session)[0].status == "completion"

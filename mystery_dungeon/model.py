@@ -1,4 +1,4 @@
-"""Contracts for planning and action models, and the model behind a chat-completions endpoint."""
+"""The model contract and the model behind a chat-completions endpoint."""
 
 from __future__ import annotations
 
@@ -13,50 +13,43 @@ from urllib.request import Request, urlopen
 from emulator import Frame
 from mystery_dungeon import CONFIG
 from mystery_dungeon.actions import ACTIONS, Action, name
-from mystery_dungeon.prompts import ACT, ACTION_DESCRIPTIONS, COMPLETE
+from mystery_dungeon.prompts import CHOICES, DONE, INSTRUCTIONS
 
 if TYPE_CHECKING:
-    from mystery_dungeon.agent import MemoryEntry
+    from mystery_dungeon.agent import Context
 
 TIMEOUT_SECONDS = 120
+# Reasoning comes first so the model writes it before it commits to an action.
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {"reasoning": {"type": "string"},
+                   "action": {"type": "string", "enum": list(CHOICES)}},
+    "required": ["reasoning", "action"],
+    "additionalProperties": False,
+}
 
 
-class ActionModel(Protocol):
-    """Chooses the next action for a task."""
+@dataclass(frozen=True)
+class Choice:
+    """The next action, or None when the model reports the task complete, and why."""
+
+    action: Action | None
+    reasoning: str
+
+
+class Model(Protocol):
+    """What the agent asks each turn: a chat endpoint in play, scripted models in tests."""
 
     name: str  # recorded in run configs
     last_response: dict | None  # raw answer to the latest call, kept for the run log
 
-    def choose_action(self, task: str, knowledge: str, frame: Frame,
-                      memory: tuple[MemoryEntry, ...]) -> Action:
-        """Return one action from ACTIONS for the current frame.
-
-        Args:
-            memory: recent screenshots, oldest first, each with the action taken after it.
+    def choose(self, context: Context, frame: Frame) -> Choice:
+        """Return one action from ACTIONS for the current frame, or report completion.
 
         Raises:
-            Exception: when the model fails or answers outside the action space.
+            Exception: when the endpoint fails or answers outside the choices.
         """
         ...
-
-
-class PlanningModel(Protocol):
-    """Judges progress on a task."""
-
-    name: str
-    last_response: dict | None
-
-    def is_complete(self, task: str, frame: Frame, memory: tuple[MemoryEntry, ...]) -> bool:
-        """Judge from visible evidence only whether the task has been completed.
-
-        Raises:
-            Exception: when the model fails or does not answer yes or no.
-        """
-        ...
-
-
-class Model(ActionModel, PlanningModel, Protocol):
-    """One model filling both roles."""
 
 
 @dataclass(frozen=True)
@@ -81,7 +74,7 @@ def read_settings(path: Path = CONFIG) -> ChatSettings:
 
 
 class ChatModel:
-    """Ask a model behind an OpenAI-compatible chat-completions endpoint, in both roles."""
+    """Ask a model behind an OpenAI-compatible chat-completions endpoint."""
 
     def __init__(self, settings: ChatSettings) -> None:
         """Raises:
@@ -94,45 +87,27 @@ class ChatModel:
         self.name = settings.name
         self.last_response: dict | None = None
 
-    def choose_action(self, task: str, knowledge: str, frame: Frame,
-                      memory: tuple[MemoryEntry, ...]) -> Action:
-        text = [f"Task: {task}"]
-        if knowledge:
-            text.append(f"Knowledge: {knowledge}")
-        text.append("Available actions:\n" + "\n".join(
-            f"{action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
-        answer = self._ask(ACT, "\n\n".join(text), frame, memory,
-                           "action", {"type": "string", "enum": list(ACTIONS)})
-        if answer not in ACTIONS:
-            raise ValueError(f"{self.name} returned an unknown action: {answer!r}")
-        return ACTIONS[answer]
+    def choose(self, context: Context, frame: Frame) -> Choice:
+        answer = self._send(_content(context, frame))
+        if not isinstance(answer, dict) or answer.keys() != ANSWER_SCHEMA["properties"].keys():
+            raise ValueError(f"{self.name} returned an invalid answer: {answer!r}")
+        if not isinstance(answer["action"], str) or answer["action"] not in CHOICES:
+            raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
+        if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
+            raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
+        action = None if answer["action"] == DONE else ACTIONS[answer["action"]]
+        return Choice(action, answer["reasoning"].strip())
 
-    def is_complete(self, task: str, frame: Frame, memory: tuple[MemoryEntry, ...]) -> bool:
-        answer = self._ask(COMPLETE, f"Task: {task}", frame, memory,
-                           "complete", {"type": "boolean"})
-        if not isinstance(answer, bool):
-            raise ValueError(f"{self.name} returned a non-boolean completion: {answer!r}")
-        return answer
-
-    def _ask(self, system: str, text: str, frame: Frame, memory: tuple[MemoryEntry, ...],
-             field: str, schema: dict) -> object:
+    def _send(self, content: list[dict]) -> object:
+        """Post one request and return the decoded JSON answer."""
         self.last_response = None
-        content = [{"type": "text", "text": text}]
-        for index, entry in enumerate(memory, 1):
-            label = f"Earlier screenshot {index}, followed by {name(entry.action)}:"
-            content += [{"type": "text", "text": label},
-                        _image(entry.frame)]
-        content += [{"type": "text", "text": "Current screenshot:"}, _image(frame)]
         payload = {
             **self._settings.request,
             "model": self._settings.name,
-            "messages": [{"role": "system", "content": system},
+            "messages": [{"role": "system", "content": INSTRUCTIONS},
                          {"role": "user", "content": content}],
             "response_format": {"type": "json_schema", "json_schema": {
-                "name": field, "strict": True,
-                "schema": {"type": "object", "properties": {field: schema},
-                           "required": [field], "additionalProperties": False},
-            }},
+                "name": "answer", "strict": True, "schema": ANSWER_SCHEMA}},
             "max_tokens": self._settings.max_tokens,
         }
         headers = {"Content-Type": "application/json"}
@@ -145,9 +120,27 @@ class ChatModel:
         if data["choices"][0].get("finish_reason") == "length":
             raise ValueError(f"{self.name} exhausted max_tokens before answering")
         try:
-            return json.loads(data["choices"][0]["message"]["content"])[field]
+            return json.loads(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError(f"{self.name} returned an invalid answer") from exc
+
+
+def _content(context: Context, frame: Frame) -> list[dict]:
+    """The task, knowledge and choices, then earlier turns, then the current screenshot."""
+    text = [f"Task: {context.task}"]
+    if context.knowledge:
+        text.append(f"Knowledge: {context.knowledge}")
+    text.append("Choices:\n" + "\n".join(
+        f"{choice}: {description}" for choice, description in CHOICES.items()))
+    content = [{"type": "text", "text": "\n\n".join(text)}]
+    for index, entry in enumerate(context.memory, 1):
+        if entry.reasoning is None:
+            after = f"Operator action, not yours: {name(entry.action)}"
+        else:
+            after = f"Your reasoning: {entry.reasoning}\nYour action: {name(entry.action)}"
+        content += [{"type": "text", "text": f"Earlier screenshot {index}:"},
+                    _image(entry.frame), {"type": "text", "text": after}]
+    return content + [{"type": "text", "text": "Current screenshot:"}, _image(frame)]
 
 
 def _image(frame: Frame) -> dict:

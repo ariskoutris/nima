@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from emulator import Frame
-from mystery_dungeon.actions import ACTIONS, Action
+from mystery_dungeon.actions import ACTIONS
+from mystery_dungeon.model import Choice
 from mystery_dungeon.session import HOLD_FRAMES, RELEASE_FRAMES, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to sample
@@ -17,15 +18,18 @@ FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to
 class ScriptedModel:
     """Answer from fixed scripts and record every call.
 
-    Actions are model-facing names; the last one repeats. ``complete`` is asked
-    on every completion check. With a ``gate``, each call waits until the gate is
-    set, after setting ``entered``.
+    Actions are model-facing names; the last one repeats, and every choice comes
+    with ``reasoning``. ``complete`` is asked during each call, which reports the
+    task complete instead of acting when it answers True. With a
+    ``gate``, each call waits until the gate is set, after setting ``entered``.
     """
 
     def __init__(self, actions: Sequence[str] = ("A",),
                  complete: Callable[[], bool] = lambda: False, *,
-                 gate: threading.Event | None = None, error: Exception | None = None) -> None:
+                 gate: threading.Event | None = None, error: Exception | None = None,
+                 reasoning: str = "Scripted.") -> None:
         self.actions = list(actions)
+        self.reasoning = reasoning
         self.complete = complete
         self.gate = gate
         self.error = error
@@ -35,15 +39,13 @@ class ScriptedModel:
         self.last_response: dict | None = None
         self._chosen = 0
 
-    def is_complete(self, task, frame, memory) -> bool:
-        self._called("is_complete", task, frame, memory)
-        return self.complete()
-
-    def choose_action(self, task, knowledge, frame, memory) -> Action:
-        self._called("choose_action", task, knowledge, frame, memory)
+    def choose(self, context, frame) -> Choice:
+        self._called("choose", context, frame)
+        if self.complete():
+            return Choice(None, self.reasoning)
         action = self.actions[min(self._chosen, len(self.actions) - 1)]
         self._chosen += 1
-        return ACTIONS[action]
+        return Choice(ACTIONS[action], self.reasoning)
 
     def _called(self, *call) -> None:
         self.calls.append(call)
@@ -55,7 +57,7 @@ class ScriptedModel:
 
 
 def votes(*answers: bool) -> Callable[[], bool]:
-    """Answer completion checks in order, then keep answering False."""
+    """Report completion on the given calls in order, then keep acting."""
     remaining = iter(answers)
     return lambda: next(remaining, False)
 

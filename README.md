@@ -16,7 +16,7 @@ Open <http://127.0.0.1:8765> and enter a task. Intervening in the browser cancel
 
 ## How it works
 
-On each turn, the agent checks whether the task is complete, then chooses a button press or waits. It uses the current screenshot and recent actions to decide. Live sessions save screenshots, game states, and event logs under `runs/live/`.
+On each turn, the model sees the task, the current screenshot and the last few turns with their screenshots, reasoning and actions. It reasons, then chooses a button press, a wait, or DONE when the task is complete. Live sessions save screenshots, game states, and event logs under `runs/live/`.
 
 ## Test
 
@@ -26,10 +26,8 @@ uv run python -m pytest -q
 
 ## Benchmark
 
-Name a configured model; `glm` needs `OPENROUTER_API_KEY` in `.env`:
-
 ```sh
 uv run --env-file .env -m mystery_dungeon.benchmark
 ```
 
-It records the model settings and the hashes of the ROM, core, checkpoints and knowledge in `config.json`. Results are saved under `runs/benchmarks/`. For background, see [game context](docs/game-context.md), [one-step diagnosis](docs/one-step-diagnosis.md), and [historical benchmark results](docs/benchmark-vision-context.md).
+It records the model settings, memory length, an instructions hash and the hashes of the ROM, core, checkpoints and knowledge in `config.json`. Results are saved under `runs/benchmarks/`. For background, see [game context](docs/game-context.md), [one-step diagnosis](docs/one-step-diagnosis.md), and [historical benchmark results](docs/benchmark-vision-context.md).

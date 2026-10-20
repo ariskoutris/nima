@@ -98,8 +98,8 @@
       <section class="card controls">
         <div class="card-head"><h2>Guide the agent</h2><span class="muted">Changes discard the action in progress</span></div>
         <form id="control-form">
-          <label for="instructions">Instructions</label>
-          <textarea id="instructions" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
+          <label for="task">Task</label>
+          <textarea id="task" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
           <p class="hint">Press Enter to save. Shift+Enter starts a new line.</p>
           <div class="actions">
             <button id="run-button" class="button primary" type="button">Resume</button>
@@ -131,14 +131,14 @@
   </div>
   <script>
     const $ = id => document.getElementById(id);
-    const instructions = $('instructions');
+    const task = $('task');
     const actionName = action => action.type === 'press' ? action.button : action.type.toUpperCase();
     const GOOD = '#a9d9b8', BAD = '#ffb9ad', NOTE = '#ebcf8c';
     const say = (text, color) => { $('feedback').style.color = color; $('feedback').textContent = text; };
     let screenRevision = 0, screenUrl = null, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
-    let instructionsDirty = false, sending = false;
-    instructions.addEventListener('input', () => instructionsDirty = true);
-    instructions.addEventListener('keydown', event => {
+    let taskDirty = false, sending = false;
+    task.addEventListener('input', () => taskDirty = true);
+    task.addEventListener('keydown', event => {
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
       event.preventDefault();
       send();
@@ -181,16 +181,16 @@
       try {
         const response = await fetch('/api/control', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({instructions: instructions.value,
+          body: JSON.stringify({task: task.value,
                                 ...(command && {command}), ...(action && {action})})
         });
         const state = await response.json();
         if (!response.ok) throw new Error(state.error || 'Control failed');
-        instructionsDirty = false;
+        taskDirty = false;
         render(state);
         const sent = {manual: `${action} sent`, pause: state.status === 'cancelling' ? 'Pausing…' : 'Paused',
                       turn: 'One turn queued', start: 'Agent running', reset: 'Resetting game…'};
-        say(sent[command] ?? 'Instructions saved', GOOD);
+        say(sent[command] ?? 'Task saved', GOOD);
       } catch (error) {
         say(error.message, BAD);
       } finally { sending = false; }
@@ -203,7 +203,7 @@
         state.game_state?.text_printing ? 'printing' : ''].filter(Boolean).join(' · ');
       const activity = {
         loading: ['Starting emulator', 'Preparing the game view'],
-        thinking: ['Waiting for the model', `${state.model} is planning and choosing an action`],
+        thinking: ['Waiting for the model', `${state.model} is choosing an action`],
         cancelling: ['Discarding the turn in progress', 'Waiting for the model to answer'],
         resetting: ['Restoring game', 'Loading the selected state']
       }[state.status];
@@ -225,7 +225,7 @@
           $('pad').append(element);
         }
       }
-      if (!instructionsDirty) instructions.value = state.instructions;
+      if (!taskDirty) task.value = state.task;
       if (state.error) say(state.error, BAD);
       else if (state.status === 'running' && state.warning) say(state.warning, NOTE);
       else if (state.notice) say(state.notice, NOTE);

@@ -31,7 +31,7 @@ def idle(state):
 
 @pytest.fixture
 def start_run(tmp_path, monkeypatch):
-    """Start a LiveRun over a fake game with one model."""
+    """Start a LiveRun over a fake game and the given model."""
     threads = []
     monkeypatch.setattr(live, "FRAME_SECONDS", 0)
 
@@ -70,26 +70,41 @@ def test_ss0_startup_and_reset_restore_save_ram(start_run, monkeypatch):
     assert (game.state, game.ram) == (b"ss0-state", b"new-ram")
 
 
-def test_manual_action_enters_memory_and_reset_keeps_instructions(start_run):
+def test_manual_action_enters_memory_and_reset_keeps_the_task(start_run):
     model = ScriptedModel()
     run, game = start_run(model)
-    run.control({"instructions": "Find exit", "command": "manual", "action": "RIGHT"})
+    run.control({"task": "Find exit", "command": "manual", "action": "RIGHT"})
     wait_until(run, lambda state: len(state["history"]) == 1)
     run.control({"command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 2 and idle(state))
-    assert model.calls[-1][4][0].action.button == "RIGHT"
+    assert model.calls[-1][1].memory[0].action.button == "RIGHT"
     assert [row["source"] for row in state["history"]] == ["agent", "manual"]
     assert (run.output / state["history"][1]["screenshot"]).is_file()
     assert (run.output / "states/latest.state").read_bytes() == game.state
     assert json.loads((run.output / "config.json").read_text())["run"]["kind"] == "live"
     run.control({"command": "reset"})
     state = wait_until(run, lambda state: state["reset_count"] == 1)
-    assert state["instructions"] == "Find exit" and state["history"] == []
+    assert state["task"] == "Find exit" and state["history"] == []
     assert state["notice"] == "Reset complete."
     run.control({"command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
     assert state["history"][0]["action_number"] == 1
-    assert model.calls[-1][4] == ()  # reset cleared memory
+    assert model.calls[-1][1].memory == ()  # reset cleared memory
+
+
+def test_manual_actions_after_a_task_change_reach_the_model(start_run):
+    model = ScriptedModel()
+    run, _ = start_run(model)
+    run.control({"task": "Find exit", "command": "turn"})
+    wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
+    run.control({"task": "Talk to Granbull", "command": "manual", "action": "RIGHT"})
+    run.control({"command": "manual", "action": "UP"})
+    wait_until(run, lambda state: len(state["history"]) == 3)
+    run.control({"command": "turn"})
+    wait_until(run, lambda state: len(state["history"]) == 4 and idle(state))
+    context = model.calls[-1][1]
+    assert context.task == "Talk to Granbull"
+    assert [entry.action.button for entry in context.memory] == ["RIGHT", "UP"]
 
 
 def test_stall_warning_shows_until_reset(start_run):
@@ -133,19 +148,19 @@ def test_upload_state_and_ss0(start_run, monkeypatch):
      lambda state: state["reset_count"] == 1),
     (lambda run: run.load_state_upload(b"uploaded", "state"), "reset_requested",
      lambda state: state["reset_count"] == 1),
-    (lambda run: run.control({"instructions": "Something else"}), "instructions_changed",
-     lambda state: state["instructions"] == "Something else"),
+    (lambda run: run.control({"task": "Something else"}), "task_changed",
+     lambda state: state["task"] == "Something else"),
 ])
 def test_operator_input_discards_the_turn_in_progress(start_run, interrupt, reason, took_effect):
     gate = threading.Event()
     model = ScriptedModel(gate=gate)
     run, game = start_run(model)
-    run.control({"instructions": "Find exit", "command": "start"})
+    run.control({"task": "Find exit", "command": "start"})
     assert model.entered.wait(2)
     assert run.snapshot()["running"] is True
     interrupt(run)
     assert run.snapshot()["status"] == "cancelling"
-    if reason == "instructions_changed":
+    if reason == "task_changed":
         run.control({"command": "pause"})
     gate.set()
     wait_until(run, lambda state: any(row["event"] == "discarded" for row in events(run.output)))
@@ -159,7 +174,7 @@ def test_pause_then_start_in_one_call_still_discards(start_run):
     gate = threading.Event()
     model = ScriptedModel(gate=gate)
     run, game = start_run(model)
-    run.control({"instructions": "Find exit", "command": "start"})
+    run.control({"task": "Find exit", "command": "start"})
     assert model.entered.wait(2)
     run.control({"command": "pause"})
     run.control({"command": "start"})
@@ -174,7 +189,7 @@ def test_pause_then_start_in_one_call_still_discards(start_run):
 def test_one_turn_runs_exactly_one_turn(start_run):
     model = ScriptedModel()
     run, game = start_run(model)
-    run.control({"instructions": "Find exit", "command": "turn"})
+    run.control({"task": "Find exit", "command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
     assert state["running"] is False
     time.sleep(0.05)
@@ -184,7 +199,7 @@ def test_one_turn_runs_exactly_one_turn(start_run):
 
 def test_completion_pauses_without_pressing(start_run):
     run, game = start_run(ScriptedModel(complete=votes(True)))
-    run.control({"instructions": "Done", "command": "start"})
+    run.control({"task": "Done", "command": "start"})
     state = wait_until(run, lambda state: state["notice"] == "Completed: Done")
     assert state["status"] == "paused" and state["history"] == []
     assert AGENT_PRESS not in game.steps
@@ -192,7 +207,7 @@ def test_completion_pauses_without_pressing(start_run):
 
 def test_model_error_pauses_with_the_error(start_run):
     run, _ = start_run(ScriptedModel(error=RuntimeError("model down")))
-    run.control({"instructions": "Find exit", "command": "start"})
+    run.control({"task": "Find exit", "command": "start"})
     state = wait_until(run, lambda state: state["status"] == "error")
     assert state["error"] == "Model failed: RuntimeError: model down"
     run.control({"command": "pause"})
@@ -202,7 +217,7 @@ def test_model_error_pauses_with_the_error(start_run):
 def test_control_validation(start_run):
     run, _ = start_run(ScriptedModel())
     live.handler_for(run)  # the static page resolves from its package location
-    with pytest.raises(ValueError, match="instructions"):
+    with pytest.raises(ValueError, match="task"):
         run.control({"command": "start"})
     with pytest.raises(ValueError, match="invalid manual action"):
         run.control({"command": "manual", "action": "START"})

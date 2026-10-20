@@ -6,12 +6,12 @@ import pytest
 from fakes import Game, start
 
 from mystery_dungeon.actions import ACTIONS, Press, Wait, name, to_json
-from mystery_dungeon.prompts import ACTION_DESCRIPTIONS
+from mystery_dungeon.prompts import CHOICES, DONE
 
 
 def test_names_round_trip_serialize_and_have_descriptions():
     assert all(name(action) == key for key, action in ACTIONS.items())
-    assert ACTION_DESCRIPTIONS.keys() == ACTIONS.keys()
+    assert CHOICES.keys() - {DONE} == ACTIONS.keys()
     assert to_json(Press("UP")) == {"type": "press", "button": "UP"}
     assert to_json(Wait()) == {"type": "wait"}
 

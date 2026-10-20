@@ -21,7 +21,7 @@ experiments and deletion over backwards compatibility.
   printing and returns menu frames with the cursor visible. It never skips cutscenes or advances
   dialogue; the agent chooses WAIT.
 - RAM state from the session may go to the operator (live view) and to `benchmark.py` for grading,
-  never to the agent or models.
+  never to the agent or its model.
 - Game handling covers a kind of behaviour (all text boxes, all menus), never one screen or game
   state; don't write a handler per case. Name measured timings as constants and say in a comment
   what was measured.
@@ -41,7 +41,6 @@ experiments and deletion over backwards compatibility.
 ## Object design
 - Give each module and class one responsibility: the agent decides, the session drives the emulator, runners own logging and run output, the live server coordinates operator input. Call another object's public methods instead of reaching into its state.
 - Add a Protocol only at a seam with two or more real implementations (e.g. the chat model plus scripted test models). For a single implementation, use the concrete class; no ABCs, factories or registries.
-- `PlanningModel` and `ActionModel` are separate roles that one object may fill: a deliberate exception that keeps room for a separate planner.
 - Compose objects instead of inheriting. To share code, write a module-level function, not a base class.
 - Use `@dataclass(frozen=True)` for values passed between components. Only the owning class mutates its state.
 - Model closed sets as type unions dispatched with `match`, so adding a variant means one new dataclass plus one case.
@@ -51,7 +50,8 @@ experiments and deletion over backwards compatibility.
 
 ## Names
 One term per concept in code, prompts, log fields, flags and docs:
-- task: what the agent is currently pursuing; the planning model decides when it is complete.
+- task: what the agent is currently pursuing; the model decides when it is complete by
+  answering DONE instead of an action.
 - task list: a tree of tasks rooted at "beat the game". A task's children are prerequisites that
   must be completed first (e.g. level up before a boss). The agent maintains it because what to
   attempt next isn't always clear. The design is pending; this core idea is fixed.
@@ -61,10 +61,12 @@ One term per concept in code, prompts, log fields, flags and docs:
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
   during play. The agent draws on it to plan new tasks, judge which are feasible and prioritize;
   task information comes from here. It starts with prerequisite information such as
-  `knowledge/controls.md`. Not "context" or "guide". The memory design is pending; this two-level
+  `knowledge/controls.md`. Not "guide". The memory design is pending; this two-level
   split is fixed.
-- model: what the agent asks each turn to judge completion and choose an action
-  (`Model`, `ChatModel`), configured by `[model]` in `config.toml`; `name` is its endpoint id.
+- model: what the agent asks each turn to choose an action or DONE (`Model`, `ChatModel`),
+  configured by `[model]` in `config.toml`; `name` is its endpoint id.
+- context: what the model acts on each turn besides the current frame: the task, knowledge and
+  short-term memory (`agent.Context`).
 - frame: an image in memory. screenshot: its saved PNG.
 - case: one benchmark task. variant: one probe configuration. limit: a case's action budget.
 - Don't use "goal" or "decision". "steering" is reserved for future mid-run operator guidance.

@@ -14,13 +14,13 @@ from mystery_dungeon.actions import Action, to_json
 
 if TYPE_CHECKING:
     from emulator import Frame
-    from mystery_dungeon.agent import MemoryEntry, Turn
-    from mystery_dungeon.model import Model
+    from mystery_dungeon.agent import Context, Turn
+    from mystery_dungeon.model import Choice, Model
     from mystery_dungeon.session import Transition
 
-# Shared by run and benchmark configs. 7: one counter for both; benchmark results drop
-# events and success, and the action budget is called limit everywhere.
-FORMAT_VERSION = 7
+# Shared by run and benchmark configs. 8: agent rows carry the model's reasoning, one call
+# per turn claims completion, rows drop task_changed and the per-row model name.
+FORMAT_VERSION = 8
 RECENT_ROWS = 40
 
 
@@ -36,20 +36,12 @@ class LoggedModel:
     def last_response(self) -> dict | None:
         return self._model.last_response
 
-    def choose_action(self, task: str, knowledge: str, frame: Frame,
-                      memory: tuple[MemoryEntry, ...]) -> Action:
-        return self._call("choose_action", self._model.choose_action,
-                          task, knowledge, frame, memory)
-
-    def is_complete(self, task: str, frame: Frame, memory: tuple[MemoryEntry, ...]) -> bool:
-        return self._call("is_complete", self._model.is_complete, task, frame, memory)
-
-    def _call(self, name: str, method, *args):
+    def choose(self, context: Context, frame: Frame) -> Choice:
         started = time.perf_counter()
         try:
-            return method(*args)
+            return self._model.choose(context, frame)
         finally:
-            self._calls.append({"call": name, "ms": round((time.perf_counter() - started) * 1000),
+            self._calls.append({"ms": round((time.perf_counter() - started) * 1000),
                                 "response": self._model.last_response})
 
 
@@ -66,7 +58,6 @@ class RunLog:
         self._calls: list[dict] = []
         self.model = LoggedModel(model, self._calls)
         self._recent: deque[dict] = deque(maxlen=RECENT_ROWS)
-        self._task: str | None = None
         snapshot = None
         if knowledge:
             data = knowledge.encode("utf-8")
@@ -83,7 +74,6 @@ class RunLog:
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
         """Record a turn the agent committed; transition is None when nothing was applied."""
-        self._note_task(turn)
         fields = self._turn_fields(turn)
         if transition is None:
             self._write(turn.status, fields)
@@ -93,12 +83,11 @@ class RunLog:
 
     def record_discarded(self, turn: Turn, reason: str) -> None:
         """Record a turn that was proposed but never applied."""
-        self._note_task(turn)
         self._write("discarded", {"reason": reason, **self._turn_fields(turn)})
 
     def record_manual(self, action: Action, transition: Transition) -> None:
         self._recent.append(_summary(self._write("action", {
-            "source": "manual", "action": to_json(action), "model": self.model.name,
+            "source": "manual", "action": to_json(action),
             **_transition_fields(transition)})))
 
     def record_reset(self, screenshot: str) -> None:
@@ -108,21 +97,18 @@ class RunLog:
     def record_run_stop(self, reason: str, screenshot: str) -> None:
         self._write("run_stop", {"reason": reason, "screenshot": screenshot})
 
-    def _note_task(self, turn: Turn) -> None:
-        if turn.task.description != self._task:
-            self._task = turn.task.description
-            self._write("task_changed", {"task": self._task, "knowledge": turn.task.knowledge})
-
     def _turn_fields(self, turn: Turn) -> dict:
         """Describe a turn and take the model calls made since the previous turn."""
         calls, self._calls[:] = self._calls.copy(), []
-        fields = {"source": "agent", "task": turn.task.description,
-                  "screenshot": turn.observation.screenshot, "complete": turn.complete,
-                  "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action)}
-                             for entry in turn.memory],
-                  "model": self.model.name, "model_calls": calls}
+        fields = {"source": "agent", "task": turn.context.task,
+                  "screenshot": turn.observation.screenshot,
+                  "memory": [{"screenshot": entry.screenshot, "action": to_json(entry.action),
+                              "reasoning": entry.reasoning} for entry in turn.context.memory],
+                  "model_calls": calls}
         if turn.action is not None:
             fields["action"] = to_json(turn.action)
+        if turn.reasoning is not None:
+            fields["reasoning"] = turn.reasoning
         if turn.error is not None:
             fields["error"] = turn.error
         return fields

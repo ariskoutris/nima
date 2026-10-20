@@ -30,7 +30,7 @@ from mystery_dungeon.session import (
 )
 
 COMMANDS = ("start", "pause", "turn", "manual", "reset")
-MAX_INSTRUCTIONS = 1000
+MAX_TASK_LENGTH = 1000
 SCREEN_WAIT_SECONDS = 15
 FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
 
@@ -38,6 +38,7 @@ FRAME_SECONDS = 1 / 60  # pace streamed frames at the GBA's refresh rate
 @dataclass(frozen=True)
 class Manual:
     action: Action
+    task: str  # the task when the operator acted, so the move stays in that task's memory
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ class Load:
 
 @dataclass(frozen=True)
 class TakeTurn:
-    instructions: str
+    task: str
 
 
 Request = Manual | Load
@@ -74,9 +75,9 @@ class LiveRun:
                            {"kind": "live", "rom": str(rom), "core": str(core),
                             "initial_state": str(state), "hold_frames": hold_frames,
                             "release_frames": release_frames}, knowledge)
-        self._agent = Agent(self._log.model, self._log.model, knowledge)
+        self._agent = Agent(self._log.model, knowledge)
         self._condition = threading.Condition()
-        self._instructions = ""
+        self._task = ""
         self._mode = "paused"  # paused | running | one_turn
         self._requests: deque[Request] = deque()
         self._current: Work | None = None
@@ -95,7 +96,7 @@ class LiveRun:
     def snapshot(self) -> dict:
         with self._condition:
             return {"status": self._status(), "error": self._error, "notice": self._notice,
-                    "instructions": self._instructions, "running": self._mode != "paused",
+                    "task": self._task, "running": self._mode != "paused",
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
                     "history": self._log.recent(), "model": self._log.model.name,
@@ -121,12 +122,11 @@ class LiveRun:
         Raises:
             ValueError: when the input is malformed or cannot run yet.
         """
-        if not isinstance(data, dict) or set(data) - {"instructions", "command", "action"}:
+        if not isinstance(data, dict) or set(data) - {"task", "command", "action"}:
             raise ValueError("unknown control field")
-        instructions = data.get("instructions")
-        if instructions is not None and (not isinstance(instructions, str)
-                                         or len(instructions) > MAX_INSTRUCTIONS):
-            raise ValueError(f"instructions must be text of at most {MAX_INSTRUCTIONS} characters")
+        task = data.get("task")
+        if task is not None and (not isinstance(task, str) or len(task) > MAX_TASK_LENGTH):
+            raise ValueError(f"task must be text of at most {MAX_TASK_LENGTH} characters")
         command = data.get("command")
         if command is not None and command not in COMMANDS:
             raise ValueError("unknown command")
@@ -137,13 +137,13 @@ class LiveRun:
             raise ValueError("action requires the manual command")
         with self._condition:
             self._require_loaded()
-            instructions = self._instructions if instructions is None else instructions.strip()
+            task = self._task if task is None else task.strip()
             keeps_running = command is None and self._mode != "paused"
-            if not instructions and (command in ("start", "turn") or keeps_running):
-                raise ValueError("enter instructions before running the agent")
-            if instructions != self._instructions:
-                self._instructions = instructions
-                self._interrupt("instructions_changed")
+            if not task and (command in ("start", "turn") or keeps_running):
+                raise ValueError("enter a task before running the agent")
+            if task != self._task:
+                self._task = task
+                self._interrupt("task_changed")
             match command:
                 case "start" | "turn":
                     self._error = self._notice = ""
@@ -151,7 +151,7 @@ class LiveRun:
                 case "pause":
                     self._pause("paused")
                 case "manual":
-                    self._queue("manual_control", Manual(ACTIONS[action]))
+                    self._queue("manual_control", Manual(ACTIONS[action], task))
                 case "reset":
                     self._queue("reset_requested", Load(None))
             self._condition.notify_all()
@@ -200,12 +200,12 @@ class LiveRun:
             while work := self._next():
                 try:
                     match work:
-                        case Manual(action):
-                            self._manual(session, action)
+                        case Manual(action, task):
+                            self._manual(session, action, task)
                         case Load(checkpoint):
                             self._load(session, checkpoint)
-                        case TakeTurn(instructions):
-                            self._turn(session, instructions)
+                        case TakeTurn(task):
+                            self._turn(session, task)
                 finally:
                     with self._condition:
                         self._current = None
@@ -222,11 +222,11 @@ class LiveRun:
                 self._current = self._requests.popleft()
             else:
                 self._interrupted = None
-                self._current = TakeTurn(self._instructions)
+                self._current = TakeTurn(self._task)
             return self._current
 
-    def _turn(self, session: GameplaySession, instructions: str) -> None:
-        self._agent.set_instructions(instructions)
+    def _turn(self, session: GameplaySession, task: str) -> None:
+        self._agent.set_task(task)
         turn = self._agent.propose(session.observe())
         with self._condition:
             if self._interrupted is not None:
@@ -240,14 +240,15 @@ class LiveRun:
         match turn.status:
             case "completion":
                 self._mode = "paused"
-                self._notice = f"Completed: {turn.task.description}"
+                self._notice = f"Completed: {turn.context.task}"
             case "model_error":
                 self._mode = "paused"
                 self._error = f"Model failed: {turn.error}"
             case "action" if self._mode == "one_turn":
                 self._mode = "paused"
 
-    def _manual(self, session: GameplaySession, action: Action) -> None:
+    def _manual(self, session: GameplaySession, action: Action, task: str) -> None:
+        self._agent.set_task(task)
         transition = self._agent.manual(session, action)
         with self._condition:
             self._log.record_manual(action, transition)

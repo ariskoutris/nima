@@ -12,8 +12,8 @@ from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
 
 def setup(tmp_path, model, knowledge=""):
     log = RunLog(tmp_path / "run", model, {"kind": "test"}, knowledge)
-    agent = Agent(log.model, log.model, knowledge)
-    agent.set_instructions("Find exit")
+    agent = Agent(log.model, knowledge)
+    agent.set_task("Find exit")
     return log, agent, start(tmp_path / "run")
 
 
@@ -27,25 +27,33 @@ def test_config_snapshots_knowledge(tmp_path):
     assert (tmp_path / "knowledge.txt").read_text() == "Use the map."
 
 
-def test_turn_rows_carry_model_calls_and_task_changes(tmp_path):
+def test_turn_rows_carry_the_task_and_model_calls(tmp_path):
     model = ScriptedModel()
     model.last_response = {"reasoning": "door ahead"}
     log, agent, session = setup(tmp_path, model, "Use the map.")
     log.record_turn(*agent.take_turn(session))
-    task_changed, action = events(tmp_path / "run")
-    assert task_changed["event"] == "task_changed" and task_changed["task"] == "Find exit"
-    assert task_changed["knowledge"] == "Use the map."
+    [action] = events(tmp_path / "run")
     assert action["event"] == "action" and action["source"] == "agent"
+    assert action["task"] == "Find exit" and "knowledge" not in action
     assert action["action"] == {"type": "press", "button": "A"}
-    assert action["complete"] is False and "knowledge" not in action
-    assert [call["call"] for call in action["model_calls"]] == ["is_complete", "choose_action"]
+    assert len(action["model_calls"]) == 1
     assert all(call["ms"] >= 0 and call["response"] == {"reasoning": "door ahead"}
                for call in action["model_calls"])
-    assert {"time", "task", "screenshot", "after", "memory", "model", "index",
+    assert {"time", "task", "screenshot", "after", "memory", "index",
             "action_number", "frame_before", "frame_after"} <= action.keys()
     log.record_turn(*agent.take_turn(session))
-    assert events(tmp_path / "run")[-1]["event"] == "action"  # same task: no second task_changed
-    assert events(tmp_path / "run")[-1]["memory"][0]["action"] == {"type": "press", "button": "A"}
+    assert events(tmp_path / "run")[-1]["memory"] == [{
+        "screenshot": "frames/000000.png", "action": {"type": "press", "button": "A"},
+        "reasoning": "Scripted."}]
+
+
+def test_agent_rows_carry_the_model_reasoning(tmp_path):
+    log, agent, session = setup(tmp_path, ScriptedModel(reasoning="Door ahead."))
+    log.record_turn(*agent.take_turn(session))
+    log.record_manual(Press("B"), agent.manual(session, Press("B")))
+    action, manual = events(tmp_path / "run")
+    assert action["reasoning"] == "Door ahead."
+    assert "reasoning" not in manual
 
 
 def test_completion_error_and_discarded_rows(tmp_path):
@@ -55,9 +63,9 @@ def test_completion_error_and_discarded_rows(tmp_path):
     log.record_discarded(agent.propose(session.observe()), "paused")
     model.error = RuntimeError("down")
     log.record_turn(*agent.take_turn(session))
-    rows = events(tmp_path / "run")[1:]
+    rows = events(tmp_path / "run")
     assert [row["event"] for row in rows] == ["completion", "discarded", "model_error"]
-    assert rows[0]["complete"] is True and "action" not in rows[0]
+    assert "action" not in rows[0]
     assert rows[1]["reason"] == "paused" and rows[1]["action"]["button"] == "A"
     assert rows[2]["error"] == "RuntimeError: down"
     assert not log.recent()

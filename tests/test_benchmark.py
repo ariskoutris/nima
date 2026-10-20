@@ -67,8 +67,8 @@ def test_case_is_reachable_by_scripted_play(town, case):
     route = ROUTES[case.id]
 
     def done():
-        actions = sum(call[0] == "choose_action" for call in model.calls)
-        return case.criterion in ("finish", "finish_lombre") and actions == len(route)
+        earlier_calls = sum(call[0] == "choose" for call in model.calls) - 1
+        return case.criterion in ("finish", "finish_lombre") and earlier_calls == len(route)
 
     model = ScriptedModel(route, done)
     result = run_case(game, case, model, seeds, output / case.id)
@@ -224,16 +224,15 @@ def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monk
 
 def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     rom, core = tmp_path / "game.gba", tmp_path / "core"
-    checkpoints = (tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)
-    for path in (rom, core, *checkpoints):
+    for path in (rom, core, *(tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)):
         path.write_bytes(b"test")
-    model = object()
     cases = (Case("one", "square", "Task one", "down", 1),
              Case("two", "square", "Task two", "down", 1))
     monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
                                       "--output", str(tmp_path / "run")])
+    model = object()
     settings = ChatSettings("http://endpoint", "vendor/model")
-    monkeypatch.setattr(benchmark, "read_settings", lambda: settings)
+    monkeypatch.setattr(benchmark, "read_settings", Mock(return_value=settings))
     monkeypatch.setattr(benchmark, "ChatModel", Mock(return_value=model))
     monkeypatch.setattr(benchmark, "CHECKPOINTS", tmp_path)
     monkeypatch.setattr(benchmark, "CASES", cases)
@@ -249,8 +248,8 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     config = json.loads((tmp_path / "run/config.json").read_text())
     assert config["format_version"] == FORMAT_VERSION
     assert config["model"]["name"] == "vendor/model"
-    assert "time_limit_seconds" not in config
-    assert "recognition_window" not in config
+    assert config["memory_turns"] == benchmark.MEMORY_TURNS and config["instructions_sha256"]
+    assert config["hashes"][str(rom)] == benchmark.sha256(rom)
 
 
 def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
@@ -262,7 +261,6 @@ def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "CASES", (Case("one", "square", "Move", "down", 1),))
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
-    monkeypatch.setattr(benchmark, "read_settings", lambda: ChatSettings("http://x", "m"))
     monkeypatch.setattr(benchmark, "ChatModel", Mock(return_value=object()))
     run = Mock(return_value={"stop_reason": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
