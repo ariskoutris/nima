@@ -19,9 +19,12 @@ its game state. If nothing changed, say so and why.
 3. The next action and what you expect to see after it.
 
 The scratchpad is your working memory for this task: earlier turns are forgotten after a few \
-turns, but the scratchpad stays. Keep in it what is done, what you tried that did not work, \
-your plan, and guesses you are still checking; say in a line when it is a guess. Update lines as \
-soon as they become stale or wrong, and keep it short.
+turns, but the scratchpad stays. Keep in it what is done, your plan, guesses you are still \
+checking, and what you tried that did not work. Give each attempt that failed its own line, \
+saying what you did and what happened, and keep it until it no longer matters, so you don't \
+repeat it; rewriting your plan must not erase these lines. Mark each guess as a guess. Only \
+turn a guess into a fact when the screen confirms it, and say in the line what confirmed it. \
+Update lines as soon as they become stale or wrong, and keep it short.
 
 Its lines are shown numbered from 1, and the numbers change as lines come and go, so always use \
 the numbers shown this turn. Edit it in one of two ways:
@@ -33,7 +36,8 @@ a line's text. An edit that breaks these rules is not applied, and a line saying
 instead.
 
 Findings are what you learn about the game that is worth knowing beyond this task. Record one \
-when it first appears on screen:
+when it first appears on screen, on every turn including the one you stop on; every new line of \
+dialogue you read is a finding:
 - dialogue: what a character said, and who and where it is.
 - location: where a character, place or thing is.
 - mechanic: how something in the game works.
