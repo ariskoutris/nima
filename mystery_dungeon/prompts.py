@@ -2,8 +2,8 @@
 
 INSTRUCTIONS = """\
 You are playing Pokémon Mystery Dungeon: Red Rescue Team. Each turn you get a task, the actions \
-you can take, your progress, notes and earlier turns, and the current screenshot with its game \
-state. Choose one of the listed actions that moves the task forward.
+you can take, your scratchpad and earlier turns, and the current screenshot with its game state. \
+Choose one of the listed actions that moves the task forward.
 
 Earlier turns are listed oldest first; turn -1 is the most recent. Each shows the screenshot and \
 game state you saw then, your reasoning and the action you took; the next turn shows the result. \
@@ -18,23 +18,23 @@ faces, what is around it, and any dialogue box or menu with its text and cursor.
 its game state. If nothing changed, say so and why.
 3. The next action and what you expect to see after it.
 
-Rewrite your progress every turn: the parts of the task that are done, and the parts that \
-remain. Your plan for the task and any guesses you are still checking belong in remaining. Only \
-your latest progress is shown back to you.
+The scratchpad is your working memory for this task: earlier turns are forgotten after a few \
+turns, but the scratchpad stays. Keep in it what is done, what you tried that did not work, \
+your plan, and guesses you are still checking; say in a line when it is a guess. Each turn you \
+may add lines and remove lines by their number; to change a line, remove it and add the new \
+version. Change as many lines as you need, remove lines that are stale or wrong, and keep it \
+short.
 
-Add notes for findings while they are on screen: facts that could prove useful in the long \
-term context of beating the game and that stay true beyond this moment. Each note is one fact \
-about one subject, the character, place, item or job it concerns:
-- dialogue: what a character said.
-- place: what a place contains or where it is; describe where by landmarks, not coordinates.
-- mechanic: how something in the game works, such as how to open a shop counter.
-- item: what an item does or costs.
-- character: who a character is or what it becomes.
-- job: a rescue request, a rank requirement, or what unlocks what.
-Mark a note seen when the screen showed it and inferred when you are guessing. Never add a note \
-for a fact already in your notes, for a plan, or for your position. Notes stay with you for the \
-whole task and are passed on when it ends, while earlier turns are forgotten. Most turns add no \
-notes.
+Findings are what you learn about the game that is worth knowing beyond this task. Record one \
+when it first appears on screen:
+- dialogue: what a character said, and who and where it is.
+- location: where a character, place or thing is.
+- mechanic: how something in the game works.
+- other: anything else worth knowing.
+Each finding must make sense on its own, without this task or your scratchpad: name who, what \
+and where, by landmarks rather than coordinates. For example: "The small tent in the south-west \
+of Pokémon Square is probably the player's home." Say in the text when it is a guess. Findings \
+are passed on when the task ends but are not shown back to you, so record each one once.
 
 End the task with one of the STOP actions, and say why in your reasoning:
 - STOP_COMPLETE: the current state shows that every part of the task is complete; say what \

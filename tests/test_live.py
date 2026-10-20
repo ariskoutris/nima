@@ -7,10 +7,11 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from fakes import Game, ScriptedModel, note, rows, votes
+from fakes import Game, ScriptedModel, finding, rows, votes
 
 from emulator import Frame
 from mystery_dungeon import live
+from mystery_dungeon.model import ScratchpadEdit
 from mystery_dungeon.session import Checkpoint
 
 AGENT_PRESS = (8, ("A",))
@@ -168,18 +169,19 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
     assert AGENT_PRESS in game.steps
 
 
-def test_the_view_shows_the_task_progress_and_notes(start_run):
-    run, _ = start_run(ScriptedModel(notes=[[note("Sells Oran Berries.")]]))
+def test_the_view_shows_the_task_scratchpad_and_findings(start_run):
+    run, _ = start_run(ScriptedModel(edits=[ScratchpadEdit(("Find the exit.",))],
+                                     findings=[[finding("Kecleon sells Oran Berries.")]]))
     run.control({"task": "Find exit", "command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
-    assert state["progress"] == {"done": (), "remaining": ("Scripted.",)}
-    assert state["notes"] == [{"kind": "item", "subject": "Kecleon Shop",
-                               "fact": "Sells Oran Berries.", "source": "seen"}]
+    assert state["scratchpad"] == [{"number": 1, "text": "Find the exit."}]
+    assert state["findings"] == [{"kind": "dialogue",
+                                  "text": "Kecleon sells Oran Berries."}]
     run.control({"task": "Talk to Granbull"})
     state = wait_until(run, lambda state: state["task"] == "Talk to Granbull")
     run.control({"command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 2 and idle(state))
-    assert state["notes"] == []  # the new task started without the old notes
+    assert state["scratchpad"] == state["findings"] == []  # the new task starts empty
 
 
 def test_stop_for_a_replaced_task_does_not_end_the_new_one(start_run):

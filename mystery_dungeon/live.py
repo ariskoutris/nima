@@ -148,9 +148,8 @@ class LiveRun:
                     "reset_count": self._reset_count,
                     "game_state": self._game_state, "warning": self._warning,
                     "history": self._log.recent(),
-                    "progress": None if self._agent.progress is None else asdict(
-                        self._agent.progress),
-                    "notes": [asdict(note) for note in self._agent.notes],
+                    "scratchpad": [asdict(line) for line in self._agent.scratchpad],
+                    "findings": [asdict(finding) for finding in self._agent.findings],
                     "model": self._log.model.name,
                     "actions": list(GAME_ACTIONS), "output": str(self.output)}
 

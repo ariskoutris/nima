@@ -3,11 +3,11 @@
 from dataclasses import fields
 
 import pytest
-from fakes import PROGRESS, Game, ScriptedModel, note, start, votes
+from fakes import Game, ScriptedModel, finding, start, votes
 
 from mystery_dungeon.actions import Press, Stop, Wait
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, Turn
-from mystery_dungeon.model import Progress
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, ScratchpadLine, Turn
+from mystery_dungeon.model import ScratchpadEdit
 
 
 def agent_with(model, task="Find exit", knowledge=""):
@@ -22,8 +22,7 @@ def test_turns_act_on_the_task_knowledge_and_memory(tmp_path):
     session = start(tmp_path)
     agent.act(session)
     turn, _ = agent.act(session)
-    assert turn.context == Context("Find exit", "Use the map.", turn.context.memory,
-                                   progress=PROGRESS)
+    assert turn.context == Context("Find exit", "Use the map.", turn.context.memory)
     assert [entry.action for entry in turn.context.memory] == [Press("A")]
     assert model.calls[-1] == ("call", turn.context, turn.observation.frame)
 
@@ -38,49 +37,74 @@ def test_a_new_task_clears_memory(tmp_path):
     assert agent.memory == ()
 
 
-def test_notes_accumulate_and_stay_in_context_until_the_task_changes(tmp_path):
-    berries, specs, closes = note("Sells Oran Berries."), note("Sells X-Ray Specs."), note(
-        "Closes at night.", kind="mechanic")
-    model = ScriptedModel(["A"], notes=[[berries], [], [specs, closes]])
+def test_scratchpad_edits_remove_then_add_with_numbers_that_are_never_reused(tmp_path):
+    model = ScriptedModel(["A"], edits=[
+        ScratchpadEdit(("Find Kecleon.", "Shop is east, a guess.")),
+        ScratchpadEdit(("Shop is east of the well.", "Talked to Kecleon."), (2,)),
+        ScratchpadEdit((), (1, 3))])
+    agent = agent_with(model)
+    session = start(tmp_path)
+    for _ in range(3):
+        agent.act(session)
+    assert model.calls[0][1].scratchpad == ()
+    assert model.calls[1][1].scratchpad == (
+        ScratchpadLine(1, "Find Kecleon."), ScratchpadLine(2, "Shop is east, a guess."))
+    assert model.calls[2][1].scratchpad == (
+        ScratchpadLine(1, "Find Kecleon."), ScratchpadLine(3, "Shop is east of the well."),
+        ScratchpadLine(4, "Talked to Kecleon."))
+    assert agent.scratchpad == (ScratchpadLine(4, "Talked to Kecleon."),)
+
+
+def test_removing_a_missing_line_is_a_model_error_that_changes_nothing(tmp_path):
+    game = Game()
+    model = ScriptedModel(["A"], edits=[ScratchpadEdit(("Find Kecleon.",)),
+                                        ScratchpadEdit(("Never added.",), (1, 7))])
+    agent = agent_with(model)
+    session = start(tmp_path, game)
+    agent.act(session)
+    steps = list(game.steps)
+    error, transition = agent.act(session)
+    assert isinstance(error, ModelError) and "[7]" in error.message
+    assert transition is None and game.steps == steps
+    assert agent.scratchpad == (ScratchpadLine(1, "Find Kecleon."),)
+
+
+def test_findings_accumulate_without_reaching_the_model(tmp_path):
+    first, second = finding("Charizard in Pokémon Square says its team is Gold Rank."), finding(
+        "Granbull stands south of the plaza in Pokémon Square.", kind="location")
+    model = ScriptedModel(["A"], findings=[[first], [], [second]])
     agent = agent_with(model)
     session = start(tmp_path)
     for _ in range(3):
         turn, _ = agent.act(session)
-    assert turn.notes == (specs, closes)
-    assert model.calls[-1][1].notes == (berries,)
-    assert agent.notes == (berries, specs, closes)
-    agent.set_task("Find exit")
-    assert len(agent.notes) == 3  # the same task keeps its notes
-    agent.set_task("Talk to Granbull")
-    assert agent.notes == () and agent.progress is None
+    assert turn.findings == (second,)
+    assert agent.findings == (first, second)
+    assert "findings" not in {field.name for field in fields(Context)}
 
 
-def test_only_the_latest_progress_reaches_the_next_turn(tmp_path):
-    first, second = Progress((), ("Talk to Kecleon",)), Progress(("Talk to Kecleon",), ())
-    model = ScriptedModel(["A"], progress=[first, second])
+def test_a_new_task_or_cleared_memory_forgets_scratchpad_and_findings(tmp_path):
+    model = ScriptedModel(["A"], edits=[ScratchpadEdit(("A line.",))] * 3,
+                          findings=[[finding("A fact.")]] * 3)
     agent = agent_with(model)
     session = start(tmp_path)
-    turn, _ = agent.act(session)
-    assert turn.context.progress is None and turn.progress == first
     agent.act(session)
+    agent.set_task("Find exit")
+    assert len(agent.scratchpad) == len(agent.findings) == 1  # the same task keeps them
+    agent.set_task("Talk to Granbull")
+    assert agent.scratchpad == () and agent.findings == ()
     agent.act(session)
-    assert [call[1].progress for call in model.calls] == [None, first, second]
-    assert agent.progress == second
+    assert agent.scratchpad == (ScratchpadLine(1, "A line."),)  # numbering restarts
+    agent.clear_memory()
+    assert agent.scratchpad == () and agent.findings == ()
 
 
-def test_a_stop_updates_progress_and_notes(tmp_path):
-    done = Progress(("Talk to Kecleon",), ())
-    model = ScriptedModel(stop=votes(True), progress=[done], notes=[[note("Sells Oran Berries.")]])
+def test_a_stop_applies_its_scratchpad_edit_and_findings(tmp_path):
+    model = ScriptedModel(stop=votes(True), edits=[ScratchpadEdit(("Talked to Kecleon.",))],
+                          findings=[[finding("Kecleon runs the shop in Pokémon Square.")]])
     agent = agent_with(model)
     agent.act(start(tmp_path))
-    assert agent.progress == done and len(agent.notes) == 1
-
-
-def test_clearing_memory_forgets_progress_and_notes(tmp_path):
-    agent = agent_with(ScriptedModel(notes=[[note("A fact.")]]))
-    agent.act(start(tmp_path))
-    agent.clear_memory()
-    assert agent.notes == () and agent.progress is None
+    assert agent.scratchpad == (ScratchpadLine(1, "Talked to Kecleon."),)
+    assert len(agent.findings) == 1
 
 
 def test_the_first_task_keeps_earlier_manual_actions(tmp_path):
@@ -177,7 +201,7 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "context", "action", "reasoning", "progress", "notes"}
+        "observation", "context", "action", "reasoning", "scratchpad", "findings"}
 
 
 def test_agent_writes_no_files(tmp_path):

@@ -58,10 +58,12 @@ One term per concept in code, prompts, log fields, flags and docs:
   `GameAction` (Press, Wait) is what the game performs; Stop ends the task with its outcome:
   complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
   reasoning.
-- note: one fact about the game (kind, subject, fact, seen or inferred) that the model records
-  in a reply while it is on screen. A task's notes stay in the context until the task changes.
-- progress: what is done and what remains of the task; the model rewrites it every turn and
-  only the latest is in the context.
+- scratchpad: the model's numbered working lines for the current task (what is done, what was
+  tried, the plan, guesses). It adds and removes lines each turn and sees it every turn; it is
+  cleared when the task changes.
+- finding: a standalone fact about the game the model records (a kind and a text that states
+  any uncertainty). Findings are never shown back to the model; they are logged with each turn
+  for the orchestrator, which will merge them into knowledge.
 - short-term memory: recent reasoning, observations and turns, plus information retrieved for the
   current task.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
@@ -72,8 +74,7 @@ One term per concept in code, prompts, log fields, flags and docs:
 - model: what the agent calls each turn for an action and its reasoning (`Model`, `ChatModel`),
   configured by `[model]` in `config.toml`; `name` is its endpoint id.
 - context: what the model acts on each turn besides the current frame: the task, knowledge,
-  RAM-derived game state, short-term memory, and the task's progress and notes
-  (`agent.Context`).
+  RAM-derived game state, short-term memory and the scratchpad (`agent.Context`).
 - RAM-derived game state: the limited facts read from RAM that the model gets with a frame
   (`session.GameState`). A saved emulator state is a save state.
 - frame: an image in memory. screenshot: its saved PNG. tick: one emulated GBA frame; counts

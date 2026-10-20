@@ -22,56 +22,53 @@ if TYPE_CHECKING:
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
-NoteKind = Literal["dialogue", "place", "mechanic", "item", "character", "job"]
-NoteSource = Literal["seen", "inferred"]
-_STRINGS = {"type": "array", "items": {"type": "string"}}
-# The model judges the screen, rewrites its progress and records new notes before it commits
-# to an action.
+FindingKind = Literal["dialogue", "location", "mechanic", "other"]
+# The model judges the screen, edits its scratchpad and records findings before it commits to
+# an action.
 ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
         "reasoning": {"type": "string"},
-        "progress": {"type": "object", "properties": {"done": _STRINGS, "remaining": _STRINGS},
-                     "required": ["done", "remaining"], "additionalProperties": False},
-        "notes": {"type": "array", "items": {
+        "scratchpad": {"type": "object", "properties": {
+            "add": {"type": "array", "items": {"type": "string"}},
+            "remove": {"type": "array", "items": {"type": "integer"}}},
+            "required": ["add", "remove"], "additionalProperties": False},
+        "findings": {"type": "array", "items": {
             "type": "object",
-            "properties": {"kind": {"type": "string", "enum": list(get_args(NoteKind))},
-                           "subject": {"type": "string"}, "fact": {"type": "string"},
-                           "source": {"type": "string", "enum": list(get_args(NoteSource))}},
-            "required": ["kind", "subject", "fact", "source"], "additionalProperties": False}},
+            "properties": {"kind": {"type": "string", "enum": list(get_args(FindingKind))},
+                           "text": {"type": "string"}},
+            "required": ["kind", "text"], "additionalProperties": False}},
         "action": {"type": "string", "enum": list(ACTION_NAMES)},
     },
-    "required": ["reasoning", "progress", "notes", "action"],
+    "required": ["reasoning", "scratchpad", "findings", "action"],
     "additionalProperties": False,
 }
 
 
 @dataclass(frozen=True)
-class Progress:
-    """What is done and what remains of the task, as the model last rewrote it."""
+class ScratchpadEdit:
+    """Lines to remove from the scratchpad, by number, and lines to append after them."""
 
-    done: tuple[str, ...]
-    remaining: tuple[str, ...]
+    add: tuple[str, ...] = ()
+    remove: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
-class Note:
-    """One fact about the game, found while it was on screen; subject is who or what it is about."""
+class Finding:
+    """A standalone fact about the game; any uncertainty is stated in its text."""
 
-    kind: NoteKind
-    subject: str
-    fact: str
-    source: NoteSource
+    kind: FindingKind
+    text: str
 
 
 @dataclass(frozen=True)
 class Reply:
-    """The model's action, its reasoning, its progress and the notes it added (often none)."""
+    """The model's action, its reasoning, its scratchpad edit and its findings (often none)."""
 
     action: Action
     reasoning: str
-    progress: Progress
-    notes: tuple[Note, ...] = ()
+    scratchpad: ScratchpadEdit
+    findings: tuple[Finding, ...]
 
 
 class Model(Protocol):
@@ -124,31 +121,27 @@ class ChatModel:
             raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
         if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
-        if not isinstance(answer["notes"], list):
-            raise ValueError(f"{self.name} returned invalid notes: {answer['notes']!r}")
+        if not isinstance(answer["findings"], list):
+            raise ValueError(f"{self.name} returned invalid findings: {answer['findings']!r}")
         return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip(),
-                     self._progress(answer["progress"]),
-                     tuple(self._note(note) for note in answer["notes"]))
+                     self._edit(answer["scratchpad"]),
+                     tuple(self._finding(finding) for finding in answer["findings"]))
 
-    def _progress(self, progress: object) -> Progress:
-        if not isinstance(progress, dict) or progress.keys() != {"done", "remaining"}:
-            raise ValueError(f"{self.name} returned invalid progress: {progress!r}")
-        items = {}
-        for key, values in progress.items():
-            if not isinstance(values, list) or not all(
-                    isinstance(value, str) and value.strip() for value in values):
-                raise ValueError(f"{self.name} returned invalid progress: {progress!r}")
-            items[key] = tuple(value.strip() for value in values)
-        return Progress(**items)
+    def _edit(self, edit: object) -> ScratchpadEdit:
+        if (not isinstance(edit, dict) or edit.keys() != {"add", "remove"}
+                or not isinstance(edit["add"], list) or not isinstance(edit["remove"], list)
+                or not all(isinstance(line, str) and line.strip() for line in edit["add"])
+                or not all(type(number) is int for number in edit["remove"])
+                or len(set(edit["remove"])) != len(edit["remove"])):
+            raise ValueError(f"{self.name} returned an invalid scratchpad edit: {edit!r}")
+        return ScratchpadEdit(tuple(line.strip() for line in edit["add"]), tuple(edit["remove"]))
 
-    def _note(self, note: object) -> Note:
-        if (not isinstance(note, dict) or note.keys() != {"kind", "subject", "fact", "source"}
-                or note["kind"] not in get_args(NoteKind)
-                or note["source"] not in get_args(NoteSource)
-                or not all(isinstance(note[key], str) and note[key].strip()
-                           for key in ("subject", "fact"))):
-            raise ValueError(f"{self.name} returned an invalid note: {note!r}")
-        return Note(note["kind"], note["subject"].strip(), note["fact"].strip(), note["source"])
+    def _finding(self, finding: object) -> Finding:
+        if (not isinstance(finding, dict) or finding.keys() != {"kind", "text"}
+                or finding["kind"] not in get_args(FindingKind)
+                or not isinstance(finding["text"], str) or not finding["text"].strip()):
+            raise ValueError(f"{self.name} returned an invalid finding: {finding!r}")
+        return Finding(finding["kind"], finding["text"].strip())
 
     def _send(self, content: list[dict]) -> object:
         """Post one request and return the model's answer as decoded JSON."""
@@ -203,17 +196,13 @@ def token_usage(response: dict | None) -> dict | None:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """Build the user message: task, knowledge, progress, notes and actions, earlier turns,
-    current frame."""
+    """Build the user message: task, knowledge, scratchpad and actions, earlier turns, current
+    frame."""
     text = [f"# Task\n{context.task}"]
     if context.knowledge:
         text.append(f"# Knowledge\n{context.knowledge}")
-    if context.progress is not None:
-        text.append("# Your progress\n" + "\n".join(
-            [*_items("Done", context.progress.done),
-             *_items("Remaining", context.progress.remaining)]))
-    if context.notes:
-        text.append("# Your notes for this task\n" + _grouped(context.notes))
+    text.append("# Your scratchpad\n" + ("\n".join(
+        f"[{line.number}] {line.text}" for line in context.scratchpad) or "(empty)"))
     text.append("# Actions\n" + "\n".join(
         f"- {action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
     if context.memory:
@@ -237,19 +226,6 @@ def _content(context: Context, frame: Frame) -> list[dict]:
         current.append({"type": "text", "text": "# Game state\n" + "\n".join(
             [*you, describe(state), *nearby(state)])})
     return content + current
-
-
-def _items(heading: str, items: tuple[str, ...]) -> list[str]:
-    return [f"{heading}:", *(f"- {item}" for item in items)] if items else [f"{heading}: none"]
-
-
-def _grouped(notes: tuple[Note, ...]) -> str:
-    """List notes under their subjects, subjects in the order they first appeared."""
-    subjects: dict[str, list[str]] = {}
-    for note in notes:
-        label = note.kind if note.source == "seen" else f"{note.kind}, inferred"
-        subjects.setdefault(note.subject, []).append(f"- ({label}) {note.fact}")
-    return "\n".join(f"## {subject}\n" + "\n".join(lines) for subject, lines in subjects.items())
 
 
 def describe(state: GameState) -> str:

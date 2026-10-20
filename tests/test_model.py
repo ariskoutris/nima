@@ -9,13 +9,13 @@ from fakes import FRAME
 from emulator import Frame
 from mystery_dungeon import model
 from mystery_dungeon.actions import Press, Stop
-from mystery_dungeon.agent import Context, MemoryEntry
+from mystery_dungeon.agent import Context, MemoryEntry, ScratchpadLine
 from mystery_dungeon.model import (
     ChatModel,
     ChatSettings,
-    Note,
-    Progress,
+    Finding,
     Reply,
+    ScratchpadEdit,
     internal_reasoning,
     read_settings,
     scaled,
@@ -28,9 +28,9 @@ MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to
           MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
-EMPTY = {"progress": {"done": [], "remaining": []}, "notes": []}
-SPECS = {"kind": "item", "subject": " Kecleon Shop ", "fact": " Sells X-Ray Specs. ",
-         "source": "seen"}
+EMPTY = {"scratchpad": {"add": [], "remove": []}, "findings": []}
+CHARIZARD = {"kind": "dialogue",
+             "text": " Charizard in Pokémon Square says its team reached Gold Rank. "}
 
 
 def answering(monkeypatch, *responses):
@@ -56,18 +56,15 @@ def reply(answer, finish_reason="stop"):
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({
         "reasoning": " The door is ahead. ",
-        "progress": {"done": [" Found the door "], "remaining": ["Go through it"]},
-        "notes": [SPECS], "action": "DOWN"}))
+        "scratchpad": {"add": [" Found the door. "], "remove": [3]},
+        "findings": [CHARIZARD], "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
-    context = Context("Find the exit", "Avoid walls", MEMORY,
-                      progress=Progress(("Left the house",), ()),
-                      notes=(Note("place", "Square", "The shop is east of the well.", "seen"),
-                             Note("item", "Kecleon Shop", "Sells Oran Berries.", "seen"),
-                             Note("character", "Square", "Lombre runs it.", "inferred")))
+    context = Context("Find the exit", "Avoid walls", MEMORY, scratchpad=(
+        ScratchpadLine(1, "Left the house."), ScratchpadLine(3, "The exit is south, a guess.")))
     answer = chat_model.call(context, FRAME)
     assert answer == Reply(Press("DOWN"), "The door is ahead.",
-                           Progress(("Found the door",), ("Go through it",)),
-                           (Note("item", "Kecleon Shop", "Sells X-Ray Specs.", "seen"),))
+                           ScratchpadEdit(("Found the door.",), (3,)),
+                           (Finding("dialogue", CHARIZARD["text"].strip()),))
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
     payload = json.loads(sent[0].data)
@@ -77,12 +74,8 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert system["content"] == INSTRUCTIONS
     assert "# Task\nFind the exit" in user["content"][0]["text"]
     assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
-    assert ("# Your progress\nDone:\n- Left the house\nRemaining: none\n\n"
-            "# Your notes for this task\n"
-            "## Square\n- (place) The shop is east of the well.\n"
-            "- (character, inferred) Lombre runs it.\n"
-            "## Kecleon Shop\n- (item) Sells Oran Berries.\n\n# Actions"
-            in user["content"][0]["text"])
+    assert ("# Your scratchpad\n[1] Left the house.\n[3] The exit is south, a guess.\n\n"
+            "# Actions" in user["content"][0]["text"])
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
     assert texts == [user["content"][0]["text"],
@@ -92,10 +85,10 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]
-    assert list(schema["properties"]) == ["reasoning", "progress", "notes", "action"]
-    assert schema["required"] == ["reasoning", "progress", "notes", "action"]
-    assert schema["properties"]["notes"]["items"]["properties"]["kind"]["enum"] == [
-        "dialogue", "place", "mechanic", "item", "character", "job"]
+    assert list(schema["properties"]) == ["reasoning", "scratchpad", "findings", "action"]
+    assert schema["required"] == ["reasoning", "scratchpad", "findings", "action"]
+    assert schema["properties"]["findings"]["items"]["properties"]["kind"]["enum"] == [
+        "dialogue", "location", "mechanic", "other"]
     assert {"WAIT", "STOP_STUCK"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
@@ -106,14 +99,14 @@ def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
     answering(monkeypatch, reply({"reasoning": "The dialogue closed.", **EMPTY,
                                   "action": action}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
-    assert answer == Reply(Stop(outcome), "The dialogue closed.", Progress((), ()))
+    assert answer == Reply(Stop(outcome), "The dialogue closed.", ScratchpadEdit(), ())
 
 
-def test_a_context_without_progress_or_notes_leaves_both_out(monkeypatch):
+def test_an_empty_scratchpad_is_shown_as_empty(monkeypatch):
     sent = answering(monkeypatch, reply({"reasoning": "Wait.", **EMPTY, "action": "WAIT"}))
-    assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).notes == ()
+    assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).findings == ()
     text = json.loads(sent[0].data)["messages"][1]["content"][0]["text"]
-    assert "# Your progress" not in text and "# Your notes" not in text
+    assert "# Your scratchpad\n(empty)\n\n# Actions" in text
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
@@ -143,19 +136,22 @@ def test_settings_come_from_the_model_table(tmp_path):
     (reply({"reasoning": "Start.", **EMPTY, "action": "START"}), "unknown action"),
     (reply({"reasoning": "Press A.", **EMPTY, "action": ["A"]}), "unknown action"),
     (reply({"reasoning": " ", **EMPTY, "action": "A"}), "no reasoning"),
-    (reply({"reasoning": "Press A.", **EMPTY, "notes": None, "action": "A"}), "invalid notes"),
-    (reply({"reasoning": "Press A.", **EMPTY, "notes": [{**SPECS, "kind": "shop"}],
-            "action": "A"}), "invalid note"),
-    (reply({"reasoning": "Press A.", **EMPTY, "notes": [{**SPECS, "source": "heard"}],
-            "action": "A"}), "invalid note"),
-    (reply({"reasoning": "Press A.", **EMPTY, "notes": [{**SPECS, "fact": " "}],
-            "action": "A"}), "invalid note"),
-    (reply({"reasoning": "Press A.", **EMPTY, "notes": ["Sells X-Ray Specs."],
-            "action": "A"}), "invalid note"),
-    (reply({"reasoning": "Press A.", **EMPTY, "progress": {"done": []}, "action": "A"}),
-     "invalid progress"),
-    (reply({"reasoning": "Press A.", **EMPTY, "progress": {"done": [""], "remaining": []},
-            "action": "A"}), "invalid progress"),
+    (reply({"reasoning": "Press A.", **EMPTY, "findings": None, "action": "A"}),
+     "invalid findings"),
+    (reply({"reasoning": "Press A.", **EMPTY, "findings": [{**CHARIZARD, "kind": "item"}],
+            "action": "A"}), "invalid finding"),
+    (reply({"reasoning": "Press A.", **EMPTY, "findings": [{**CHARIZARD, "text": " "}],
+            "action": "A"}), "invalid finding"),
+    (reply({"reasoning": "Press A.", **EMPTY, "findings": ["Charizard is Gold Rank."],
+            "action": "A"}), "invalid finding"),
+    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": []}, "action": "A"}),
+     "invalid scratchpad edit"),
+    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": [""], "remove": []},
+            "action": "A"}), "invalid scratchpad edit"),
+    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": [], "remove": ["1"]},
+            "action": "A"}), "invalid scratchpad edit"),
+    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": [], "remove": [2, 2]},
+            "action": "A"}), "invalid scratchpad edit"),
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),

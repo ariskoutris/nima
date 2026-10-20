@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Protocol
 from mystery_dungeon.actions import Action, GameAction, Stop
 
 if TYPE_CHECKING:
-    from mystery_dungeon.model import Model, Note, Progress
+    from mystery_dungeon.model import Finding, Model, ScratchpadEdit
     from mystery_dungeon.session import GameState, Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
@@ -33,6 +33,14 @@ class MemoryEntry:
 
 
 @dataclass(frozen=True)
+class ScratchpadLine:
+    """One line of the model's scratchpad; its number stays fixed until the task changes."""
+
+    number: int
+    text: str
+
+
+@dataclass(frozen=True)
 class Context:
     """Everything the model gets besides the current frame."""
 
@@ -40,8 +48,7 @@ class Context:
     knowledge: str
     memory: tuple[MemoryEntry, ...]
     game_state: GameState | None = None  # with the current frame
-    progress: Progress | None = None  # the model's latest; None before its first reply
-    notes: tuple[Note, ...] = ()  # the model's notes since the task began
+    scratchpad: tuple[ScratchpadLine, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,8 +57,8 @@ class Turn:
     context: Context
     action: Action
     reasoning: str
-    progress: Progress
-    notes: tuple[Note, ...] = ()  # those this turn added
+    scratchpad: ScratchpadEdit
+    findings: tuple[Finding, ...]
 
 
 @dataclass(frozen=True)
@@ -65,31 +72,33 @@ class ModelError:
 
 class Agent:
     """Agent that interacts with the game to complete the given task.
-    Chooses actions with a model, keeps recent turns in memory and the task's progress and
-    notes."""
+    Chooses actions with a model, keeps recent turns in memory and the task's scratchpad and
+    findings."""
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
         self._model = model
         self._knowledge = knowledge.strip()
         self._task = ""
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
-        self._progress: Progress | None = None
-        self._notes: list[Note] = []
+        self._scratchpad: list[ScratchpadLine] = []
+        self._next_line = 1
+        self._findings: list[Finding] = []
 
     @property
     def memory(self) -> tuple[MemoryEntry, ...]:
         return tuple(self._memory)
 
     @property
-    def progress(self) -> Progress | None:
-        return self._progress
+    def scratchpad(self) -> tuple[ScratchpadLine, ...]:
+        return tuple(self._scratchpad)
 
     @property
-    def notes(self) -> tuple[Note, ...]:
-        return tuple(self._notes)
+    def findings(self) -> tuple[Finding, ...]:
+        """The task's findings so far; they are logged, never shown to the model."""
+        return tuple(self._findings)
 
     def set_task(self, task: str) -> None:
-        """Switch tasks, forgetting the old task's memory, progress and notes."""
+        """Switch tasks, forgetting the old task's memory, scratchpad and findings."""
         task = task.strip()
         if self._task and task != self._task:
             self.clear_memory()
@@ -97,30 +106,41 @@ class Agent:
 
     def clear_memory(self) -> None:
         self._memory.clear()
-        self._progress = None
-        self._notes.clear()
+        self._scratchpad.clear()
+        self._next_line = 1
+        self._findings.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
-        """Take one turn: observe, ask the model and apply its action."""
+        """Take one turn: observe, ask the model and apply its action and scratchpad edit."""
         if not self._task:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
         context = Context(self._task, self._knowledge, self.memory, observation.game_state,
-                          self._progress, self.notes)
+                          self.scratchpad)
         try:
             reply = self._model.call(context, observation.frame)
+            unknown = set(reply.scratchpad.remove) - {line.number for line in self._scratchpad}
+            if unknown:
+                raise ValueError(f"removed scratchpad lines that do not exist: {sorted(unknown)}")
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
-        turn = Turn(observation, context, reply.action, reply.reasoning, reply.progress,
-                    reply.notes)
+        turn = Turn(observation, context, reply.action, reply.reasoning, reply.scratchpad,
+                    reply.findings)
         match reply.action:
             case Stop():
                 transition = None
             case action:
                 transition = self._apply(session, action, reply.reasoning)
-        self._progress = reply.progress
-        self._notes.extend(reply.notes)
+        self._edit(reply.scratchpad)
+        self._findings.extend(reply.findings)
         return turn, transition
+
+    def _edit(self, edit: ScratchpadEdit) -> None:
+        """Remove lines first, so an edit is a removal plus an added line."""
+        self._scratchpad = [line for line in self._scratchpad if line.number not in edit.remove]
+        for text in edit.add:
+            self._scratchpad.append(ScratchpadLine(self._next_line, text))
+            self._next_line += 1
 
     def manual(self, session: Session, action: GameAction) -> Transition:
         """Apply an operator's action."""
