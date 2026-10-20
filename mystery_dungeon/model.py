@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from mystery_dungeon.agent import Context
 
 TIMEOUT_SECONDS = 120
+# Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
+IMAGE_SCALE = 2
 # Reasoning comes first so the model writes it before it commits to an action.
 ANSWER_SCHEMA = {
     "type": "object",
@@ -148,4 +150,15 @@ def _content(context: Context, frame: Frame) -> list[dict]:
 
 
 def _image(frame: Frame) -> dict:
-    return {"type": "image_url", "image_url": {"url": frame.data_url}}
+    return {"type": "image_url", "image_url": {"url": scaled(frame, IMAGE_SCALE).data_url}}
+
+
+def scaled(frame: Frame, factor: int) -> Frame:
+    """Enlarge a frame by a whole factor with nearest-neighbour sampling."""
+    row_bytes = frame.width * 4
+    rows = []
+    for top in range(0, len(frame.rgba), row_bytes):
+        row = frame.rgba[top:top + row_bytes]
+        wide = b"".join(row[left:left + 4] * factor for left in range(0, row_bytes, 4))
+        rows.append(wide * factor)
+    return Frame(frame.width * factor, frame.height * factor, b"".join(rows))

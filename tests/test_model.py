@@ -6,10 +6,18 @@ import json
 import pytest
 from fakes import FRAME
 
+from emulator import Frame
 from mystery_dungeon import model
 from mystery_dungeon.actions import Done, Press
 from mystery_dungeon.agent import Context, MemoryEntry
-from mystery_dungeon.model import ChatModel, ChatSettings, Reply, internal_reasoning, read_settings
+from mystery_dungeon.model import (
+    ChatModel,
+    ChatSettings,
+    Reply,
+    internal_reasoning,
+    read_settings,
+    scaled,
+)
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.session import Observation
 
@@ -121,3 +129,10 @@ def test_invalid_answers_raise_and_keep_the_response(monkeypatch, response, mess
 def test_internal_reasoning_reads_either_provider_field(message, expected):
     assert internal_reasoning({"choices": [{"message": message}]}) == expected
     assert internal_reasoning(None) is None
+
+
+def test_scaled_repeats_each_pixel_across_and_down():
+    red, blue = bytes([255, 0, 0, 255]), bytes([0, 0, 255, 255])
+    big = scaled(Frame(2, 1, red + blue), 2)
+    assert (big.width, big.height) == (4, 2)
+    assert big.rgba == (red * 2 + blue * 2) * 2
