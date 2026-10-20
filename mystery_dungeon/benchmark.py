@@ -175,7 +175,7 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         if session.action_count >= case.limit:
             reason = "limit"
             break
-        turn, transition = agent.take_turn(session)
+        turn, transition = agent.act(session)
         log.record_turn(turn, transition)
         if turn.status == "model_error":
             reason, error = "model_error", turn.error

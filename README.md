@@ -12,7 +12,7 @@ Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro c
 uv run --env-file .env -m mystery_dungeon.live
 ```
 
-Open <http://127.0.0.1:8765> and enter a task. Intervening in the browser cancels the current agent turn. Add `--knowledge mystery_dungeon/knowledge/controls.md` to provide the game controls.
+Open <http://127.0.0.1:8765> and enter a task. Input from the browser runs after the current agent turn. Add `--knowledge mystery_dungeon/knowledge/controls.md` to provide the game controls.
 
 ## How it works
 

@@ -46,7 +46,7 @@ experiments and deletion over backwards compatibility.
 - Model closed sets as type unions dispatched with `match`, so adding a variant means one new dataclass plus one case.
 - Implement the full protocol in every implementation, including test doubles.
 - Fail loudly: raise on invalid input or model output and convert exceptions to an error result in one place. Never substitute a silent default.
-- Keep side effects at the edges: deciding what to do must not touch the game, files or network; a separate step applies it.
+- Keep side effects at the edges: the model call sees only the context and frame and never touches the game; the agent applies the action after it returns, and runners own files and logs.
 
 ## Names
 One term per concept in code, prompts, log fields, flags and docs:

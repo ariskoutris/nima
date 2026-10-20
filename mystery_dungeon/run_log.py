@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Choice, Model
     from mystery_dungeon.session import Transition
 
-# Shared by run and benchmark configs. 8: agent rows carry the model's reasoning, one call
-# per turn claims completion, rows drop task_changed and the per-row model name.
-FORMAT_VERSION = 8
+# Shared by run and benchmark configs. 9: no discarded rows; operator input waits for the
+# turn in progress instead of cancelling it.
+FORMAT_VERSION = 9
 RECENT_ROWS = 40
 
 
@@ -73,17 +73,13 @@ class RunLog:
         return list(reversed(self._recent))
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
-        """Record a turn the agent committed; transition is None when nothing was applied."""
+        """Record an agent turn; transition is None when nothing was applied."""
         fields = self._turn_fields(turn)
         if transition is None:
             self._write(turn.status, fields)
             return
         row = self._write(turn.status, {**fields, **_transition_fields(transition)})
         self._recent.append(_summary(row))
-
-    def record_discarded(self, turn: Turn, reason: str) -> None:
-        """Record a turn that was proposed but never applied."""
-        self._write("discarded", {"reason": reason, **self._turn_fields(turn)})
 
     def record_manual(self, action: Action, transition: Transition) -> None:
         self._recent.append(_summary(self._write("action", {

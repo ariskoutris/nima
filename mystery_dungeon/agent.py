@@ -43,7 +43,7 @@ class Context:
 
 @dataclass(frozen=True)
 class Turn:
-    """What the agent proposed for one observation; nothing has been applied yet.
+    """What the agent saw and chose in one turn.
 
     A turn without an action or error reports the task complete.
     """
@@ -64,8 +64,8 @@ class Turn:
 class Agent:
     """Choose actions for one task until the model reports it complete.
 
-    The agent touches the game only through commit() and manual(); everything
-    else works from observations.
+    The agent touches the game only through act() and manual(); the model call in act()
+    works from the observation alone, and its action is applied after it returns.
     """
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
@@ -92,37 +92,31 @@ class Agent:
     def clear_memory(self) -> None:
         self._memory.clear()
 
-    def propose(self, observation: Observation) -> Turn:
-        """Choose an action or report completion, without touching the game.
+    def act(self, session: GameplaySession) -> tuple[Turn, Transition | None]:
+        """Observe, ask the model, and apply its action unless it reports completion.
 
-        Model failures are returned as the turn's error instead of being raised.
+        Model failures are returned as the turn's error instead of being raised. The
+        transition is None when nothing was applied.
 
         Raises:
             ValueError: when the agent has no task.
         """
         if not self._task:
             raise ValueError("give the agent a task before it acts")
+        observation = session.observe()
         context = Context(self._task, self._knowledge, self.memory)
         try:
             choice = self._model.choose(context, observation.frame)
         except Exception as exc:
-            return Turn(observation, context, error=f"{type(exc).__name__}: {exc}")
-        return Turn(observation, context, choice.action, choice.reasoning)
-
-    def commit(self, session: GameplaySession, turn: Turn) -> Transition | None:
-        """Apply a proposed action and remember it; turns without an action change nothing."""
-        if turn.action is None:
-            return None
-        return self._apply(session, turn.action, turn.reasoning)
+            return Turn(observation, context, error=f"{type(exc).__name__}: {exc}"), None
+        turn = Turn(observation, context, choice.action, choice.reasoning)
+        if choice.action is None:
+            return turn, None
+        return turn, self._apply(session, choice.action, choice.reasoning)
 
     def manual(self, session: GameplaySession, action: Action) -> Transition:
         """Apply an operator's action; it enters memory like the agent's own."""
         return self._apply(session, action, None)
-
-    def take_turn(self, session: GameplaySession) -> tuple[Turn, Transition | None]:
-        """Observe, propose and commit in one call for single-threaded runners."""
-        turn = self.propose(session.observe())
-        return turn, self.commit(session, turn)
 
     def _apply(self, session: GameplaySession, action: Action,
                reasoning: str | None) -> Transition:

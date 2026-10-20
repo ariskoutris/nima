@@ -58,8 +58,9 @@ Work = Request | TakeTurn
 class LiveRun:
     """Run the emulator on a worker thread and apply operator input between agent turns.
 
-    Every operator input except Start and One turn interrupts a turn in progress:
-    its result is logged as discarded and nothing is applied. Requests run in order.
+    Input that arrives during a turn waits for it: the turn in progress is applied, then
+    requests run in order. Pause, manual actions, reset and load stop the agent after the
+    turn in progress.
     """
 
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
@@ -81,7 +82,6 @@ class LiveRun:
         self._mode = "paused"  # paused | running | one_turn
         self._requests: deque[Request] = deque()
         self._current: Work | None = None
-        self._interrupted: str | None = None
         self._error = self._notice = ""
         self._loaded = self._stopping = False
         self._reset_count = 0
@@ -141,19 +141,17 @@ class LiveRun:
             keeps_running = command is None and self._mode != "paused"
             if not task and (command in ("start", "turn") or keeps_running):
                 raise ValueError("enter a task before running the agent")
-            if task != self._task:
-                self._task = task
-                self._interrupt("task_changed")
+            self._task = task
             match command:
                 case "start" | "turn":
                     self._error = self._notice = ""
                     self._mode = "running" if command == "start" else "one_turn"
                 case "pause":
-                    self._pause("paused")
+                    self._mode = "paused"
                 case "manual":
-                    self._queue("manual_control", Manual(ACTIONS[action], task))
+                    self._queue(Manual(ACTIONS[action], task))
                 case "reset":
-                    self._queue("reset_requested", Load(None))
+                    self._queue(Load(None))
             self._condition.notify_all()
 
     def load_state_upload(self, data: bytes, format: str) -> None:
@@ -169,13 +167,12 @@ class LiveRun:
         checkpoint = read_ss0(data) if format == "ss0" else Checkpoint(data)
         with self._condition:
             self._require_loaded()
-            self._queue("reset_requested", Load(checkpoint))
+            self._queue(Load(checkpoint))
             self._condition.notify_all()
 
     def stop(self) -> None:
         with self._condition:
             self._stopping = True
-            self._interrupt("stopping")
             self._condition.notify_all()
         with self._screen_condition:
             self._screen_condition.notify_all()
@@ -221,24 +218,21 @@ class LiveRun:
             if self._requests:
                 self._current = self._requests.popleft()
             else:
-                self._interrupted = None
                 self._current = TakeTurn(self._task)
             return self._current
 
     def _turn(self, session: GameplaySession, task: str) -> None:
         self._agent.set_task(task)
-        turn = self._agent.propose(session.observe())
+        turn, transition = self._agent.act(session)
         with self._condition:
-            if self._interrupted is not None:
-                self._log.record_discarded(turn, self._interrupted)
-            else:
-                self._log.record_turn(turn, self._agent.commit(session, turn))
-                self._settle(turn)
+            self._log.record_turn(turn, transition)
+            self._settle(turn)
         self._after_step(session)
 
     def _settle(self, turn: Turn) -> None:
         match turn.status:
-            case "completion":
+            # A completion for a task the operator replaced during the turn doesn't end the new one.
+            case "completion" if turn.context.task == self._task:
                 self._mode = "paused"
                 self._notice = f"Completed: {turn.context.task}"
             case "model_error":
@@ -296,18 +290,10 @@ class LiveRun:
         if not self._loaded:
             raise ValueError(self._error or "emulator is not ready")
 
-    def _pause(self, reason: str) -> None:
+    def _queue(self, request: Request) -> None:
         self._mode = "paused"
-        self._interrupt(reason)
-
-    def _queue(self, reason: str, request: Request) -> None:
-        self._pause(reason)
         self._error = self._notice = ""
         self._requests.append(request)
-
-    def _interrupt(self, reason: str) -> None:
-        if self._interrupted is None:
-            self._interrupted = reason
 
     def _status(self) -> str:
         if self._error:
@@ -316,7 +302,7 @@ class LiveRun:
             return "loading"
         match self._current:
             case TakeTurn():
-                return "cancelling" if self._interrupted is not None else "thinking"
+                return "thinking"
             case Load():
                 return "resetting"
         return "paused" if self._mode == "paused" else "running"

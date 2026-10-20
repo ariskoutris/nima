@@ -21,7 +21,7 @@
     .status { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #2b3d3e; border-radius: 999px; color: #b8c9c5; background: #152125; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a9b98; }
     .status.running .dot, .status.thinking .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
-    .status.resetting .dot, .status.cancelling .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
+    .status.resetting .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
     .status.error .dot { background: #ff938a; }
     .layout { display: grid; grid-template-columns: minmax(0, 1.38fr) minmax(310px, .9fr); gap: 18px; align-items: start; }
     .card { min-width: 0; border: 1px solid #2b3a3e; border-radius: 17px; background: #142026; overflow: hidden; box-shadow: 0 14px 40px #040a0d30; }
@@ -96,7 +96,7 @@
         <div class="screen-foot"><span>Latest game view</span><span id="screen-state">Connecting…</span></div>
       </section>
       <section class="card controls">
-        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Changes discard the action in progress</span></div>
+        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Input runs after the turn in progress</span></div>
         <form id="control-form">
           <label for="task">Task</label>
           <textarea id="task" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
@@ -188,7 +188,7 @@
         if (!response.ok) throw new Error(state.error || 'Control failed');
         taskDirty = false;
         render(state);
-        const sent = {manual: `${action} sent`, pause: state.status === 'cancelling' ? 'Pausing…' : 'Paused',
+        const sent = {manual: `${action} sent`, pause: state.status === 'thinking' ? 'Pausing after this turn…' : 'Paused',
                       turn: 'One turn queued', start: 'Agent running', reset: 'Resetting game…'};
         say(sent[command] ?? 'Task saved', GOOD);
       } catch (error) {
@@ -204,7 +204,6 @@
       const activity = {
         loading: ['Starting emulator', 'Preparing the game view'],
         thinking: ['Waiting for the model', `${state.model} is choosing an action`],
-        cancelling: ['Discarding the turn in progress', 'Waiting for the model to answer'],
         resetting: ['Restoring game', 'Loading the selected state']
       }[state.status];
       $('screen-activity').hidden = !activity;
@@ -212,7 +211,7 @@
         if ($('activity-title').textContent !== activity[0]) $('activity-title').textContent = activity[0];
         if ($('activity-detail').textContent !== activity[1]) $('activity-detail').textContent = activity[1];
       }
-      $('run-button').textContent = state.running ? 'Pause' : state.status === 'cancelling' ? 'Pausing…' : 'Resume';
+      $('run-button').textContent = state.running ? 'Pause' : state.status === 'thinking' ? 'Pausing…' : 'Resume';
       $('screen-state').textContent = state.status === 'thinking' ? 'Game paused while the model responds' :
         state.status === 'paused' ? 'Paused' : state.status === 'error' ? 'Needs attention' :
         state.status === 'running' ? 'Agent running' : activity?.[0] || '';

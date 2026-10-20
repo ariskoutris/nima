@@ -1,4 +1,4 @@
-"""Live operator input interrupts agent turns and runs in order."""
+"""Live operator input waits for the agent turn in progress and runs in order."""
 
 import json
 import threading
@@ -140,50 +140,46 @@ def test_upload_state_and_ss0(start_run, monkeypatch):
         run.load_state_upload(b"uploaded", "unknown")
 
 
-@pytest.mark.parametrize("interrupt,reason,took_effect", [
-    (lambda run: run.control({"command": "pause"}), "paused", lambda state: True),
-    (lambda run: run.control({"command": "manual", "action": "B"}), "manual_control",
-     lambda state: [row["action"]["button"] for row in state["history"]] == ["B"]),
-    (lambda run: run.control({"command": "reset"}), "reset_requested",
+@pytest.mark.parametrize("operate,took_effect", [
+    (lambda run: run.control({"command": "pause"}), lambda state: True),
+    (lambda run: run.control({"command": "manual", "action": "B"}),
+     lambda state: [row["action"]["button"] for row in state["history"]] == ["B", "A"]),
+    (lambda run: run.control({"command": "reset"}), lambda state: state["reset_count"] == 1),
+    (lambda run: run.load_state_upload(b"uploaded", "state"),
      lambda state: state["reset_count"] == 1),
-    (lambda run: run.load_state_upload(b"uploaded", "state"), "reset_requested",
-     lambda state: state["reset_count"] == 1),
-    (lambda run: run.control({"task": "Something else"}), "task_changed",
+    (lambda run: run.control({"task": "Something else"}),
      lambda state: state["task"] == "Something else"),
 ])
-def test_operator_input_discards_the_turn_in_progress(start_run, interrupt, reason, took_effect):
+def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_effect):
     gate = threading.Event()
     model = ScriptedModel(gate=gate)
     run, game = start_run(model)
     run.control({"task": "Find exit", "command": "start"})
     assert model.entered.wait(2)
-    assert run.snapshot()["running"] is True
-    interrupt(run)
-    assert run.snapshot()["status"] == "cancelling"
-    if reason == "task_changed":
-        run.control({"command": "pause"})
-    gate.set()
-    wait_until(run, lambda state: any(row["event"] == "discarded" for row in events(run.output)))
-    discarded = next(row for row in events(run.output) if row["event"] == "discarded")
-    assert discarded["reason"] == reason and discarded["action"]["button"] == "A"
-    wait_until(run, lambda state: idle(state) and took_effect(state))
+    operate(run)
+    assert run.snapshot()["status"] == "thinking"
     assert AGENT_PRESS not in game.steps
+    gate.set()
+    run.control({"command": "pause"})
+    wait_until(run, lambda state: idle(state) and took_effect(state))
+    rows = events(run.output)
+    assert rows[0]["event"] == "action" and rows[0]["source"] == "agent"
+    assert AGENT_PRESS in game.steps
 
 
-def test_pause_then_start_in_one_call_still_discards(start_run):
+def test_done_for_a_replaced_task_does_not_end_the_new_one(start_run):
     gate = threading.Event()
-    model = ScriptedModel(gate=gate)
+    model = ScriptedModel(complete=votes(True), gate=gate)
     run, game = start_run(model)
     run.control({"task": "Find exit", "command": "start"})
     assert model.entered.wait(2)
-    run.control({"command": "pause"})
-    run.control({"command": "start"})
+    run.control({"task": "Talk to Granbull"})
     gate.set()
-    state = wait_until(run, lambda state: len(state["history"]) >= 1)
+    wait_until(run, lambda state: AGENT_PRESS in game.steps)
     run.control({"command": "pause"})
-    names = [row["event"] for row in events(run.output)]
-    assert names.index("discarded") < names.index("action")
-    assert state["history"][-1]["source"] == "agent"
+    state = wait_until(run, idle)
+    assert state["notice"] == ""
+    assert model.calls[1][1].task == "Talk to Granbull"
 
 
 def test_one_turn_runs_exactly_one_turn(start_run):
@@ -221,6 +217,8 @@ def test_control_validation(start_run):
         run.control({"command": "start"})
     with pytest.raises(ValueError, match="invalid manual action"):
         run.control({"command": "manual", "action": "START"})
+    with pytest.raises(ValueError, match="invalid manual action"):
+        run.control({"command": "manual", "action": "DONE"})
     with pytest.raises(ValueError, match="unknown control field"):
         run.control({"goal": "Find exit"})
 

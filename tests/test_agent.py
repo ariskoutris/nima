@@ -19,8 +19,8 @@ def test_turns_act_on_the_task_knowledge_and_memory(tmp_path):
     model = ScriptedModel()
     agent = agent_with(model, task="  Find exit ", knowledge="  Use the map.  ")
     session = start(tmp_path)
-    agent.take_turn(session)
-    turn, _ = agent.take_turn(session)
+    agent.act(session)
+    turn, _ = agent.act(session)
     assert turn.context == Context("Find exit", "Use the map.", turn.context.memory)
     assert [entry.action for entry in turn.context.memory] == [Press("A")]
     assert model.calls[-1] == ("choose", turn.context, turn.observation.frame)
@@ -29,7 +29,7 @@ def test_turns_act_on_the_task_knowledge_and_memory(tmp_path):
 def test_a_new_task_clears_memory(tmp_path):
     agent = agent_with(ScriptedModel())
     session = start(tmp_path)
-    agent.take_turn(session)
+    agent.act(session)
     agent.set_task("Find exit")
     assert len(agent.memory) == 1  # the same task keeps its turns
     agent.set_task("Talk to Granbull")
@@ -49,7 +49,7 @@ def test_memory_keeps_the_latest_turns_with_their_reasoning(tmp_path):
     agent = agent_with(model)
     session = start(tmp_path)
     for _ in range(MEMORY_TURNS + 2):
-        turn, _ = agent.take_turn(session)
+        turn, _ = agent.act(session)
     assert turn.reasoning == "Head for the door."
     assert len(agent.memory) == MEMORY_TURNS
     assert agent.memory[-1].screenshot == f"frames/{MEMORY_TURNS + 1:06d}.png"
@@ -60,7 +60,7 @@ def test_memory_keeps_the_latest_turns_with_their_reasoning(tmp_path):
 def test_manual_actions_enter_memory_without_reasoning(tmp_path):
     agent = agent_with(ScriptedModel(reasoning="Press A."))
     session = start(tmp_path)
-    agent.take_turn(session)
+    agent.act(session)
     agent.manual(session, Press("B"))
     assert [(entry.action, entry.reasoning) for entry in agent.memory] == [
         (Press("A"), "Press A."), (Press("B"), None)]
@@ -73,7 +73,7 @@ def test_manual_actions_enter_memory_until_cleared(tmp_path):
     agent.manual(session, Press("RIGHT"))
     assert [entry.action for entry in agent.memory] == [Press("RIGHT")]
     assert agent.memory[0].screenshot == "frames/000000.png"
-    agent.take_turn(session)
+    agent.act(session)
     assert model.calls[-1][1].memory[0].action == Press("RIGHT")
     agent.clear_memory()
     assert agent.memory == ()
@@ -82,7 +82,7 @@ def test_manual_actions_enter_memory_until_cleared(tmp_path):
 def test_completion_applies_nothing(tmp_path):
     game = Game()
     model = ScriptedModel(complete=votes(True))
-    turn, transition = agent_with(model).take_turn(start(tmp_path, game))
+    turn, transition = agent_with(model).act(start(tmp_path, game))
     assert turn.status == "completion"
     assert transition is None
     assert game.steps == []
@@ -91,7 +91,7 @@ def test_completion_applies_nothing(tmp_path):
 
 def test_incomplete_task_applies_the_chosen_action(tmp_path):
     game = Game()
-    turn, transition = agent_with(ScriptedModel(["WAIT"])).take_turn(start(tmp_path, game))
+    turn, transition = agent_with(ScriptedModel(["WAIT"])).act(start(tmp_path, game))
     assert turn.status == "action"
     assert turn.action == Wait()
     assert transition.action_number == 1
@@ -101,30 +101,22 @@ def test_incomplete_task_applies_the_chosen_action(tmp_path):
 def test_model_failures_become_model_errors(tmp_path):
     model = ScriptedModel(error=RuntimeError("model down"))
     game = Game()
-    turn, transition = agent_with(model).take_turn(start(tmp_path, game))
+    turn, transition = agent_with(model).act(start(tmp_path, game))
     assert turn.status == "model_error"
     assert turn.error == "RuntimeError: model down"
     assert turn.context.task == "Find exit"
     assert transition is None and game.steps == []
 
 
-def test_propose_never_touches_the_game(tmp_path):
-    game = Game()
-    session = start(tmp_path, game)
-    turn = agent_with(ScriptedModel()).propose(session.observe())
-    assert turn.action == Press("A")
-    assert game.steps == []
-
-
 def test_each_turn_makes_one_model_call(tmp_path):
     model = ScriptedModel()
-    agent_with(model).take_turn(start(tmp_path))
+    agent_with(model).act(start(tmp_path))
     assert [call[0] for call in model.calls] == ["choose"]
 
 
 def test_reasoning_of_a_completion_is_kept_on_the_turn(tmp_path):
     model = ScriptedModel(complete=votes(True), reasoning="The dialogue has closed.")
-    turn, _ = agent_with(model).take_turn(start(tmp_path))
+    turn, _ = agent_with(model).act(start(tmp_path))
     assert turn.status == "completion" and turn.action is None
     assert turn.reasoning == "The dialogue has closed."
 
@@ -133,7 +125,7 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
     model = ScriptedModel()
     agent = Agent(model)
     with pytest.raises(ValueError, match="task"):
-        agent.take_turn(start(tmp_path))
+        agent.act(start(tmp_path))
     assert model.calls == []
 
 
@@ -143,7 +135,7 @@ def test_turn_holds_only_what_the_agent_produced():
 
 
 def test_agent_writes_no_files(tmp_path):
-    agent_with(ScriptedModel()).take_turn(start(tmp_path))
+    agent_with(ScriptedModel()).act(start(tmp_path))
     assert {path.parent.name for path in tmp_path.rglob("*") if path.is_file()} == {"frames"}
 
 
@@ -157,7 +149,7 @@ def test_agent_only_needs_observe_and_apply(tmp_path):
         def apply(self, action):
             return session.apply(action)
 
-    assert agent_with(ScriptedModel()).take_turn(SessionPort())[0].status == "action"
+    assert agent_with(ScriptedModel()).act(SessionPort())[0].status == "action"
 
 
 def test_repeated_actions_warn_without_stopping(tmp_path):
@@ -166,6 +158,6 @@ def test_repeated_actions_warn_without_stopping(tmp_path):
     agent = agent_with(model)
     session = start(tmp_path, game)
     for _ in range(12):
-        assert agent.take_turn(session)[0].status == "action"
+        assert agent.act(session)[0].status == "action"
     assert game.steps == [(8, ("A",)), (4, ())] * 12
     assert session.warning == "Possible stall: little screen change after 12 A presses"
