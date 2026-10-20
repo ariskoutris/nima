@@ -19,7 +19,7 @@ from mystery_dungeon.model import (
     scaled,
     token_usage,
 )
-from mystery_dungeon.prompts import INSTRUCTIONS, REPORT_INSTRUCTIONS
+from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.session import Character, GameState, Observation
 
 MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to the door."),
@@ -78,48 +78,22 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     schema = payload["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["reasoning", "note", "action"]
     assert schema["required"] == ["reasoning", "note", "action"]
-    assert {"WAIT", "STOP"} <= set(schema["properties"]["action"]["enum"])
+    assert {"WAIT", "STOP_STUCK"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
 
-def test_stop_takes_its_reason_from_the_note(monkeypatch):
-    answering(monkeypatch, reply({"reasoning": "The dialogue closed.",
-                                  "note": "Talked to Granbull.", "action": "STOP"}))
+@pytest.mark.parametrize("action,outcome", [
+    ("STOP_COMPLETE", "complete"), ("STOP_STUCK", "stuck"), ("STOP_INVALID", "invalid")])
+def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
+    answering(monkeypatch, reply({"reasoning": "The dialogue closed.", "note": "",
+                                  "action": action}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
-    assert answer == Reply(Stop("Talked to Granbull."), "The dialogue closed.",
-                           "Talked to Granbull.")
-
-
-def test_stop_without_a_note_is_rejected(monkeypatch):
-    answering(monkeypatch, reply({"reasoning": "Done.", "note": " ", "action": "STOP"}))
-    with pytest.raises(ValueError, match="STOP without a reason"):
-        ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
+    assert answer == Reply(Stop(outcome), "The dialogue closed.")
 
 
 def test_an_empty_note_is_none(monkeypatch):
     answering(monkeypatch, reply({"reasoning": "Wait.", "note": "", "action": "WAIT"}))
     assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).note is None
-
-
-def test_report_sends_the_report_instructions_with_the_same_context(monkeypatch):
-    sent = answering(monkeypatch, reply({"reason": " Stuck at the wall. "}))
-    context = Context("Find the exit", "", MEMORY, notes=("Exit is south.",))
-    assert ChatModel(SETTINGS).report(context, FRAME) == "Stuck at the wall."
-    payload = json.loads(sent[0].data)
-    system, user = payload["messages"]
-    assert system["content"] == REPORT_INSTRUCTIONS
-    assert "- Exit is south." in user["content"][0]["text"]
-    assert payload["response_format"]["json_schema"]["schema"]["required"] == ["reason"]
-
-
-@pytest.mark.parametrize("answer,message", [
-    ({"reason": " "}, "no reason"),
-    ({"reasoning": "x", "note": "", "action": "A"}, "invalid report"),
-])
-def test_invalid_reports_raise(monkeypatch, answer, message):
-    answering(monkeypatch, reply(answer))
-    with pytest.raises(ValueError, match=message):
-        ChatModel(SETTINGS).report(Context("Talk", "", ()), FRAME)
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):

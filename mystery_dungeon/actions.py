@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Literal, get_args
+
+Outcome = Literal["complete", "stuck", "invalid"]
 
 
 @dataclass(frozen=True)
@@ -19,9 +22,9 @@ class Wait:
 
 @dataclass(frozen=True)
 class Stop:
-    """End the attempt and say why; it goes to the runner, never to the game."""
+    """End the attempt, claiming how it ended; it goes to the runner, never to the game."""
 
-    reason: str
+    outcome: Outcome
 
 
 GameAction = Press | Wait  # what the game performs
@@ -31,17 +34,16 @@ GAME_ACTIONS: dict[str, GameAction] = {
     **{button: Press(button) for button in ("UP", "DOWN", "LEFT", "RIGHT", "A", "B", "SELECT")},
     "WAIT": Wait(),
 }
-ACTION_NAMES = (*GAME_ACTIONS, "STOP")  # model-facing
-_NAMES = {action: name for name, action in GAME_ACTIONS.items()}
+STOPS: dict[str, Stop] = {f"STOP_{outcome.upper()}": Stop(outcome)
+                          for outcome in get_args(Outcome)}
+ACTIONS: dict[str, Action] = {**GAME_ACTIONS, **STOPS}  # by model-facing name
+ACTION_NAMES = tuple(ACTIONS)
+_NAMES = {action: name for name, action in ACTIONS.items()}
 
 
 def name(action: Action) -> str:
     """Return the model-facing name of an action."""
-    match action:
-        case Stop():
-            return "STOP"
-        case _:
-            return _NAMES[action]
+    return _NAMES[action]
 
 
 def to_json(action: Action) -> dict[str, str]:

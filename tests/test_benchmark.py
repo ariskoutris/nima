@@ -99,13 +99,14 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
 
     result = run_case(game, case, ScriptedModel(["A"]), seeds, output / case.id)
     assert result["actions"] == 14
-    assert result["stop_reason"] == "limit"
+    assert result["ended"] == "limit" and result["limit"] == 14
+    assert result["outcome"] is None
     assert not result["reached"]
     assert not result["stopped_reached"]
-    assert result["stop_text"] == "Out of budget. Scripted."
-    assert {"event": "budget_report", "reason": "Out of budget. Scripted."}.items() <= next(
-        row for row in rows(output / case.id / "turns.jsonl")
-        if row["event"] == "budget_report").items()
+    log = rows(output / case.id / "turns.jsonl")
+    assert [row["event"] for row in log].count("action") == 14  # no call past the limit
+    assert {"ended": "limit", "outcome": None, "actions": 14, "limit": 14}.items() <= (
+        log[-1].items())
     assert Grader(case, GameRam(game)).talking(235)
 
 
@@ -199,10 +200,12 @@ def test_dialogue_reach_and_stop_are_separate(town):
     game, seeds, output = town
     case = next(case for case in CASES if case.id == "face_npc_talk")
 
-    early = run_case(game, case, ScriptedModel(["A"], votes(True), reasoning="Too soon."),
+    early = run_case(game, case, ScriptedModel(["A"], votes(True), outcome="stuck"),
                      seeds, output / "premature_stop")
     assert early["stopped_unreached"] and not early["reached"]
-    assert early["stop_text"] == "Too soon."
+    assert early["ended"] == "stop" and early["outcome"] == "stuck"
+    assert {"ended": "stop", "outcome": "stuck"}.items() <= (
+        rows(output / "premature_stop/turns.jsonl")[-1].items())
     finished = run_case(game, case, ScriptedModel(["A"], votes(False, True)), seeds,
                         output / "correct_stop")
     assert finished["stopped_reached"] and finished["actions"] == 1
@@ -221,7 +224,7 @@ def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monk
         patcher.setattr(benchmark.time, "monotonic", clock)
         result = run_case(game, case, ScriptedModel(["DOWN"], slow_check), seeds,
                           output / "late_turn")
-    assert result["stop_reason"] == "limit"
+    assert result["ended"] == "limit"
     assert result["reached"] and result["missed"]
     assert result["actions"] == result["turns"] == 1
     assert result["seconds"] == 181
@@ -243,7 +246,7 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "CASES", cases)
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
-    run = Mock(return_value={"stop_reason": "limit", "actions": 0})
+    run = Mock(return_value={"ended": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     benchmark.main()
@@ -267,7 +270,7 @@ def test_benchmark_loads_the_configured_knowledge_unless_given_another(tmp_path,
     monkeypatch.setattr(benchmark, "GbaEmulator", MagicMock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
     monkeypatch.setattr(benchmark, "ChatModel", Mock(return_value=object()))
-    run = Mock(return_value={"stop_reason": "limit", "actions": 0})
+    run = Mock(return_value={"ended": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
     for name, extra, path in (("default", [], benchmark.KNOWLEDGE),

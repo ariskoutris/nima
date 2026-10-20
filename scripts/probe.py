@@ -42,7 +42,7 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
             "stopped_reached": sum(row["stopped_reached"] for row in rows),
             "missed": sum(row["missed"] for row in rows),
             "stopped_unreached": sum(row["stopped_unreached"] for row in rows),
-            "model_errors": sum(row["stop_reason"] == "model_error" for row in rows),
+            "model_errors": sum(row["ended"] == "model_error" for row in rows),
             "median_turn_ms": round(statistics.median(latencies)) if latencies else None,
         })
     (output / "summary.json").write_text(json.dumps({
@@ -58,13 +58,14 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
                      f"{item['stopped_unreached']} | {item['model_errors']} | "
                      f"{item['median_turn_ms'] if item['median_turn_ms'] is not None else '—'} |")
     lines += ["", "## Case outcomes", "",
-              "| Variant | Case | Reached | Stopped reached | Stop reason | Actions | Seconds |",
-              "|---|---|:---:|:---:|---|---:|---:|"]
+              "| Variant | Case | Reached | Stopped reached | Ended | Outcome | Actions "
+              "| Seconds |",
+              "|---|---|:---:|:---:|---|---|---:|---:|"]
     for item in summaries:
         for row in item["cases"]:
             lines.append(f"| {item['variant']} | {row['case']} | {row['reached']} | "
-                         f"{row['stopped_reached']} | {row['stop_reason']} | {row['actions']} | "
-                         f"{row['seconds']} |")
+                         f"{row['stopped_reached']} | {row['ended']} | "
+                         f"{row['outcome'] or '—'} | {row['actions']} | {row['seconds']} |")
     (output / "report.md").write_text("\n".join(lines) + "\n")
     return summaries
 

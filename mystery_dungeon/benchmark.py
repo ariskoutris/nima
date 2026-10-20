@@ -13,7 +13,7 @@ from pathlib import Path
 from emulator import GbaEmulator
 from mystery_dungeon import CHECKPOINTS, CORE, KNOWLEDGE, ROM
 from mystery_dungeon.actions import Stop
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Report, Turn
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.ram_state import GameRam
@@ -171,9 +171,9 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         raise ValueError("benchmark grading needs a real emulator")
     grader = Grader(case, session.ram)
     started = time.monotonic()
-    reason = "limit"
+    ended = "limit"
     error = None
-    stop_text = None
+    outcome = None
     turns = 0
     reached_at = None
     while True:
@@ -188,13 +188,12 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
         match result:
             case ModelError(message=message):
                 log.record_model_error(result)
-                reason, error = "model_error", message
+                ended, error = "model_error", message
                 break
-            case Turn(action=Stop(reason=text)):
+            case Turn(action=Stop(outcome=claimed)):
                 log.record_turn(result, transition)
                 turns += 1
-                reason = "stopped_reached" if reached_at is not None else "stopped_unreached"
-                stop_text = text
+                ended, outcome = "stop", claimed
                 break
             case Turn():
                 log.record_turn(result, transition)
@@ -205,25 +204,14 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     (output / "states").mkdir(exist_ok=True)
     (output / "states/final.state").write_bytes(game.save_state())
     (output / "states/final.sav").write_bytes(game.save_ram())
-    if reason == "limit":
-        # After the final state is saved: observing for the report may run the game on until
-        # text finishes printing, past the state that was graded.
-        match agent.report(session):
-            case ModelError(message=message) as failed:
-                log.record_model_error(failed)
-                error = message
-            case Report(reason=text) as budget_report:
-                log.record_report(budget_report)
-                stop_text = text
-    public_reason = "stopped" if reason.startswith("stopped_") else reason
-    log.record_run_stop(public_reason, final_name)
+    log.record_run_stop(ended, outcome, session.action_count, case.limit, final_name)
     reached = reached_at is not None
     result = {"case": case.id, "task": case.task, "reached": reached,
-              "stopped_reached": reason == "stopped_reached",
-              "missed": reached and reason != "stopped_reached",
-              "stopped_unreached": reason == "stopped_unreached",
-              "reached_at": reached_at, "stop_reason": reason, "stop_text": stop_text,
-              "actions": session.action_count, "turns": turns,
+              "stopped_reached": ended == "stop" and reached,
+              "missed": reached and ended != "stop",
+              "stopped_unreached": ended == "stop" and not reached,
+              "reached_at": reached_at, "ended": ended, "outcome": outcome,
+              "actions": session.action_count, "limit": case.limit, "turns": turns,
               "seconds": round(time.monotonic() - started, 2), "error": error}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
@@ -232,14 +220,14 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
 def report(results: list[dict], output: Path) -> None:
     (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     lines = ["# Game task benchmark", "",
-             "| Case | Reached | Stopped reached | Missed | Stopped unreached | Actions "
-             "| Seconds |",
-             "|---|:---:|:---:|:---:|:---:|---:|---:|"]
+             "| Case | Reached | Stopped reached | Missed | Stopped unreached | Outcome "
+             "| Actions | Seconds |",
+             "|---|:---:|:---:|:---:|:---:|---|---:|---:|"]
     for row in results:
         lines.append(f"| {row['case']} | {row['reached']} | {row['stopped_reached']} | "
-                     f"{row['missed']} | {row['stopped_unreached']} | {row['actions']} | "
-                     f"{row['seconds']} |")
-    lines += ["", "The hidden grader measures reach independently from the model's STOP.",
+                     f"{row['missed']} | {row['stopped_unreached']} | "
+                     f"{row['outcome'] or '—'} | {row['actions']} | {row['seconds']} |")
+    lines += ["", "The hidden grader measures reach independently from the model's stop.",
               f"Each turn is one request with up to {MEMORY_TURNS} earlier screenshots, so "
               "latency is not comparable with format 7 reports, which sent two screenshots and "
               "made a separate completion request.", ""]
@@ -283,7 +271,7 @@ def main() -> None:
                               knowledge)
             results.append(result)
             report(results, args.output)
-            print(f"  {result['stop_reason']} after {result['actions']} actions", flush=True)
+            print(f"  {result['ended']} after {result['actions']} actions", flush=True)
 
 
 if __name__ == "__main__":

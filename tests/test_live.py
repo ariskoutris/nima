@@ -204,10 +204,12 @@ def test_one_turn_runs_exactly_one_turn(start_run):
     assert game.steps.count(AGENT_PRESS) == 1
 
 
-def test_stop_pauses_with_its_reason_without_pressing(start_run):
-    run, game = start_run(ScriptedModel(stop=votes(True), reasoning="Exit reached."))
+def test_stop_pauses_with_its_outcome_without_pressing(start_run):
+    run, game = start_run(ScriptedModel(stop=votes(True), outcome="stuck",
+                                        reasoning="A wall blocks the exit."))
     run.control({"task": "Find exit", "command": "start"})
-    state = wait_until(run, lambda state: state["notice"] == "Stopped: Exit reached.")
+    state = wait_until(run, lambda state: (
+        state["notice"] == "Stopped (stuck): A wall blocks the exit."))
     assert state["status"] == "paused" and state["history"] == []
     assert AGENT_PRESS not in game.steps
 
@@ -229,7 +231,7 @@ def test_control_validation(start_run):
     with pytest.raises(ValueError, match="invalid manual action"):
         run.control({"command": "manual", "action": "START"})
     with pytest.raises(ValueError, match="invalid manual action"):
-        run.control({"command": "manual", "action": "STOP"})
+        run.control({"command": "manual", "action": "STOP_COMPLETE"})
     with pytest.raises(ValueError, match="unknown control field"):
         run.control({"goal": "Find exit"})
 

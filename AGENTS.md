@@ -54,11 +54,12 @@ One term per concept in code, prompts, log fields, flags and docs:
 - task list: a tree of tasks rooted at "beat the game". A task's children are prerequisites that
   must be completed first (e.g. level up before a boss). The agent maintains it because what to
   attempt next isn't always clear. The design is pending; this core idea is fixed.
-- action: one `Press(button)`, `Wait()` or `Stop(reason)`, the closed set in `actions.py`.
-  `GameAction` (Press, Wait) is what the game performs; Stop ends the task and tells the runner
-  why: complete, stuck, or the task no longer makes sense.
+- action: one `Press(button)`, `Wait()` or `Stop(outcome)`, the closed set in `actions.py`.
+  `GameAction` (Press, Wait) is what the game performs; Stop ends the task with its outcome:
+  complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
+  reasoning.
 - note: a finding the model records in a reply while it is on screen. A task's notes stay in
-  the context until the task changes; a Stop's reason is its note.
+  the context until the task changes.
 - short-term memory: recent reasoning, observations and turns, plus information retrieved for the
   current task.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
@@ -75,6 +76,8 @@ One term per concept in code, prompts, log fields, flags and docs:
 - frame: an image in memory. screenshot: its saved PNG. tick: one emulated GBA frame; counts
   and durations of them are ticks, never frames.
 - case: one benchmark task. variant: one probe configuration. limit: a case's action budget.
+  The runner records how an attempt ended (stop, limit or model error); the agent is never told
+  its limit.
 - Don't use "goal" or "decision". "steering" is reserved for future mid-run operator guidance.
 
 ## Documentation

@@ -12,8 +12,8 @@ from urllib.request import Request, urlopen
 
 from emulator import Frame
 from mystery_dungeon import CONFIG
-from mystery_dungeon.actions import ACTION_NAMES, GAME_ACTIONS, Action, Stop, name
-from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS, REPORT_INSTRUCTIONS
+from mystery_dungeon.actions import ACTION_NAMES, ACTIONS, Action, name
+from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
 
 if TYPE_CHECKING:
     from mystery_dungeon.agent import Context
@@ -22,8 +22,7 @@ if TYPE_CHECKING:
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
-# Reasoning comes first so the model writes it before it commits to an action; the note comes
-# before the action because STOP takes its reason from it.
+# Reasoning comes first so the model writes it before it commits to an action.
 ANSWER_SCHEMA = {
     "type": "object",
     "properties": {"reasoning": {"type": "string"}, "note": {"type": "string"},
@@ -31,18 +30,11 @@ ANSWER_SCHEMA = {
     "required": ["reasoning", "note", "action"],
     "additionalProperties": False,
 }
-REPORT_SCHEMA = {
-    "type": "object",
-    "properties": {"reason": {"type": "string"}},
-    "required": ["reason"],
-    "additionalProperties": False,
-}
 
 
 @dataclass(frozen=True)
 class Reply:
-    """The model's action, its reasoning and its note (None when it wrote none; a Stop's
-    reason is its note)."""
+    """The model's action, its reasoning and its note (None when it wrote none)."""
 
     action: Action
     reasoning: str
@@ -56,18 +48,10 @@ class Model(Protocol):
     last_response: dict | None  # raw response to the latest call, for the run log
 
     def call(self, context: Context, frame: Frame) -> Reply:
-        """Return the next action, or Stop with the note as its reason.
+        """Return the next action, or Stop with how the task ended.
 
         Raises:
             Exception: when no valid action comes back.
-        """
-        ...
-
-    def report(self, context: Context, frame: Frame) -> str:
-        """Return where the task stands once its action budget has run out.
-
-        Raises:
-            Exception: when no report comes back.
         """
         ...
 
@@ -100,7 +84,7 @@ class ChatModel:
         self.last_response: dict | None = None
 
     def call(self, context: Context, frame: Frame) -> Reply:
-        answer = self._send(INSTRUCTIONS, ANSWER_SCHEMA, _content(context, frame))
+        answer = self._send(_content(context, frame))
         if not isinstance(answer, dict) or answer.keys() != ANSWER_SCHEMA["properties"].keys():
             raise ValueError(f"{self.name} returned an invalid answer: {answer!r}")
         if not isinstance(answer["action"], str) or answer["action"] not in ACTION_NAMES:
@@ -109,31 +93,19 @@ class ChatModel:
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
         if not isinstance(answer["note"], str):
             raise ValueError(f"{self.name} returned an invalid note: {answer['note']!r}")
-        reasoning, note = answer["reasoning"].strip(), answer["note"].strip() or None
-        if answer["action"] != "STOP":
-            return Reply(GAME_ACTIONS[answer["action"]], reasoning, note)
-        if note is None:
-            raise ValueError(f"{self.name} chose STOP without a reason in its note")
-        return Reply(Stop(note), reasoning, note)
+        return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip(),
+                     answer["note"].strip() or None)
 
-    def report(self, context: Context, frame: Frame) -> str:
-        answer = self._send(REPORT_INSTRUCTIONS, REPORT_SCHEMA, _content(context, frame))
-        if not isinstance(answer, dict) or answer.keys() != REPORT_SCHEMA["properties"].keys():
-            raise ValueError(f"{self.name} returned an invalid report: {answer!r}")
-        if not isinstance(answer["reason"], str) or not answer["reason"].strip():
-            raise ValueError(f"{self.name} returned no reason: {answer['reason']!r}")
-        return answer["reason"].strip()
-
-    def _send(self, instructions: str, schema: dict, content: list[dict]) -> object:
+    def _send(self, content: list[dict]) -> object:
         """Post one request and return the model's answer as decoded JSON."""
         self.last_response = None
         payload = {
             **self._settings.request,
             "model": self._settings.name,
-            "messages": [{"role": "system", "content": instructions},
+            "messages": [{"role": "system", "content": INSTRUCTIONS},
                          {"role": "user", "content": content}],
             "response_format": {"type": "json_schema", "json_schema": {
-                "name": "answer", "strict": True, "schema": schema}},
+                "name": "answer", "strict": True, "schema": ANSWER_SCHEMA}},
             "max_tokens": self._settings.max_tokens,
         }
         headers = {"Content-Type": "application/json"}

@@ -9,19 +9,22 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Literal, Mapping
 
 from mystery_dungeon.actions import GameAction, Stop, to_json
 from mystery_dungeon.model import internal_reasoning, token_usage
 
 if TYPE_CHECKING:
     from emulator import Frame
-    from mystery_dungeon.agent import Context, ModelError, Report, Turn
+    from mystery_dungeon.actions import Outcome
+    from mystery_dungeon.agent import Context, ModelError, Turn
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
-FORMAT_VERSION = 13  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 14  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
+
+Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
 
 
 class LoggedModel:
@@ -41,18 +44,8 @@ class LoggedModel:
         try:
             return self._model.call(context, frame)
         finally:
-            self._record(started)
-
-    def report(self, context: Context, frame: Frame) -> str:
-        started = time.perf_counter()
-        try:
-            return self._model.report(context, frame)
-        finally:
-            self._record(started)
-
-    def _record(self, started: float) -> None:
-        self._calls.append({"ms": round((time.perf_counter() - started) * 1000),
-                            "response": self._model.last_response})
+            self._calls.append({"ms": round((time.perf_counter() - started) * 1000),
+                                "response": self._model.last_response})
 
 
 class RunLog:
@@ -91,9 +84,9 @@ class RunLog:
             ValueError: when a game action comes without its transition.
         """
         match turn.action:
-            case Stop():  # its reason is the note
-                self._write_turn("stop", turn.observation, turn.context,
-                                 {"reasoning": turn.reasoning, "note": turn.note})
+            case Stop(outcome):
+                self._write_turn("stop", turn.observation, turn.context, {
+                    "reasoning": turn.reasoning, "note": turn.note, "outcome": outcome})
             case action if transition is not None:
                 row = self._write_turn("action", turn.observation, turn.context, {
                     "reasoning": turn.reasoning, "note": turn.note, "action": to_json(action),
@@ -106,10 +99,6 @@ class RunLog:
         self._write_turn("model_error", error.observation, error.context,
                          {"error": error.message})
 
-    def record_report(self, report: Report) -> None:
-        self._write_turn("budget_report", report.observation, report.context,
-                         {"reason": report.reason})
-
     def record_manual(self, action: GameAction, transition: Transition) -> None:
         self._recent.append(self._write("action", {
             "source": "manual", "action": to_json(action), "model_ms": 0,
@@ -119,8 +108,11 @@ class RunLog:
         self._recent.clear()
         self._write("reset", {"screenshot": screenshot})
 
-    def record_run_stop(self, reason: str, screenshot: str) -> None:
-        self._write("run_stop", {"reason": reason, "screenshot": screenshot})
+    def record_run_stop(self, ended: Ending, outcome: Outcome | None, actions: int, limit: int,
+                        screenshot: str) -> None:
+        """Record how the attempt ended; outcome is the Stop's, None for any other ending."""
+        self._write("run_stop", {"ended": ended, "outcome": outcome, "actions": actions,
+                                 "limit": limit, "screenshot": screenshot})
 
     def _write_turn(self, event: str, observation: Observation, context: Context,
                     fields: dict) -> dict:

@@ -80,7 +80,7 @@ def test_agent_rows_carry_the_model_reasoning(tmp_path):
 
 
 def test_stop_and_model_error_rows(tmp_path):
-    model = ScriptedModel(stop=votes(True), reasoning="Done talking.")
+    model = ScriptedModel(stop=votes(True), outcome="stuck", reasoning="Blocked by a wall.")
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
     model.error = RuntimeError("down")
@@ -88,18 +88,11 @@ def test_stop_and_model_error_rows(tmp_path):
     log.record_model_error(error)
     stop, error_row = turns(tmp_path)
     assert [stop["event"], error_row["event"]] == ["stop", "model_error"]
-    assert "action" not in stop and stop["reasoning"] == stop["note"] == "Done talking."
+    assert "action" not in stop and stop["outcome"] == "stuck"
+    assert stop["reasoning"] == "Blocked by a wall." and stop["note"] is None
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()
-
-
-def test_budget_report_rows_carry_the_reason_and_model_call(tmp_path):
-    log, agent, session = setup(tmp_path, ScriptedModel())
-    log.record_report(agent.report(session))
-    (row,) = turns(tmp_path)
-    assert row["event"] == "budget_report" and row["reason"] == "Out of budget. Scripted."
-    assert [call["turn"] for call in model_calls(tmp_path)] == [row["turn"]]
 
 
 def test_a_game_action_without_its_transition_is_rejected(tmp_path):
@@ -119,6 +112,8 @@ def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):
     assert recent[0]["source"] == "manual"
     log.record_reset("frames/000000.png")
     assert log.recent() == []
-    log.record_run_stop("turn_limit", "frames/000001.png")
-    names = [row["event"] for row in turns(tmp_path)[-2:]]
-    assert names == ["reset", "run_stop"]
+    log.record_run_stop("limit", None, 42, 42, "frames/000001.png")
+    reset, run_stop = turns(tmp_path)[-2:]
+    assert [reset["event"], run_stop["event"]] == ["reset", "run_stop"]
+    assert {"ended": "limit", "outcome": None, "actions": 42, "limit": 42}.items() <= (
+        run_stop.items())

@@ -9,9 +9,6 @@ from typing import TYPE_CHECKING, Protocol
 from mystery_dungeon.actions import Action, GameAction, Stop
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from emulator import Frame
     from mystery_dungeon.model import Model
     from mystery_dungeon.session import GameState, Observation, Transition
 
@@ -56,15 +53,6 @@ class Turn:
 
 
 @dataclass(frozen=True)
-class Report:
-    """Where the task stands, from the model once the action budget has run out."""
-
-    observation: Observation
-    context: Context
-    reason: str
-
-
-@dataclass(frozen=True)
 class ModelError:
     """A turn where the model call failed."""
 
@@ -105,10 +93,15 @@ class Agent:
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
         """Take one turn: observe, ask the model and apply its action."""
-        asked = self._ask(session, self._model.call)
-        if isinstance(asked, ModelError):
-            return asked, None
-        observation, context, reply = asked
+        if not self._task:
+            raise ValueError("give the agent a task before it acts")
+        observation = session.observe()
+        context = Context(self._task, self._knowledge, self.memory, observation.game_state,
+                          self.notes)
+        try:
+            reply = self._model.call(context, observation.frame)
+        except Exception as exc:
+            return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
         turn = Turn(observation, context, reply.action, reply.reasoning, reply.note)
         match reply.action:
             case Stop():
@@ -118,26 +111,6 @@ class Agent:
         if reply.note is not None:
             self._notes.append(reply.note)
         return turn, transition
-
-    def report(self, session: Session) -> Report | ModelError:
-        """Ask the model where the task stands, without acting; for when the budget runs out."""
-        asked = self._ask(session, self._model.report)
-        if isinstance(asked, ModelError):
-            return asked
-        return Report(*asked)
-
-    def _ask[T](self, session: Session, ask: Callable[[Context, Frame], T]
-                ) -> tuple[Observation, Context, T] | ModelError:
-        """Observe, then ask the model; a failed model call becomes a ModelError."""
-        if not self._task:
-            raise ValueError("give the agent a task before it acts")
-        observation = session.observe()
-        context = Context(self._task, self._knowledge, self.memory, observation.game_state,
-                          self.notes)
-        try:
-            return observation, context, ask(context, observation.frame)
-        except Exception as exc:
-            return ModelError(observation, context, f"{type(exc).__name__}: {exc}")
 
     def manual(self, session: Session, action: GameAction) -> Transition:
         """Apply an operator's action."""

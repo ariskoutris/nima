@@ -105,7 +105,7 @@ def test_stop_applies_nothing(tmp_path):
     game = Game()
     model = ScriptedModel(stop=votes(True))
     turn, transition = agent_with(model).act(start(tmp_path, game))
-    assert turn.action == Stop("Scripted.")
+    assert turn.action == Stop("complete")
     assert transition is None
     assert game.steps == []
     assert [call[0] for call in model.calls] == ["call"]
@@ -135,32 +135,11 @@ def test_each_turn_makes_one_model_call(tmp_path):
     assert [call[0] for call in model.calls] == ["call"]
 
 
-def test_a_stop_keeps_its_reasoning_and_its_reason_as_a_note(tmp_path):
-    model = ScriptedModel(stop=votes(True), reasoning="The dialogue has closed.")
-    agent = agent_with(model)
-    turn, _ = agent.act(start(tmp_path))
-    assert turn.action == Stop("The dialogue has closed.")
-    assert turn.reasoning == turn.note == "The dialogue has closed."
-    assert agent.notes == ("The dialogue has closed.",)
-
-
-def test_a_report_sees_the_context_and_applies_nothing(tmp_path):
-    game = Game()
-    model = ScriptedModel(notes=["Exit is south."])
-    agent = agent_with(model)
-    session = start(tmp_path, game)
-    agent.act(session)
-    steps = list(game.steps)
-    report = agent.report(session)
-    assert report.reason == "Out of budget. Scripted."
-    assert report.context.notes == ("Exit is south.",) and len(report.context.memory) == 1
-    assert model.calls[-1] == ("report", report.context, report.observation.frame)
-    assert game.steps == steps
-
-
-def test_a_failed_report_becomes_a_model_error(tmp_path):
-    error = agent_with(ScriptedModel(error=RuntimeError("down"))).report(start(tmp_path))
-    assert isinstance(error, ModelError) and error.message == "RuntimeError: down"
+def test_a_stop_keeps_its_outcome_and_reasoning(tmp_path):
+    model = ScriptedModel(stop=votes(True), outcome="stuck", reasoning="A wall blocks the exit.")
+    turn, _ = agent_with(model).act(start(tmp_path))
+    assert turn.action == Stop("stuck")
+    assert turn.reasoning == "A wall blocks the exit."
 
 
 def test_missing_task_fails_before_any_model_call(tmp_path):

@@ -8,19 +8,20 @@ import pytest
 from scripts import probe
 
 
-def write_result(command, reason="stopped_reached"):
+def write_result(command, ended="stop"):
     output = Path(command[command.index("--output") + 1])
     case = command[command.index("--case") + 1]
     folder = output / "cases" / case
     folder.mkdir(parents=True)
-    row = {"case": case, "reached": reason == "stopped_reached",
-           "stopped_reached": reason == "stopped_reached", "missed": False,
-           "stopped_unreached": False, "stop_reason": reason,
+    row = {"case": case, "reached": ended == "stop",
+           "stopped_reached": ended == "stop", "missed": False,
+           "stopped_unreached": False, "ended": ended,
+           "outcome": "complete" if ended == "stop" else None,
            "actions": 1, "seconds": 2.0}
     (output / "results.json").write_text(json.dumps([row]))
     (folder / "turns.jsonl").write_text(
         json.dumps({"event": "action", "source": "agent", "model_ms": 100}) + "\n"
-        if reason != "model_error"
+        if ended != "model_error"
         else json.dumps({"event": "model_error"}) + "\n")
 
 

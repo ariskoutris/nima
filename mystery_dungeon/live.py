@@ -284,10 +284,10 @@ class LiveRun:
                     self._mode = "paused"
                     self._error = f"Model failed: {message}"
                 # Stop for a task the operator replaced during the turn doesn't end the new one.
-                case Turn(action=Stop(reason)) if result.context.task == self._task:
+                case Turn(action=Stop(outcome)) if result.context.task == self._task:
                     self._log.record_turn(result, transition)
                     self._mode = "paused"
-                    self._notice = f"Stopped: {reason}"
+                    self._notice = f"Stopped ({outcome}): {result.reasoning}"
                 case Turn():
                     self._log.record_turn(result, transition)
                     if self._mode == "one_turn":

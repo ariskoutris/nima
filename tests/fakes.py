@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from emulator import Frame
-from mystery_dungeon.actions import GAME_ACTIONS, Stop
+from mystery_dungeon.actions import GAME_ACTIONS, Outcome, Stop
 from mystery_dungeon.model import Reply
 from mystery_dungeon.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
 
@@ -19,20 +19,21 @@ class ScriptedModel:
     """Answer from fixed scripts and record every call.
 
     Actions are model-facing names, and the last one repeats; notes go with the actions in
-    order and run out. Each call replies Stop, with the reasoning as its reason, instead when
-    ``stop()`` returns True, and raises ``error`` when one is given. Reports add the reasoning
-    to a fixed text.
+    order and run out. Each call replies Stop with ``outcome`` instead when ``stop()`` returns
+    True, and raises ``error`` when one is given.
     With a ``gate``, each call sets ``entered`` and then waits for the gate.
     """
 
     def __init__(self, actions: Sequence[str] = ("A",),
                  stop: Callable[[], bool] = lambda: False, *,
                  gate: threading.Event | None = None, error: Exception | None = None,
-                 reasoning: str = "Scripted.", notes: Sequence[str | None] = ()) -> None:
+                 reasoning: str = "Scripted.", notes: Sequence[str | None] = (),
+                 outcome: Outcome = "complete") -> None:
         self.actions = list(actions)
         self.notes = list(notes)
         self.reasoning = reasoning
         self.stop = stop
+        self.outcome = outcome
         self.gate = gate
         self.error = error
         self.entered = threading.Event()
@@ -44,15 +45,11 @@ class ScriptedModel:
     def call(self, context, frame) -> Reply:
         self._called("call", context, frame)
         if self.stop():
-            return Reply(Stop(self.reasoning), self.reasoning, self.reasoning)
+            return Reply(Stop(self.outcome), self.reasoning)
         action = self.actions[min(self._chosen, len(self.actions) - 1)]
         note = self.notes[self._chosen] if self._chosen < len(self.notes) else None
         self._chosen += 1
         return Reply(GAME_ACTIONS[action], self.reasoning, note)
-
-    def report(self, context, frame) -> str:
-        self._called("report", context, frame)
-        return f"Out of budget. {self.reasoning}"
 
     def _called(self, *call) -> None:
         self.calls.append(call)
