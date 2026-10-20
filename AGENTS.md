@@ -62,7 +62,7 @@ One term per concept in code, prompts, log fields, flags and docs:
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
   during play. The agent draws on it to plan new tasks, judge which are feasible and prioritize;
   task information comes from here. It starts with prerequisite information such as
-  `knowledge/controls.md`. Not "guide". The memory design is pending; this two-level
+  `knowledge/game-facts.md`. Not "guide". The memory design is pending; this two-level
   split is fixed.
 - model: what the agent calls each turn for an action and its reasoning (`Model`, `ChatModel`),
   configured by `[model]` in `config.toml`; `name` is its endpoint id.

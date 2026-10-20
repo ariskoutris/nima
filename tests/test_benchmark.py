@@ -252,8 +252,8 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     assert config["hashes"][str(rom)] == benchmark.sha256(rom)
 
 
-def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
-    rom, core, knowledge = tmp_path / "game.gba", tmp_path / "core", tmp_path / "controls.md"
+def test_benchmark_loads_the_configured_knowledge_unless_given_another(tmp_path, monkeypatch):
+    rom, core, knowledge = tmp_path / "game.gba", tmp_path / "core", tmp_path / "facts.md"
     knowledge.write_text("A talks.")
     for path in (rom, core, *(tmp_path / f"{name}.ss0" for name in benchmark.CHECKPOINT_NAMES)):
         path.write_bytes(b"test")
@@ -265,11 +265,12 @@ def test_benchmark_knowledge_is_optional_and_recorded(tmp_path, monkeypatch):
     run = Mock(return_value={"stop_reason": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
-    for name, extra in (("none", []), ("controls", ["--knowledge", str(knowledge)])):
+    for name, extra, path in (("default", [], benchmark.KNOWLEDGE),
+                              ("other", ["--knowledge", str(knowledge)], knowledge)):
         output = tmp_path / name
         monkeypatch.setattr(sys, "argv", ["benchmark", "--rom", str(rom), "--core", str(core),
                                       "--output", str(output), *extra])
         benchmark.main()
         config = json.loads((output / "config.json").read_text())
-        assert config["knowledge"] == (str(knowledge) if extra else None)
-        assert run.call_args.args[5] == ("A talks." if extra else "")
+        assert config["knowledge"] == str(path) and str(path) in config["hashes"]
+        assert run.call_args.args[5] == path.read_text()

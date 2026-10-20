@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from emulator import Frame, GbaEmulator
-from mystery_dungeon import CORE, ROM, STATE
+from mystery_dungeon import CORE, KNOWLEDGE, ROM, STATE
 from mystery_dungeon.actions import GAME_ACTIONS, Done, GameAction
 from mystery_dungeon.agent import Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
@@ -455,7 +455,8 @@ def main() -> None:
     parser.add_argument("--core", type=Path, default=CORE)
     parser.add_argument("--state", type=Path, default=STATE)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
+    parser.add_argument("--knowledge", type=Path, default=KNOWLEDGE,
+                        help="text the agent starts out knowing")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--hold-ticks", type=int, default=HOLD_TICKS)
     parser.add_argument("--release-ticks", type=int, default=RELEASE_TICKS)

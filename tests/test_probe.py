@@ -34,11 +34,11 @@ def test_variants_and_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(probe.subprocess, "run", run)
     output = tmp_path / "probe"
     probe.main(["--case", "square_down", "--variant", "baseline",
-                "--variant", "controls", "--output", str(output)])
+                "--variant", "facts", "--output", str(output)])
     assert len(calls) == 2
     assert "--knowledge" not in calls[0][0]
-    assert calls[1][0][calls[1][0].index("--knowledge") + 1] == str(probe.CONTROLS)
-    assert probe.CONTROLS.is_file()
+    assert calls[1][0][calls[1][0].index("--knowledge") + 1] == str(probe.GAME_FACTS)
+    assert probe.GAME_FACTS.is_file()
     assert all(call[1]["check"] for call in calls)
     summary = json.loads((output / "summary.json").read_text())
     assert [item["variant"] for item in summary["variants"]] == list(probe.VARIANTS)

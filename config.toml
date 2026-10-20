@@ -3,6 +3,7 @@ rom = "data/game/roms/red-rescue-team.gba"
 core = "data/engines/cores/mgba_libretro.dylib"
 state = "data/game/checkpoints/square.ss0"
 checkpoints = "data/game/checkpoints"
+knowledge = "mystery_dungeon/knowledge/game-facts.md"  # what the agent starts out knowing
 
 # Any OpenAI-compatible chat-completions endpoint. api_key_env names the environment variable
 # holding the key; leave it out for local servers. request is merged into every request body

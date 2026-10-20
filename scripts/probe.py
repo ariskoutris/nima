@@ -17,8 +17,8 @@ if str(ROOT) not in sys.path:
 from mystery_dungeon.benchmark import CASES  # noqa: E402 (needs ROOT on sys.path)
 from mystery_dungeon.model import read_settings  # noqa: E402
 
-CONTROLS = ROOT / "mystery_dungeon/knowledge/controls.md"
-VARIANTS = {"baseline": None, "controls": CONTROLS}  # variant → knowledge file
+GAME_FACTS = ROOT / "mystery_dungeon/knowledge/game-facts.md"
+VARIANTS = {"baseline": None, "facts": GAME_FACTS}  # variant → knowledge file
 
 
 def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -> list[dict]:

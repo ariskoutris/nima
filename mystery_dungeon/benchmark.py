@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from emulator import GbaEmulator
-from mystery_dungeon import CHECKPOINTS, CORE, ROM
+from mystery_dungeon import CHECKPOINTS, CORE, KNOWLEDGE, ROM
 from mystery_dungeon.actions import Done
 from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
@@ -240,7 +240,8 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     parser.add_argument("--output", type=Path, default=Path("runs/benchmarks") / timestamp,
                         help="run directory (default: timestamped directory in runs/benchmarks)")
-    parser.add_argument("--knowledge", type=Path, help="text the agent starts out knowing")
+    parser.add_argument("--knowledge", type=Path, default=KNOWLEDGE,
+                        help="text the agent starts out knowing")
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
     settings = read_settings()
