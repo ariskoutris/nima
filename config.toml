@@ -15,4 +15,5 @@ max_tokens = 4096
 
 [model.request]
 reasoning = { effort = "low" }
-provider = { require_parameters = true }  # OpenRouter: only route to providers that support the schema
+# OpenRouter: only route to providers that support the schema; OpenInference ignored it
+provider = { ignore = ["OpenInference"], require_parameters = true }
