@@ -306,7 +306,7 @@
       shownTaskMemory = key;
       $('findings-count').textContent = findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'No findings yet';
       $('scratchpad').replaceChildren(scratchpad.length
-        ? list(scratchpad, line => [element('span', `[${line.number}] `, 'entry-label'), line.text])
+        ? list(scratchpad.map((text, index) => [index + 1, text]), ([number, text]) => [element('span', `[${number}] `, 'entry-label'), text])
         : element('div', 'The agent\'s working lines for the task will appear here.', 'muted'));
       $('findings').replaceChildren(findings.length
         ? list(findings, finding => [element('span', `(${finding.kind}) `, 'entry-label'), finding.text])

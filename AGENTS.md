@@ -58,9 +58,9 @@ One term per concept in code, prompts, log fields, flags and docs:
   `GameAction` (Press, Wait) is what the game performs; Stop ends the task with its outcome:
   complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
   reasoning.
-- scratchpad: the model's numbered working lines for the current task (what is done, what was
-  tried, the plan, guesses). It adds and removes lines each turn and sees it every turn; it is
-  cleared when the task changes.
+- scratchpad: the model's working lines for the current task (what is done, what was
+  tried, the plan, guesses), shown numbered from 1 every turn. It replaces, removes and adds
+  lines by those numbers; the scratchpad is cleared when the task changes.
 - finding: a standalone fact about the game the model records (a kind and a text that states
   any uncertainty). Findings are never shown back to the model; they are logged with each turn
   for the orchestrator, which will merge them into knowledge.

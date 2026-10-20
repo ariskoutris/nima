@@ -6,8 +6,8 @@ import pytest
 from fakes import Game, ScriptedModel, finding, start, votes
 
 from mystery_dungeon.actions import Press, Stop, Wait
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, ScratchpadLine, Turn
-from mystery_dungeon.model import ScratchpadEdit
+from mystery_dungeon.agent import MEMORY_TURNS, Agent, Context, ModelError, Turn
+from mystery_dungeon.model import Replacement, ScratchpadEdit
 
 
 def agent_with(model, task="Find exit", knowledge=""):
@@ -37,28 +37,31 @@ def test_a_new_task_clears_memory(tmp_path):
     assert agent.memory == ()
 
 
-def test_scratchpad_edits_remove_then_add_with_numbers_that_are_never_reused(tmp_path):
+def test_scratchpad_edits_use_the_numbers_shown_this_turn(tmp_path):
     model = ScriptedModel(["A"], edits=[
-        ScratchpadEdit(("Find Kecleon.", "Shop is east, a guess.")),
-        ScratchpadEdit(("Shop is east of the well.", "Talked to Kecleon."), (2,)),
+        ScratchpadEdit(("Find Kecleon.", "Shop is east, a guess.", "Buy a berry.")),
+        ScratchpadEdit(("Talked to Kecleon.",), (1,),
+                       (Replacement(2, "Shop is east of the well."),)),
         ScratchpadEdit((), (1, 3))])
     agent = agent_with(model)
     session = start(tmp_path)
     for _ in range(3):
         agent.act(session)
     assert model.calls[0][1].scratchpad == ()
-    assert model.calls[1][1].scratchpad == (
-        ScratchpadLine(1, "Find Kecleon."), ScratchpadLine(2, "Shop is east, a guess."))
-    assert model.calls[2][1].scratchpad == (
-        ScratchpadLine(1, "Find Kecleon."), ScratchpadLine(3, "Shop is east of the well."),
-        ScratchpadLine(4, "Talked to Kecleon."))
-    assert agent.scratchpad == (ScratchpadLine(4, "Talked to Kecleon."),)
+    assert model.calls[1][1].scratchpad == ("Find Kecleon.", "Shop is east, a guess.",
+                                            "Buy a berry.")
+    # Replaced in place, the removal renumbers, and the addition goes at the end.
+    assert model.calls[2][1].scratchpad == ("Shop is east of the well.", "Buy a berry.",
+                                            "Talked to Kecleon.")
+    assert agent.scratchpad == ("Buy a berry.",)
 
 
-def test_removing_a_missing_line_is_a_model_error_that_changes_nothing(tmp_path):
+@pytest.mark.parametrize("edit", [
+    ScratchpadEdit(("Never added.",), (7,)),
+    ScratchpadEdit(("Never added.",), (1,), (Replacement(7, "No such line."),))])
+def test_changing_a_missing_line_is_a_model_error_that_changes_nothing(tmp_path, edit):
     game = Game()
-    model = ScriptedModel(["A"], edits=[ScratchpadEdit(("Find Kecleon.",)),
-                                        ScratchpadEdit(("Never added.",), (1, 7))])
+    model = ScriptedModel(["A"], edits=[ScratchpadEdit(("Find Kecleon.",)), edit])
     agent = agent_with(model)
     session = start(tmp_path, game)
     agent.act(session)
@@ -66,7 +69,16 @@ def test_removing_a_missing_line_is_a_model_error_that_changes_nothing(tmp_path)
     error, transition = agent.act(session)
     assert isinstance(error, ModelError) and "[7]" in error.message
     assert transition is None and game.steps == steps
-    assert agent.scratchpad == (ScratchpadLine(1, "Find Kecleon."),)
+    assert agent.scratchpad == ("Find Kecleon.",)
+
+
+@pytest.mark.parametrize("fields", [
+    {"remove": (1,), "replace": (Replacement(1, "Twice."),)},
+    {"replace": (Replacement(1, "a"), Replacement(1, "b"))},
+    {"add": (" ",)}, {"replace": (Replacement(1, ""),)}, {"add": ("[2] Talked to Kecleon.",)}])
+def test_every_scratchpad_edit_is_checked_wherever_it_comes_from(fields):
+    with pytest.raises(ValueError, match="invalid scratchpad edit"):
+        ScratchpadEdit(**fields)
 
 
 def test_findings_accumulate_without_reaching_the_model(tmp_path):
@@ -93,7 +105,7 @@ def test_a_new_task_or_cleared_memory_forgets_scratchpad_and_findings(tmp_path):
     agent.set_task("Talk to Granbull")
     assert agent.scratchpad == () and agent.findings == ()
     agent.act(session)
-    assert agent.scratchpad == (ScratchpadLine(1, "A line."),)  # numbering restarts
+    assert agent.scratchpad == ("A line.",)
     agent.clear_memory()
     assert agent.scratchpad == () and agent.findings == ()
 
@@ -103,7 +115,7 @@ def test_a_stop_applies_its_scratchpad_edit_and_findings(tmp_path):
                           findings=[[finding("Kecleon runs the shop in Pokémon Square.")]])
     agent = agent_with(model)
     agent.act(start(tmp_path))
-    assert agent.scratchpad == (ScratchpadLine(1, "Talked to Kecleon."),)
+    assert agent.scratchpad == ("Talked to Kecleon.",)
     assert len(agent.findings) == 1
 
 

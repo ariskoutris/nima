@@ -9,11 +9,12 @@ from fakes import FRAME
 from emulator import Frame
 from mystery_dungeon import model
 from mystery_dungeon.actions import Press, Stop
-from mystery_dungeon.agent import Context, MemoryEntry, ScratchpadLine
+from mystery_dungeon.agent import Context, MemoryEntry
 from mystery_dungeon.model import (
     ChatModel,
     ChatSettings,
     Finding,
+    Replacement,
     Reply,
     ScratchpadEdit,
     internal_reasoning,
@@ -28,7 +29,7 @@ MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to
           MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
-EMPTY = {"scratchpad": {"add": [], "remove": []}, "findings": []}
+EMPTY = {"scratchpad": {"add": [], "remove": [], "replace": []}, "findings": []}
 CHARIZARD = {"kind": "dialogue",
              "text": " Charizard in Pokémon Square says its team reached Gold Rank. "}
 
@@ -56,14 +57,16 @@ def reply(answer, finish_reason="stop"):
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({
         "reasoning": " The door is ahead. ",
-        "scratchpad": {"add": [" Found the door. "], "remove": [3]},
+        "scratchpad": {"add": [" Found the door. "], "remove": [2],
+                       "replace": [{"line": 1, "text": " Left the house, a guess. "}]},
         "findings": [CHARIZARD], "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
-    context = Context("Find the exit", "Avoid walls", MEMORY, scratchpad=(
-        ScratchpadLine(1, "Left the house."), ScratchpadLine(3, "The exit is south, a guess.")))
+    context = Context("Find the exit", "Avoid walls", MEMORY,
+                      scratchpad=("Left the house.", "The exit is south, a guess."))
     answer = chat_model.call(context, FRAME)
     assert answer == Reply(Press("DOWN"), "The door is ahead.",
-                           ScratchpadEdit(("Found the door.",), (3,)),
+                           ScratchpadEdit(("Found the door.",), (2,),
+                                          (Replacement(1, "Left the house, a guess."),)),
                            (Finding("dialogue", CHARIZARD["text"].strip()),))
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
@@ -74,7 +77,7 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert system["content"] == INSTRUCTIONS
     assert "# Task\nFind the exit" in user["content"][0]["text"]
     assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
-    assert ("# Your scratchpad\n[1] Left the house.\n[3] The exit is south, a guess.\n\n"
+    assert ("# Your scratchpad\n[1] Left the house.\n[2] The exit is south, a guess.\n\n"
             "# Actions" in user["content"][0]["text"])
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
@@ -144,14 +147,13 @@ def test_settings_come_from_the_model_table(tmp_path):
             "action": "A"}), "invalid finding"),
     (reply({"reasoning": "Press A.", **EMPTY, "findings": ["Charizard is Gold Rank."],
             "action": "A"}), "invalid finding"),
-    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": []}, "action": "A"}),
-     "invalid scratchpad edit"),
-    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": [""], "remove": []},
-            "action": "A"}), "invalid scratchpad edit"),
-    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": [], "remove": ["1"]},
-            "action": "A"}), "invalid scratchpad edit"),
-    (reply({"reasoning": "Press A.", **EMPTY, "scratchpad": {"add": [], "remove": [2, 2]},
-            "action": "A"}), "invalid scratchpad edit"),
+    *[(reply({"reasoning": "Press A.", **EMPTY, "action": "A",
+                "scratchpad": {"add": [], "remove": [], "replace": [], **edit}}),
+       "invalid scratchpad edit") for edit in (
+        {"replace": None}, {"add": [""]}, {"remove": ["1"]}, {"remove": [True]},
+        {"remove": [2, 2]}, {"remove": [2], "replace": [{"line": 2, "text": "Twice."}]},
+        {"replace": [{"line": 1}]}, {"add": ["[4] Talked to Kecleon."]},
+        {"replace": [{"line": 1, "text": " [1] Talked to Kecleon."}]})],
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),

@@ -79,7 +79,7 @@ def test_agent_rows_carry_the_model_reasoning(tmp_path):
     log.record_manual(Press("B"), agent.manual(session, Press("B")))
     action, manual = turns(tmp_path)
     assert action["reasoning"] == "Door ahead."
-    assert action["scratchpad"] == {"add": ["Find the door."], "remove": []}
+    assert action["scratchpad"] == {"add": ["Find the door."], "remove": [], "replace": []}
     assert action["findings"] == [{"kind": "dialogue",
                                    "text": "Kecleon in Pokémon Square sells X-Ray Specs."}]
     assert "reasoning" not in manual
@@ -97,7 +97,7 @@ def test_stop_and_model_error_rows(tmp_path):
     assert [stop["event"], error_row["event"]] == ["stop", "model_error"]
     assert "action" not in stop and stop["outcome"] == "stuck"
     assert stop["reasoning"] == "Blocked by a wall." and stop["findings"] == []
-    assert stop["scratchpad"] == {"add": [], "remove": []}
+    assert stop["scratchpad"] == {"add": [], "remove": [], "replace": []}
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()

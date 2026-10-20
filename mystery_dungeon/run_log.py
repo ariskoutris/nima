@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import GameState, Observation, Transition
 
-FORMAT_VERSION = 16  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 17  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
@@ -120,7 +120,7 @@ class RunLog:
         self._turns += 1
         calls, self._calls[:] = self._calls.copy(), []
         model_input = {"task": context.task,
-                       "scratchpad": [dataclasses.asdict(line) for line in context.scratchpad],
+                       "scratchpad": list(context.scratchpad),
                        "screenshot": observation.screenshot,
                        "game_state": _json_state(context.game_state),
                        "memory": [{"screenshot": entry.observation.screenshot,

@@ -33,14 +33,6 @@ class MemoryEntry:
 
 
 @dataclass(frozen=True)
-class ScratchpadLine:
-    """One line of the model's scratchpad; its number stays fixed until the task changes."""
-
-    number: int
-    text: str
-
-
-@dataclass(frozen=True)
 class Context:
     """Everything the model gets besides the current frame."""
 
@@ -48,7 +40,7 @@ class Context:
     knowledge: str
     memory: tuple[MemoryEntry, ...]
     game_state: GameState | None = None  # with the current frame
-    scratchpad: tuple[ScratchpadLine, ...] = ()
+    scratchpad: tuple[str, ...] = ()  # shown numbered from 1
 
 
 @dataclass(frozen=True)
@@ -80,8 +72,7 @@ class Agent:
         self._knowledge = knowledge.strip()
         self._task = ""
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
-        self._scratchpad: list[ScratchpadLine] = []
-        self._next_line = 1
+        self._scratchpad: list[str] = []
         self._findings: list[Finding] = []
 
     @property
@@ -89,7 +80,7 @@ class Agent:
         return tuple(self._memory)
 
     @property
-    def scratchpad(self) -> tuple[ScratchpadLine, ...]:
+    def scratchpad(self) -> tuple[str, ...]:
         return tuple(self._scratchpad)
 
     @property
@@ -107,7 +98,6 @@ class Agent:
     def clear_memory(self) -> None:
         self._memory.clear()
         self._scratchpad.clear()
-        self._next_line = 1
         self._findings.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
@@ -119,9 +109,10 @@ class Agent:
                           self.scratchpad)
         try:
             reply = self._model.call(context, observation.frame)
-            unknown = set(reply.scratchpad.remove) - {line.number for line in self._scratchpad}
+            shown = range(1, len(self._scratchpad) + 1)
+            unknown = sorted(number for number in reply.scratchpad.lines if number not in shown)
             if unknown:
-                raise ValueError(f"removed scratchpad lines that do not exist: {sorted(unknown)}")
+                raise ValueError(f"changed scratchpad lines that do not exist: {unknown}")
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
         turn = Turn(observation, context, reply.action, reply.reasoning, reply.scratchpad,
@@ -136,11 +127,12 @@ class Agent:
         return turn, transition
 
     def _edit(self, edit: ScratchpadEdit) -> None:
-        """Remove lines first, so an edit is a removal plus an added line."""
-        self._scratchpad = [line for line in self._scratchpad if line.number not in edit.remove]
-        for text in edit.add:
-            self._scratchpad.append(ScratchpadLine(self._next_line, text))
-            self._next_line += 1
+        """Apply an edit by the numbers the model saw: replace, remove, then append."""
+        for replacement in edit.replace:
+            self._scratchpad[replacement.line - 1] = replacement.text
+        self._scratchpad = [line for number, line in enumerate(self._scratchpad, 1)
+                            if number not in edit.remove]
+        self._scratchpad.extend(edit.add)
 
     def manual(self, session: Session, action: GameAction) -> Transition:
         """Apply an operator's action."""

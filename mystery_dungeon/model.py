@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,7 @@ TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
 FindingKind = Literal["dialogue", "location", "mechanic", "other"]
+NUMBERED = re.compile(r"\[\d+\]")  # a scratchpad line number as the context shows it
 # The model judges the screen, edits its scratchpad and records findings before it commits to
 # an action.
 ANSWER_SCHEMA = {
@@ -31,8 +33,12 @@ ANSWER_SCHEMA = {
         "reasoning": {"type": "string"},
         "scratchpad": {"type": "object", "properties": {
             "add": {"type": "array", "items": {"type": "string"}},
-            "remove": {"type": "array", "items": {"type": "integer"}}},
-            "required": ["add", "remove"], "additionalProperties": False},
+            "remove": {"type": "array", "items": {"type": "integer"}},
+            "replace": {"type": "array", "items": {
+                "type": "object", "properties": {"line": {"type": "integer"},
+                                                 "text": {"type": "string"}},
+                "required": ["line", "text"], "additionalProperties": False}}},
+            "required": ["add", "remove", "replace"], "additionalProperties": False},
         "findings": {"type": "array", "items": {
             "type": "object",
             "properties": {"kind": {"type": "string", "enum": list(get_args(FindingKind))},
@@ -46,11 +52,37 @@ ANSWER_SCHEMA = {
 
 
 @dataclass(frozen=True)
+class Replacement:
+    """New text for one scratchpad line, by the number it was shown with."""
+
+    line: int
+    text: str
+
+
+@dataclass(frozen=True)
 class ScratchpadEdit:
-    """Lines to remove from the scratchpad, by number, and lines to append after them."""
+    """Changes to the scratchpad by the line numbers shown this turn: replacements, then
+    removals, then lines appended at the end."""
 
     add: tuple[str, ...] = ()
     remove: tuple[int, ...] = ()
+    replace: tuple[Replacement, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Raises:
+            ValueError: when a line is changed twice, or a text is empty or starts with a line
+                number (the model copied shown numbers like "[4]" into its text, then edited
+                by those).
+        """
+        texts = [*self.add, *(replacement.text for replacement in self.replace)]
+        if len(set(self.lines)) != len(self.lines) or not all(
+                text.strip() and not NUMBERED.match(text.strip()) for text in texts):
+            raise ValueError(f"invalid scratchpad edit: {self!r}")
+
+    @property
+    def lines(self) -> tuple[int, ...]:
+        """The line numbers the edit refers to."""
+        return (*self.remove, *(replacement.line for replacement in self.replace))
 
 
 @dataclass(frozen=True)
@@ -128,13 +160,18 @@ class ChatModel:
                      tuple(self._finding(finding) for finding in answer["findings"]))
 
     def _edit(self, edit: object) -> ScratchpadEdit:
-        if (not isinstance(edit, dict) or edit.keys() != {"add", "remove"}
-                or not isinstance(edit["add"], list) or not isinstance(edit["remove"], list)
-                or not all(isinstance(line, str) and line.strip() for line in edit["add"])
-                or not all(type(number) is int for number in edit["remove"])
-                or len(set(edit["remove"])) != len(edit["remove"])):
+        if (not isinstance(edit, dict) or edit.keys() != {"add", "remove", "replace"}
+                or not all(isinstance(edit[key], list) for key in edit)
+                or not all(isinstance(item, dict) and item.keys() == {"line", "text"}
+                           for item in edit["replace"])
+                or not all(type(number) is int for number in
+                           [*edit["remove"], *(item["line"] for item in edit["replace"])])
+                or not all(isinstance(text, str) for text in
+                           [*edit["add"], *(item["text"] for item in edit["replace"])])):
             raise ValueError(f"{self.name} returned an invalid scratchpad edit: {edit!r}")
-        return ScratchpadEdit(tuple(line.strip() for line in edit["add"]), tuple(edit["remove"]))
+        return ScratchpadEdit(tuple(text.strip() for text in edit["add"]), tuple(edit["remove"]),
+                              tuple(Replacement(item["line"], item["text"].strip())
+                                    for item in edit["replace"]))
 
     def _finding(self, finding: object) -> Finding:
         if (not isinstance(finding, dict) or finding.keys() != {"kind", "text"}
@@ -202,7 +239,7 @@ def _content(context: Context, frame: Frame) -> list[dict]:
     if context.knowledge:
         text.append(f"# Knowledge\n{context.knowledge}")
     text.append("# Your scratchpad\n" + ("\n".join(
-        f"[{line.number}] {line.text}" for line in context.scratchpad) or "(empty)"))
+        f"[{number}] {line}" for number, line in enumerate(context.scratchpad, 1)) or "(empty)"))
     text.append("# Actions\n" + "\n".join(
         f"- {action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
     if context.memory:

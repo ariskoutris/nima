@@ -174,7 +174,7 @@ def test_the_view_shows_the_task_scratchpad_and_findings(start_run):
                                      findings=[[finding("Kecleon sells Oran Berries.")]]))
     run.control({"task": "Find exit", "command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
-    assert state["scratchpad"] == [{"number": 1, "text": "Find the exit."}]
+    assert state["scratchpad"] == ["Find the exit."]
     assert state["findings"] == [{"kind": "dialogue",
                                   "text": "Kecleon sells Oran Berries."}]
     run.control({"task": "Talk to Granbull"})
