@@ -134,7 +134,7 @@ class LiveRun:
         self._error = self._notice = ""
         self._loaded = self._stopping = False
         self._reset_count = 0
-        self._published_image = -1
+        self._published: tuple[int, int] | None = None  # image index and tick
         self._game_state: dict | None = None
         self._screen_condition = threading.Condition()
         self._screen: Frame | None = None
@@ -321,13 +321,14 @@ class LiveRun:
         self._after_step(session)
 
     def _after_step(self, session: GameplaySession) -> None:
-        """Save and publish the session's state if it captured a frame since the last call.
+        """Save and publish the session's state if the game ran since the last call.
 
         The live screen shows only streamed ticks; screenshots appear with their action.
         """
-        if session.image_index == self._published_image:
+        # The tick alone repeats after a reset; the image index alone misses idle ticks.
+        if (session.image_index, session.tick) == self._published:
             return
-        self._published_image = session.image_index
+        self._published = (session.image_index, session.tick)
         session.save_state("latest.state")
         with self._condition:
             self._game_state = asdict(session.ram_state())

@@ -1,8 +1,9 @@
 """Checkpoint loading and observations."""
 
 import pytest
-from fakes import Game
+from fakes import FRAME, Game
 
+from emulator import Frame
 from mystery_dungeon.actions import Press
 from mystery_dungeon.session import Checkpoint, GameplaySession
 
@@ -26,6 +27,17 @@ def test_failed_load_restores_the_previous_game(tmp_path):
     with pytest.raises(RuntimeError, match="invalid core state"):
         session.load(Checkpoint(b"bad", b"seed-ram"))
     assert (game.state, game.ram) == (b"start", b"current-ram")
+
+
+def test_observe_after_idle_records_what_the_idle_ticks_did(tmp_path):
+    game = Game()
+    session = GameplaySession(game, tmp_path)
+    before = session.observe()
+    game.frame = Frame(16, 16, b"\xff" * len(FRAME.rgba))
+    session.idle(3)
+    after = session.observe()
+    assert after.frame == game.frame and after.screenshot != before.screenshot
+    assert session.observe() == after
 
 
 def test_apply_needs_an_observation_first(tmp_path):

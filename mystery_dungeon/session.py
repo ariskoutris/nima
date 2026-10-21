@@ -153,6 +153,7 @@ class GameplaySession:
         self.action_count = 0
         self.tick = 0
         self._last_observation: Observation | None = None
+        self._observed_tick = 0
         self.ram = GameRam(emulator)
 
     @property
@@ -209,10 +210,11 @@ class GameplaySession:
         (self.output / "frames").mkdir(parents=True, exist_ok=True)
         frame.save_png(self.output / screenshot)
         self._last_observation = Observation(frame, screenshot, self.game_state())
+        self._observed_tick = self.tick
         return self._last_observation
 
     def idle(self, ticks: int = 1) -> None:
-        """Run ticks without input; the last observation stays as it was."""
+        """Run ticks without input; the next observe records what they did."""
         self.emulator.step(ticks)
         self.tick += ticks
 
@@ -222,21 +224,19 @@ class GameplaySession:
 
         Waits for text to print fully and the blinking cursor to be visible.
         """
-        waited = self._idle_until(lambda: not self.ram.state().text_printing, TEXT_WAIT_LIMIT)
+        self._idle_until(lambda: not self.ram.state().text_printing, TEXT_WAIT_LIMIT)
         if self.ram.state().mode == "menu":
-            waited += self._idle_until(self.ram.menu_cursor_shown,
-                                       MENU_AFTER_TEXT_TICKS + CURSOR_BLINK_TICKS)
-        if waited or self._last_observation is None:
+            self._idle_until(self.ram.menu_cursor_shown, MENU_AFTER_TEXT_TICKS + CURSOR_BLINK_TICKS)
+        if self._last_observation is None or self._observed_tick != self.tick:
             return self._record_observation()
         return self._last_observation
 
-    def _idle_until(self, done: Callable[[], bool], limit: int) -> int:
-        """Idle until ``done()`` holds or ``limit`` ticks pass; return the ticks idled."""
-        ticks = 0
-        while ticks < limit and not done():
+    def _idle_until(self, done: Callable[[], bool], limit: int) -> None:
+        """Idle until ``done()`` holds or ``limit`` ticks pass."""
+        for _ in range(limit):
+            if done():
+                return
             self.idle()
-            ticks += 1
-        return ticks
 
     def apply(self, action: GameAction) -> Transition:
         """Perform ``action`` and observe the result without waiting."""
