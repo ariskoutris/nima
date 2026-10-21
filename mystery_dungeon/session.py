@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
-from emulator import Frame, GbaEmulator, scene_distance
-from mystery_dungeon.actions import GameAction, Press, Wait, name
+from emulator import Frame, GbaEmulator
+from mystery_dungeon.actions import GameAction, Press, Wait
 from mystery_dungeon.ram_state import GameRam, RamState
 
 HOLD_TICKS = 8  # ticks each action holds its input
@@ -23,8 +23,6 @@ MENU_AFTER_TEXT_TICKS = 12
 CURSOR_BLINK_TICKS = 8
 BLINK_PIXEL_DELTA = 100  # summed RGB difference for a pixel to count as blinking
 BLINK_BLOCK_PIXELS = 16  # side of the square regions compared for the strongest blink
-STALL_SCENE_DISTANCE = 3  # scene_distance below which a press barely changed the screen
-STALL_PRESSES = 8  # repeated barely-changing presses before warning the operator
 # Characters within this many pixels of the player across and down count as on screen: the
 # screen is 240x160 and the camera centres the player except at map edges.
 VISIBLE_X, VISIBLE_Y = 120, 80
@@ -180,9 +178,6 @@ class GameplaySession:
         self.current: Frame | None = None
         self.current_name = ""
         self.current_game_state: GameState | None = None
-        self.warning: str | None = None
-        self._last_action: GameAction | None = None
-        self._unchanged_count = 0
         # Test doubles aren't GbaEmulators and run without RAM-timed captures.
         self.ram = GameRam(emulator) if isinstance(emulator, GbaEmulator) else None
 
@@ -221,9 +216,6 @@ class GameplaySession:
             raise
         self.tick = 1
         self.action_count = 0
-        self.warning = None
-        self._last_action = None
-        self._unchanged_count = 0
         self.capture()
 
     def wait_for_text(self) -> None:
@@ -281,7 +273,7 @@ class GameplaySession:
         return Observation(frame, self.current_name, self.current_game_state)
 
     def apply(self, action: GameAction) -> Transition:
-        """Perform ``action``, capture the result and update the stall warning."""
+        """Perform ``action`` and capture the result."""
         if self.current is None:
             raise RuntimeError("capture a frame before applying an action")
         before = Observation(self.current, self.current_name, self.current_game_state)
@@ -290,14 +282,6 @@ class GameplaySession:
         self.tick += self.hold_ticks + self.release_ticks
         after = self.capture()
         self.action_count += 1
-        if isinstance(action, Press) and scene_distance(before.frame, after) < STALL_SCENE_DISTANCE:
-            self._unchanged_count = self._unchanged_count + 1 if action == self._last_action else 1
-        else:
-            self._unchanged_count = 0
-        self._last_action = action
-        stalled = self._unchanged_count >= STALL_PRESSES
-        self.warning = (f"Possible stall: little screen change after {self._unchanged_count} "
-                        f"{name(action)} presses" if stalled else None)
         return Transition(before, Observation(after, self.current_name, self.current_game_state),
                           self.image_index - 1,
                           self.action_count, tick_before, self.tick)

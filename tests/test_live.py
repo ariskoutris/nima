@@ -109,16 +109,6 @@ def test_manual_actions_after_a_task_change_reach_the_model(start_run):
     assert [entry.action.button for entry in context.memory] == ["RIGHT", "UP"]
 
 
-def test_stall_warning_shows_until_reset(start_run):
-    run, _ = start_run(ScriptedModel())
-    for _ in range(8):
-        run.control({"command": "manual", "action": "DOWN"})
-    state = wait_until(run, lambda state: len(state["history"]) == 8)
-    assert state["warning"] == "Possible stall: little screen change after 8 DOWN presses"
-    run.control({"command": "reset"})
-    assert wait_until(run, lambda state: state["reset_count"] == 1)["warning"] is None
-
-
 def test_upload_state_and_ss0(start_run, monkeypatch):
     run, game = start_run(ScriptedModel())
     run.load_state_upload(b"uploaded", "state")

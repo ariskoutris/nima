@@ -247,7 +247,6 @@
       }
       if (!taskDirty) task.value = state.task;
       if (state.error) say(state.error, BAD);
-      else if (state.status === 'running' && state.warning) say(state.warning, NOTE);
       else if (state.notice) say(state.notice, NOTE);
       if (state.reset_count !== resetCount) {
         resetCount = state.reset_count;

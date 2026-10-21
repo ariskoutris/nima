@@ -247,13 +247,3 @@ def test_agent_only_needs_observe_and_apply(tmp_path):
 
     assert agent_with(ScriptedModel()).act(SessionPort())[0].action == Press("A")
 
-
-def test_repeated_actions_warn_without_stopping(tmp_path):
-    game = Game()
-    model = ScriptedModel()
-    agent = agent_with(model)
-    session = start(tmp_path, game)
-    for _ in range(12):
-        assert agent.act(session)[0].action == Press("A")
-    assert game.steps == [(8, ("A",)), (4, ())] * 12
-    assert session.warning == "Possible stall: little screen change after 12 A presses"

@@ -12,7 +12,7 @@ from mystery_dungeon.actions import GAME_ACTIONS, Outcome, Stop
 from mystery_dungeon.model import Finding, FindingKind, Reply, ScratchpadEdit
 from mystery_dungeon.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
 
-FRAME = Frame(16, 16, bytes(16 * 16 * 4))  # large enough for stall detection to sample
+FRAME = Frame(16, 16, bytes(16 * 16 * 4))
 
 
 def finding(text: str, kind: FindingKind = "dialogue") -> Finding:

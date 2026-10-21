@@ -135,7 +135,6 @@ class LiveRun:
         self._reset_count = 0
         self._published_image = -1
         self._game_state: dict | None = None
-        self._warning: str | None = None
         self._screen_condition = threading.Condition()
         self._screen: Frame | None = None
         self._screen_revision = 0
@@ -146,7 +145,7 @@ class LiveRun:
             return {"status": self._status(), "error": self._error, "notice": self._notice,
                     "task": self._task, "running": self._mode != "paused",
                     "reset_count": self._reset_count,
-                    "game_state": self._game_state, "warning": self._warning,
+                    "game_state": self._game_state,
                     "history": self._log.recent(),
                     "scratchpad": list(self._agent.scratchpad),
                     "findings": [asdict(finding) for finding in self._agent.findings],
@@ -332,7 +331,6 @@ class LiveRun:
         state = session.ram_state()
         with self._condition:
             self._game_state = asdict(state) if state else None
-            self._warning = session.warning
             self._condition.notify_all()
         with self._screen_condition:
             self._stream_tick = session.tick
