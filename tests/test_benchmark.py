@@ -83,7 +83,7 @@ def test_lombre_finish_requires_closed_dialogue(town, tmp_path):
     case = next(case for case in CASES if case.id == "face_lombre_finish")
     session = GameplaySession(game, tmp_path)
     grader = Grader(case, session.ram)
-    session.capture()
+    session.observe()
     for index in range(9):
         session.apply(Press("A"))
         session.observe()

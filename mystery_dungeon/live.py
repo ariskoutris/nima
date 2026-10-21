@@ -314,7 +314,7 @@ class LiveRun:
             self._checkpoint = checkpoint
         self._agent.clear_memory()
         with self._condition:
-            self._log.record_reset(session.current_name)
+            self._log.record_reset(session.last_observation.screenshot)
             self._reset_count += 1
             self._error = ""
             self._notice = "Loaded state." if checkpoint is not None else "Reset complete."

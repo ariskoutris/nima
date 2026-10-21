@@ -30,12 +30,12 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / f"{checkpoint}.ss0"))
         session = GameplaySession(game, tmp_path)
-        session.capture()
+        session.observe()
         assert GameRam(game).state().mode == "field"
         session.apply(Press("A"))
         initial = GameRam(game).state()
         assert initial.mode == "dialogue" and initial.text_printing
-        partial = session.current.rgba
+        partial = session.last_observation.frame.rgba
         actions = session.action_count
         ticks = session.tick
         session.observe()
@@ -45,7 +45,7 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         assert not GameRam(game).state().text_printing
         if ready_mode == "menu":  # the snapshot names a speaker only in dialogue
             assert GameRam(game).state().speaker_species is None
-        assert session.current.rgba != partial
+        assert session.last_observation.frame.rgba != partial
 
 
 def test_field_menu_and_dungeon_modes():
@@ -169,13 +169,12 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
                 game.load_state(state)
                 game.step(phase + 1)
                 session = GameplaySession(game, tmp_path / name / str(phase))
-                session.capture()
                 assert GameRam(game).state().mode == "menu"
                 observed = session.observe().frame
                 assert light_pixels(observed, rect) > threshold
                 assert session.action_count == 0
                 assert session.tick <= 8  # the cursor is hidden for at most half a blink
-                assert (session.output / session.current_name).is_file()
+                assert (session.output / session.last_observation.screenshot).is_file()
 
 
 def test_agent_plans_only_after_text_finishes(tmp_path):
@@ -186,7 +185,7 @@ def test_agent_plans_only_after_text_finishes(tmp_path):
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "face-npc.ss0"))
         session = GameplaySession(game, tmp_path)
-        session.capture()
+        session.observe()
         session.apply(Press("A"))
         assert GameRam(game).state().text_printing
 
@@ -209,7 +208,7 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "face-lombre.ss0"))
         session = GameplaySession(game, tmp_path)
-        session.capture()
+        session.observe()
 
         def stop():
             state = GameRam(game).state()
@@ -251,7 +250,7 @@ def test_observations_carry_the_game_state_before_and_after_a_move(tmp_path):
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
         session = GameplaySession(game, tmp_path)
-        session.capture()
+        session.observe()
         observed = session.observe().game_state
         transition = session.apply(Press("DOWN"))
         assert transition.before.game_state == observed
@@ -267,7 +266,7 @@ def test_ground_characters_are_named_from_the_rom_and_filtered_to_the_screen(tmp
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "square.ss0"))
         session = GameplaySession(game, tmp_path)
-        session.capture()
+        session.observe()
         ram = GameRam(game)
         assert ram.species_name(235) == "Granbull" and ram.species_name(40) == "Wigglytuff"
         assert ram.npc_position(235) == (456, 352)

@@ -152,10 +152,19 @@ class GameplaySession:
         self.image_index = -1
         self.action_count = 0
         self.tick = 0
-        self.current: Frame | None = None
-        self.current_name = ""
-        self.current_game_state = GameState(None, None, None)
+        self._last_observation: Observation | None = None
         self.ram = GameRam(emulator)
+
+    @property
+    def last_observation(self) -> Observation:
+        """The latest observation recorded by load, observe or apply.
+
+        Raises:
+            RuntimeError: before the first one.
+        """
+        if self._last_observation is None:
+            raise RuntimeError("no observation yet: load or observe first")
+        return self._last_observation
 
     def ram_state(self) -> RamState:
         return self.ram.state()
@@ -190,20 +199,20 @@ class GameplaySession:
             raise
         self.tick = 1
         self.action_count = 0
-        self.capture()
+        self._record_observation()
 
-    def capture(self) -> Frame:
-        """Record the emulator's screen and game state as current, and save the screenshot."""
+    def _record_observation(self) -> Observation:
+        """Record the screen and game state as the last observation, and save the screenshot."""
         self.image_index += 1
-        self.current = self.emulator.screenshot()
-        self.current_game_state = self.game_state()
-        self.current_name = f"frames/{self.image_index:06d}.png"
+        frame = self.emulator.screenshot()
+        screenshot = f"frames/{self.image_index:06d}.png"
         (self.output / "frames").mkdir(parents=True, exist_ok=True)
-        self.current.save_png(self.output / self.current_name)
-        return self.current
+        frame.save_png(self.output / screenshot)
+        self._last_observation = Observation(frame, screenshot, self.game_state())
+        return self._last_observation
 
     def idle(self, ticks: int = 1) -> None:
-        """Run ticks without input; the current frame stays the last one captured."""
+        """Run ticks without input; the last observation stays as it was."""
         self.emulator.step(ticks)
         self.tick += ticks
 
@@ -213,15 +222,13 @@ class GameplaySession:
 
         Waits for text to print fully and the blinking cursor to be visible.
         """
-        if self.current is None:
-            raise RuntimeError("capture a frame before observing")
         waited = self._idle_until(lambda: not self.ram.state().text_printing, TEXT_WAIT_LIMIT)
         if self.ram.state().mode == "menu":
             waited += self._idle_until(self.ram.menu_cursor_shown,
                                        MENU_AFTER_TEXT_TICKS + CURSOR_BLINK_TICKS)
-        if waited:
-            self.capture()
-        return Observation(self.current, self.current_name, self.current_game_state)
+        if waited or self._last_observation is None:
+            return self._record_observation()
+        return self._last_observation
 
     def _idle_until(self, done: Callable[[], bool], limit: int) -> int:
         """Idle until ``done()`` holds or ``limit`` ticks pass; return the ticks idled."""
@@ -232,17 +239,14 @@ class GameplaySession:
         return ticks
 
     def apply(self, action: GameAction) -> Transition:
-        """Perform ``action`` and capture the result."""
-        if self.current is None:
-            raise RuntimeError("capture a frame before applying an action")
-        before = Observation(self.current, self.current_name, self.current_game_state)
+        """Perform ``action`` and observe the result without waiting."""
+        before = self.last_observation
         tick_before = self.tick
         perform(self.emulator, action, self.hold_ticks, self.release_ticks)
         self.tick += self.hold_ticks + self.release_ticks
-        after = self.capture()
+        after = self._record_observation()
         self.action_count += 1
-        return Transition(before, Observation(after, self.current_name, self.current_game_state),
-                          self.image_index - 1,
+        return Transition(before, after, self.image_index - 1,
                           self.action_count, tick_before, self.tick)
 
     def save_state(self, filename: str) -> None:

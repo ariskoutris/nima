@@ -121,9 +121,9 @@ class Game:
 
 
 def start(tmp_path, game=None) -> GameplaySession:
-    """Return a session over ``game`` (a fresh Game by default) with its first frame captured."""
+    """Return a session over ``game`` (a fresh Game by default) that has observed once."""
     session = GameplaySession(game or Game(), tmp_path)
-    session.capture()
+    session.observe()
     return session
 
 

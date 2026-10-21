@@ -196,13 +196,12 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
             case Turn():
                 log.record_turn(result, transition)
                 turns += 1
-    final = session.current
-    final_name = session.current_name
-    final.save_png(output / "frames/final.png")
+    final = session.last_observation
+    final.frame.save_png(output / "frames/final.png")
     (output / "states").mkdir(exist_ok=True)
     (output / "states/final.state").write_bytes(game.save_state())
     (output / "states/final.sav").write_bytes(game.save_ram())
-    log.record_run_stop(ended, outcome, session.action_count, case.limit, final_name)
+    log.record_run_stop(ended, outcome, session.action_count, case.limit, final.screenshot)
     reached = reached_at is not None
     result = {"case": case.id, "task": case.task, "reached": reached,
               "stopped_reached": ended == "stop" and reached,
