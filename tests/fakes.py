@@ -76,7 +76,10 @@ def votes(*answers: bool) -> Callable[[], bool]:
 
 
 class Game:
-    """An emulator stand-in that records inputs and keeps state and save RAM as bytes."""
+    """An emulator stand-in that records inputs and keeps state and save RAM as bytes.
+
+    Its memory reads as zeros: no textbox, no menu cursor and no player position.
+    """
 
     def __init__(self) -> None:
         self.frame = FRAME
@@ -112,6 +115,9 @@ class Game:
 
     def load_save_ram(self, data: bytes) -> None:
         self.ram = data
+
+    def read_memory(self, address: int, size: int) -> bytes:
+        return bytes(size)
 
 
 def start(tmp_path, game=None) -> GameplaySession:

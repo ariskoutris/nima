@@ -255,8 +255,7 @@ def _content(context: Context, frame: Frame) -> list[dict]:
         text.append("# Earlier turns (oldest first)")
     content = [{"type": "text", "text": "\n\n".join(text)}]
     for age, entry in zip(range(len(context.memory), 0, -1), context.memory, strict=True):
-        after = [] if entry.observation.game_state is None else [
-            f"Game state: {describe(entry.observation.game_state)}"]
+        after = [f"Game state: {describe(entry.observation.game_state)}"]
         if entry.reasoning is None:
             heading = f"## Turn -{age} (operator)"
         else:
@@ -266,11 +265,10 @@ def _content(context: Context, frame: Frame) -> list[dict]:
         content += [{"type": "text", "text": heading}, _image(entry.observation.frame),
                     {"type": "text", "text": "\n".join(after)}]
     current = [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
-    if context.game_state is not None:
-        state = context.game_state
-        you = [] if state.species is None else [f"You play as {state.species}."]
-        current.append({"type": "text", "text": "# Game state\n" + "\n".join(
-            [*you, describe(state), *nearby(state)])})
+    state = context.game_state
+    you = [] if state.species is None else [f"You play as {state.species}."]
+    current.append({"type": "text", "text": "# Game state\n" + "\n".join(
+        [*you, describe(state), *nearby(state)])})
     return content + current
 
 

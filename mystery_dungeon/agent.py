@@ -41,7 +41,7 @@ class Context:
     task: str
     knowledge: str
     memory: tuple[MemoryEntry, ...]
-    game_state: GameState | None = None  # with the current frame
+    game_state: GameState  # with the current frame
     scratchpad: tuple[str, ...] = ()  # shown numbered from 1
 
 

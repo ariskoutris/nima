@@ -56,11 +56,11 @@ class GameState:
 @dataclass(frozen=True)
 class Observation:
     """A frame, the path of its screenshot relative to the session output, and the game state
-    when it was captured (None without RAM)."""
+    when it was captured."""
 
     frame: Frame
     screenshot: str
-    game_state: GameState | None = None
+    game_state: GameState
 
 
 @dataclass(frozen=True)
@@ -154,17 +154,14 @@ class GameplaySession:
         self.tick = 0
         self.current: Frame | None = None
         self.current_name = ""
-        self.current_game_state: GameState | None = None
-        # Test doubles aren't GbaEmulators and run without RAM-timed captures.
-        self.ram = GameRam(emulator) if isinstance(emulator, GbaEmulator) else None
+        self.current_game_state = GameState(None, None, None)
+        self.ram = GameRam(emulator)
 
-    def ram_state(self) -> RamState | None:
-        return self.ram.state() if self.ram is not None else None
+    def ram_state(self) -> RamState:
+        return self.ram.state()
 
-    def game_state(self) -> GameState | None:
-        """Return the game state the model may know, or None without RAM."""
-        if self.ram is None:
-            return None
+    def game_state(self) -> GameState:
+        """Return the game state the model may know."""
         position = self.ram.player_position()
         characters = () if position is None else tuple(
             Character(self.ram.species_name(npc.species), npc.position, npc.direction)
@@ -218,8 +215,6 @@ class GameplaySession:
         """
         if self.current is None:
             raise RuntimeError("capture a frame before observing")
-        if self.ram is None:
-            return Observation(self.current, self.current_name, self.current_game_state)
         waited = self._idle_until(lambda: not self.ram.state().text_printing, TEXT_WAIT_LIMIT)
         if self.ram.state().mode == "menu":
             waited += self._idle_until(self.ram.menu_cursor_shown,

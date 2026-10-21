@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.actions import Outcome
     from mystery_dungeon.agent import Context, ModelError, Turn
     from mystery_dungeon.model import Model, Reply
-    from mystery_dungeon.session import GameState, Observation, Transition
+    from mystery_dungeon.session import Observation, Transition
 
 FORMAT_VERSION = 18  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
@@ -122,9 +122,9 @@ class RunLog:
         model_input = {"task": context.task,
                        "scratchpad": list(context.scratchpad),
                        "screenshot": observation.screenshot,
-                       "game_state": _json_state(context.game_state),
+                       "game_state": dataclasses.asdict(context.game_state),
                        "memory": [{"screenshot": entry.observation.screenshot,
-                                   "game_state": _json_state(entry.observation.game_state),
+                                   "game_state": dataclasses.asdict(entry.observation.game_state),
                                    "action": to_json(entry.action),
                                    "reasoning": entry.reasoning}
                                   for entry in context.memory]}
@@ -149,9 +149,6 @@ def _reply_fields(turn: Turn) -> dict:
             "scratchpad_problem": turn.scratchpad_problem,
             "findings": [dataclasses.asdict(finding) for finding in turn.findings]}
 
-
-def _json_state(state: GameState | None) -> dict | None:
-    return None if state is None else dataclasses.asdict(state)
 
 
 def _append(path: Path, row: dict) -> dict:

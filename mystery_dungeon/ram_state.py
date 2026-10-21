@@ -6,7 +6,6 @@ import hashlib
 import re
 import struct
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 
 from emulator import GbaEmulator
@@ -57,9 +56,14 @@ _ESCAPED = re.compile(r"~([0-9a-fA-F]{2})")
 _CODE = re.compile(r"#[cC].|#[A-Za-z]", re.DOTALL)
 
 
-@cache
-def _rom_sha1(rom: Path) -> str:
-    return hashlib.sha1(rom.read_bytes()).hexdigest()  # one hash per ROM path, not per session
+def check_rom(rom: Path) -> None:
+    """Check that ``rom`` is the ROM whose RAM layout GameRam reads.
+
+    Raises:
+        ValueError: for any other ROM.
+    """
+    if hashlib.sha1(rom.read_bytes()).hexdigest() != ROM_SHA1:
+        raise ValueError(f"RAM addresses require the Red Rescue Team ROM {ROM_SHA1}")
 
 
 def _ewram(pointer: int, size: int) -> bool:
@@ -92,15 +96,9 @@ class RamState:
 
 
 class GameRam:
-    """Read game state from RAM.
-
-    Raises:
-        ValueError: when the emulator's ROM isn't the one these addresses match.
-    """
+    """Read game state from the RAM of the ROM that check_rom accepts."""
 
     def __init__(self, game: GbaEmulator) -> None:
-        if _rom_sha1(game.rom) != ROM_SHA1:
-            raise ValueError(f"RAM addresses require the Red Rescue Team ROM {ROM_SHA1}")
         self._game = game
 
     def _value(self, address: int, fmt: str) -> int:

@@ -64,10 +64,12 @@ def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
     assert second["ms"] >= 0 and second["response"] == response
     assert second["internal_reasoning"] == "Thinking."
     assert second["tokens"] == {"prompt": 900, "output": 40, "reasoning": 20}
+    unknown = {"position": None, "tile": None, "direction": None, "characters": [],
+               "species": None}
     assert second["input"] == {
         "task": "Find exit", "scratchpad": [],
-        "screenshot": "frames/000001.png", "game_state": None,
-        "memory": [{"screenshot": "frames/000000.png", "game_state": None,
+        "screenshot": "frames/000001.png", "game_state": unknown,
+        "memory": [{"screenshot": "frames/000000.png", "game_state": unknown,
                     "action": {"type": "press", "button": "A"}, "reasoning": "Scripted."}]}
 
 

@@ -16,7 +16,7 @@ from mystery_dungeon.actions import Stop
 from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
-from mystery_dungeon.ram_state import GameRam
+from mystery_dungeon.ram_state import GameRam, check_rom
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
     HOLD_TICKS,
@@ -167,8 +167,6 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     agent.set_task(case.task)
     session = GameplaySession(game, output)
     session.load(checkpoints[case.start])
-    if session.ram is None:
-        raise ValueError("benchmark grading needs a real emulator")
     grader = Grader(case, session.ram)
     started = time.monotonic()
     ended = "limit"
@@ -245,6 +243,7 @@ def main() -> None:
                         help="text the agent starts out knowing")
     parser.add_argument("--case", action="append", choices=[case.id for case in CASES])
     args = parser.parse_args()
+    check_rom(args.rom)
     settings = read_settings()
     model = ChatModel(settings)  # fails on a missing key before any output exists
     selected = [case for case in CASES if args.case is None or case.id in args.case]

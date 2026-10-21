@@ -15,6 +15,7 @@ from mystery_dungeon.ram_state import (
     GROUND_LIVES,
     TEAM_POKEMON,
     GameRam,
+    check_rom,
 )
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
@@ -93,7 +94,6 @@ class PatchedRam:
     """A real emulator whose memory reads see ``patches`` laid over RAM."""
 
     def __init__(self, game: GbaEmulator, patches: dict[int, bytes]) -> None:
-        self.rom = game.rom
         self._game = game
         self._patches = patches
 
@@ -226,13 +226,11 @@ def test_agent_waits_before_each_lombre_dialogue_turn(tmp_path):
         assert session.action_count == 9
 
 
-def test_game_ram_rejects_another_rom(tmp_path):
-    class OtherRom:
-        rom = tmp_path / "other.gba"
-
-    OtherRom.rom.write_bytes(b"not red rescue team")
+def test_check_rom_rejects_another_rom(tmp_path):
+    rom = tmp_path / "other.gba"
+    rom.write_bytes(b"not red rescue team")
     with pytest.raises(ValueError, match="Red Rescue Team ROM"):
-        GameRam(OtherRom())
+        check_rom(rom)
 
 
 def test_textbox_text_reads_the_open_page():

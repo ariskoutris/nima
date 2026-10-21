@@ -15,6 +15,7 @@ from mystery_dungeon.agent import (
     Turn,
 )
 from mystery_dungeon.model import LineChange, ScratchpadEdit
+from mystery_dungeon.session import GameState
 
 
 def agent_with(model, task="Find exit", knowledge=""):
@@ -29,7 +30,8 @@ def test_turns_act_on_the_task_knowledge_and_memory(tmp_path):
     session = start(tmp_path)
     agent.act(session)
     turn, _ = agent.act(session)
-    assert turn.context == Context("Find exit", "Use the map.", turn.context.memory)
+    assert turn.context == Context("Find exit", "Use the map.", turn.context.memory,
+                                   GameState(None, None, None))
     assert [entry.action for entry in turn.context.memory] == [Press("A")]
     assert model.calls[-1] == ("call", turn.context, turn.observation.frame)
 

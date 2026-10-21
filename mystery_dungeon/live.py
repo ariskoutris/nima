@@ -19,6 +19,7 @@ from mystery_dungeon import CORE, KNOWLEDGE, ROM, STATE
 from mystery_dungeon.actions import GAME_ACTIONS, GameAction, Stop
 from mystery_dungeon.agent import Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
+from mystery_dungeon.ram_state import check_rom
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
     HOLD_TICKS,
@@ -328,9 +329,8 @@ class LiveRun:
             return
         self._published_image = session.image_index
         session.save_state("latest.state")
-        state = session.ram_state()
         with self._condition:
-            self._game_state = asdict(state) if state else None
+            self._game_state = asdict(session.ram_state())
             self._condition.notify_all()
         with self._screen_condition:
             self._stream_tick = session.tick
@@ -464,6 +464,7 @@ def main() -> None:
     args = parser.parse_args()
     if min(args.hold_ticks, args.release_ticks) < 1:
         parser.error("tick counts must be positive")
+    check_rom(args.rom)
     model = ChatModel(read_settings())  # fails on a missing key before any output exists
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     run = LiveRun(args.rom, args.core, args.state, output, model,

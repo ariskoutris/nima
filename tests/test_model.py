@@ -25,8 +25,10 @@ from mystery_dungeon.model import (
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.session import Character, GameState, Observation
 
-MEMORY = (MemoryEntry(Observation(FRAME, "before.png"), Press("UP"), "Walk up to the door."),
-          MemoryEntry(Observation(FRAME, "manual.png"), Press("A"), None))
+UNKNOWN = GameState(None, None, None)
+MEMORY = (MemoryEntry(Observation(FRAME, "before.png", UNKNOWN), Press("UP"),
+                      "Walk up to the door."),
+          MemoryEntry(Observation(FRAME, "manual.png", UNKNOWN), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
 EMPTY = {"scratchpad": {"rewrite": None, "lines": [], "add": []}, "findings": []}
@@ -62,7 +64,7 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
                                  {"line": 2, "text": None}]},
         "findings": [CHARIZARD], "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
-    context = Context("Find the exit", "Avoid walls", MEMORY,
+    context = Context("Find the exit", "Avoid walls", MEMORY, UNKNOWN,
                       scratchpad=("Left the house.", "The exit is south, a guess."))
     answer = chat_model.call(context, FRAME)
     assert answer == Reply(Press("DOWN"), "The door is ahead.",
@@ -84,9 +86,10 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
     assert texts == [user["content"][0]["text"],
-                     "## Turn -2", None, "Reasoning: Walk up to the door.\nAction: UP",
-                     "## Turn -1 (operator)", None, "Action: A",
-                     "# Current screenshot", None]
+                     "## Turn -2", None,
+                     "Game state: unknown\nReasoning: Walk up to the door.\nAction: UP",
+                     "## Turn -1 (operator)", None, "Game state: unknown\nAction: A",
+                     "# Current screenshot", None, "# Game state\nunknown"]
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]
@@ -103,7 +106,7 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
 def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
     answering(monkeypatch, reply({"reasoning": "The dialogue closed.", **EMPTY,
                                   "action": action}))
-    answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY), FRAME)
+    answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY, UNKNOWN), FRAME)
     assert answer == Reply(Stop(outcome), "The dialogue closed.", ScratchpadEdit(), ())
 
 
@@ -111,13 +114,13 @@ def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
 def test_an_empty_rewrite_means_no_rewrite(monkeypatch, add):
     answering(monkeypatch, reply({"reasoning": "Wait.", "findings": [], "action": "WAIT",
                                   "scratchpad": {"rewrite": [], "lines": [], "add": add}}))
-    edit = ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).scratchpad
+    edit = ChatModel(SETTINGS).call(Context("Talk", "", (), UNKNOWN), FRAME).scratchpad
     assert edit == ScratchpadEdit(add=tuple(add)) and edit.problem(0) is None
 
 
 def test_an_empty_scratchpad_is_shown_as_empty(monkeypatch):
     sent = answering(monkeypatch, reply({"reasoning": "Wait.", **EMPTY, "action": "WAIT"}))
-    assert ChatModel(SETTINGS).call(Context("Talk", "", ()), FRAME).findings == ()
+    assert ChatModel(SETTINGS).call(Context("Talk", "", (), UNKNOWN), FRAME).findings == ()
     text = json.loads(sent[0].data)["messages"][1]["content"][0]["text"]
     assert "# Your scratchpad\n(empty)\n\n# Actions" in text
 
@@ -125,7 +128,7 @@ def test_an_empty_scratchpad_is_shown_as_empty(monkeypatch):
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
     sent = answering(monkeypatch, reply({"reasoning": "Wait.", **EMPTY, "action": "WAIT"}))
     local = ChatModel(ChatSettings("http://localhost/v1/chat/completions", "local"))
-    local.call(Context("Talk", "", ()), FRAME)
+    local.call(Context("Talk", "", (), UNKNOWN), FRAME)
     assert sent[0].get_header("Authorization") is None
     assert local.name == "local"
 
@@ -171,7 +174,7 @@ def test_invalid_answers_raise_and_keep_the_response(monkeypatch, response, mess
     answering(monkeypatch, response)
     chat_model = ChatModel(SETTINGS)
     with pytest.raises(ValueError, match=message):
-        chat_model.call(Context("Talk", "", ()), FRAME)
+        chat_model.call(Context("Talk", "", (), UNKNOWN), FRAME)
     assert chat_model.last_response == response
 
 
