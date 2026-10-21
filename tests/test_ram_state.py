@@ -37,7 +37,7 @@ def test_dialogue_waits_for_full_page(tmp_path, checkpoint, ready_mode):
         partial = session.current.rgba
         actions = session.action_count
         ticks = session.tick
-        session.wait_for_text()
+        session.observe()
         assert session.tick > ticks
         assert session.action_count == actions
         assert GameRam(game).state().mode == ready_mode
@@ -141,6 +141,7 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
 
     with GbaEmulator(ROM, CORE) as game:
         restore(game, read_ss0(CHECKPOINTS / "shop-interact.ss0"))
+        assert not GameRam(game).menu_cursor_shown()
         press(game, "A")
         while GameRam(game).state().text_printing:
             game.step(4)
@@ -170,10 +171,10 @@ def test_menu_observation_shows_blinking_cursor_without_an_action(tmp_path):
                 session = GameplaySession(game, tmp_path / name / str(phase))
                 session.capture()
                 assert GameRam(game).state().mode == "menu"
-                observed = session.current_frame()
+                observed = session.observe().frame
                 assert light_pixels(observed, rect) > threshold
                 assert session.action_count == 0
-                assert session.tick == 8
+                assert session.tick <= 8  # the cursor is hidden for at most half a blink
                 assert (session.output / session.current_name).is_file()
 
 

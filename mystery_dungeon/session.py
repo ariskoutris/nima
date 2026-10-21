@@ -6,7 +6,7 @@ import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import assert_never
+from typing import Callable, assert_never
 
 from emulator import Frame, GbaEmulator
 from mystery_dungeon.actions import GameAction, Press, Wait
@@ -15,14 +15,11 @@ from mystery_dungeon.ram_state import GameRam, RamState
 HOLD_TICKS = 8  # ticks each action holds its input
 RELEASE_TICKS = 4  # ticks with no input after each action
 TEXT_WAIT_LIMIT = 300  # most ticks spent waiting for one page of text to print
-TEXT_POLL_TICKS = 4  # ticks between text-printing checks
 # Menus that follow dialogue (e.g. the shop's choices) open a few ticks after the last glyph.
 MENU_AFTER_TEXT_TICKS = 12
-# Ticks between the two menu captures, so one of them shows the blinking cursor;
-# test_menu_observation_shows_blinking_cursor_without_an_action covers it.
-CURSOR_BLINK_TICKS = 8
-BLINK_PIXEL_DELTA = 100  # summed RGB difference for a pixel to count as blinking
-BLINK_BLOCK_PIXELS = 16  # side of the square regions compared for the strongest blink
+# The menu cursor blinks 8 ticks on and 8 off, measured in the shop and dungeon menus; waiting
+# one full blink shows it from any phase.
+CURSOR_BLINK_TICKS = 16
 # Characters within this many pixels of the player across and down count as on screen: the
 # screen is 240x160 and the camera centres the player except at map edges.
 VISIBLE_X, VISIBLE_Y = 120, 80
@@ -141,26 +138,6 @@ def perform(game: GbaEmulator, action: GameAction, hold_ticks: int,
     game.step(release_ticks)
 
 
-def _visible_cursor_frame(first: Frame, second: Frame) -> Frame:
-    """Return whichever frame is brighter at the strongest local blink."""
-    if (first.width, first.height) != (second.width, second.height):
-        return second
-    blocks: dict[tuple[int, int], int] = {}
-    for index in range(0, len(first.rgba), 4):
-        before = first.rgba[index:index + 3]
-        after = second.rgba[index:index + 3]
-        if sum(abs(a - b) for a, b in zip(before, after, strict=True)) <= BLINK_PIXEL_DELTA:
-            continue
-        pixel = index // 4
-        block = (pixel % first.width // BLINK_BLOCK_PIXELS,
-                 pixel // first.width // BLINK_BLOCK_PIXELS)
-        blocks[block] = blocks.get(block, 0) + sum(after) - sum(before)
-    # ponytail: local brightness is a visual heuristic; use cursor detection if another
-    # menu animation dominates it.
-    strongest = max(blocks.values(), key=abs, default=0)
-    return second if strongest >= 0 else first
-
-
 class GameplaySession:
     """Run the emulator for the agent and save every captured frame as a screenshot."""
 
@@ -218,28 +195,10 @@ class GameplaySession:
         self.action_count = 0
         self.capture()
 
-    def wait_for_text(self) -> None:
-        """Run without input until the current text page is fully printed, then capture it."""
-        if self.current is None:
-            raise RuntimeError("capture a frame before waiting")
-        state = self.ram_state()
-        waited = 0
-        while state is not None and state.text_printing and waited < TEXT_WAIT_LIMIT:
-            ticks = min(TEXT_POLL_TICKS, TEXT_WAIT_LIMIT - waited)
-            self.emulator.step(ticks)
-            self.tick += ticks
-            waited += ticks
-            state = self.ram_state()
-        if waited:
-            if state is not None and not state.text_printing and state.mode == "menu":
-                self.emulator.step(MENU_AFTER_TEXT_TICKS)
-                self.tick += MENU_AFTER_TEXT_TICKS
-            self.capture()
-
-    def capture(self, frame: Frame | None = None) -> Frame:
-        """Make the current or supplied frame the session's current frame and save it."""
+    def capture(self) -> Frame:
+        """Record the emulator's screen and game state as current, and save the screenshot."""
         self.image_index += 1
-        self.current = frame if frame is not None else self.emulator.screenshot()
+        self.current = self.emulator.screenshot()
         self.current_game_state = self.game_state()
         self.current_name = f"frames/{self.image_index:06d}.png"
         (self.output / "frames").mkdir(parents=True, exist_ok=True)
@@ -251,26 +210,31 @@ class GameplaySession:
         self.emulator.step(ticks)
         self.tick += ticks
 
-    def current_frame(self) -> Frame:
-        """Return the current frame; in menus, wait through a cursor blink to show the cursor."""
+    def observe(self) -> Observation:
+        """
+        Return the current frame and game state.
+
+        Waits for text to print fully and the blinking cursor to be visible.
+        """
         if self.current is None:
             raise RuntimeError("capture a frame before observing")
-        state = self.ram_state()
-        if state is None or state.mode != "menu":
-            return self.current
-        first = self.current
-        self.emulator.step(CURSOR_BLINK_TICKS)
-        self.tick += CURSOR_BLINK_TICKS
-        second = self.emulator.screenshot()
-        if (next_state := self.ram_state()) is None or next_state.mode != "menu":
-            return self.capture(second)
-        return self.capture(_visible_cursor_frame(first, second))
+        if self.ram is None:
+            return Observation(self.current, self.current_name, self.current_game_state)
+        waited = self._idle_until(lambda: not self.ram.state().text_printing, TEXT_WAIT_LIMIT)
+        if self.ram.state().mode == "menu":
+            waited += self._idle_until(self.ram.menu_cursor_shown,
+                                       MENU_AFTER_TEXT_TICKS + CURSOR_BLINK_TICKS)
+        if waited:
+            self.capture()
+        return Observation(self.current, self.current_name, self.current_game_state)
 
-    def observe(self) -> Observation:
-        """Return a readable frame without skipping cutscenes or advancing dialogue."""
-        self.wait_for_text()
-        frame = self.current_frame()
-        return Observation(frame, self.current_name, self.current_game_state)
+    def _idle_until(self, done: Callable[[], bool], limit: int) -> int:
+        """Idle until ``done()`` holds or ``limit`` ticks pass; return the ticks idled."""
+        ticks = 0
+        while ticks < limit and not done():
+            self.idle()
+            ticks += 1
+        return ticks
 
     def apply(self, action: GameAction) -> Transition:
         """Perform ``action`` and capture the result."""

@@ -42,6 +42,14 @@ INFO_IS_LEADER, INFO_DIRECTION = 0x7, 0x46  # EntityInfo.isTeamLeader, .action.d
 DIRECTION_MASK = 7
 DIRECTIONS = ("south", "southeast", "east", "northeast",
               "north", "northwest", "west", "southwest")
+# Object attribute memory: 128 sprites of three 16-bit attributes and a padding halfword.
+OAM, OAM_SPRITES, OAM_SPRITE_SIZE = 0x07000000, 128, 8
+OAM_TILE_MASK, OAM_Y_MASK = 0x3FF, 0xFF
+SCREEN_HEIGHT = 160
+# The menu cursor's sprite tile, measured in the shop popup, the shop list, the dungeon menu
+# and the dungeon item list. While the cursor blinks off, the game parks its sprite at
+# y=SCREEN_HEIGHT with tile 0 instead of disabling it.
+CURSOR_TILE = 0x3F4
 
 # Formatting codes in dialogue text: "~27" is a hex-escaped character, "#c\x06" and
 # "#C5" set a colour, and other "#X" codes reset colour or pause printing.
@@ -178,6 +186,15 @@ class GameRam:
         else:
             return None
         return DIRECTIONS[direction & DIRECTION_MASK]
+
+    def menu_cursor_shown(self) -> bool:
+        """Return whether a menu cursor is drawn on screen this tick."""
+        oam = self._game.read_memory(OAM, OAM_SPRITES * OAM_SPRITE_SIZE)
+        for offset in range(0, len(oam), OAM_SPRITE_SIZE):
+            y, _, tile = struct.unpack_from("<HHH", oam, offset)
+            if tile & OAM_TILE_MASK == CURSOR_TILE and y & OAM_Y_MASK < SCREEN_HEIGHT:
+                return True
+        return False
 
     def npc_position(self, species: int) -> tuple[int, int] | None:
         """Return the ground position in pixels of the first loaded ``species``, or None."""

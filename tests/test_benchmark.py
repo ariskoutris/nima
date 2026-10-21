@@ -86,10 +86,10 @@ def test_lombre_finish_requires_closed_dialogue(town, tmp_path):
     session.capture()
     for index in range(9):
         session.apply(Press("A"))
-        session.wait_for_text()
+        session.observe()
         assert grader.reached() == (index == 8)
     session.apply(Press("A"))
-    session.wait_for_text()
+    session.observe()
     assert not grader.reached()
 
 
