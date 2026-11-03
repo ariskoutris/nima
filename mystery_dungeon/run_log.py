@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.session import Observation, Transition
 
 FORMAT_VERSION = 22  # of run and benchmark output; bump when a field changes
-RECENT_ROWS = 50  # action messages retained in the live feed
+RECENT_ROWS = 50  # turn messages retained in the live feed
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
 
@@ -64,6 +64,7 @@ class RunLog:
         self.model = LoggedModel(model, self._calls)
         self._turns = 0
         self._recent: deque[dict] = deque(maxlen=RECENT_ROWS)
+        self._recent_id = 0
         snapshot = None
         if knowledge:
             data = knowledge.encode("utf-8")
@@ -75,7 +76,7 @@ class RunLog:
         }, indent=2) + "\n")
 
     def recent(self) -> list[dict]:
-        """Return action rows since the last reset, newest first."""
+        """Return turns and manual actions since the last reset, newest first, with feed IDs."""
         return list(reversed(self._recent))
 
     def record_turn(self, turn: Turn, transition: Transition | None) -> None:
@@ -86,13 +87,14 @@ class RunLog:
         """
         match turn.action:
             case Stop(outcome):
-                self._write_turn("stop", turn.observation, turn.context, {
+                row = self._write_turn("stop", turn.observation, turn.context, {
                     **_reply_fields(turn), "outcome": outcome})
+                self._remember(row)
             case action if transition is not None:
                 row = self._write_turn("action", turn.observation, turn.context, {
                     **_reply_fields(turn), "action": to_json(action),
                     **_transition_fields(transition)})
-                self._recent.append(row)
+                self._remember(row)
             case _:
                 raise ValueError("a game action needs the transition it caused")
 
@@ -101,12 +103,13 @@ class RunLog:
                          {"error": error.message})
 
     def record_manual(self, action: GameAction, transition: Transition) -> None:
-        self._recent.append(self._write("action", {
+        self._remember(self._write("action", {
             "source": "manual", "action": to_json(action), "model_ms": 0,
             **_transition_fields(transition)}))
 
     def record_reset(self, screenshot: str) -> None:
         self._recent.clear()
+        self._recent_id = 0
         self._write("reset", {"screenshot": screenshot})
 
     def record_run_stop(self, ended: Ending, outcome: Outcome | None, actions: int, limit: int,
@@ -124,6 +127,10 @@ class RunLog:
                 self._write("review", {"task": task, "error": None,
                                        "findings": [dataclasses.asdict(finding)
                                                     for finding in findings]})
+
+    def _remember(self, row: dict) -> None:
+        self._recent_id += 1
+        self._recent.append({**row, "id": self._recent_id})
 
     def _write_turn(self, event: str, observation: Observation, context: Context,
                     fields: dict) -> dict:

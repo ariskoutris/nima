@@ -99,7 +99,7 @@ def test_stop_and_model_error_rows(tmp_path):
     assert stop["note"] is None
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
-    assert not log.recent()
+    assert log.recent() == [{**stop, "id": 1}]
 
 
 def test_a_game_action_without_its_transition_is_rejected(tmp_path):
@@ -124,3 +124,14 @@ def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):
     assert [reset["event"], run_stop["event"]] == ["reset", "run_stop"]
     assert {"ended": "limit", "outcome": None, "actions": 42, "limit": 42}.items() <= (
         run_stop.items())
+
+
+def test_feed_ids_distinguish_stops_from_actions_at_the_same_observation(tmp_path):
+    log, agent, session = setup(tmp_path, ScriptedModel(stop=votes(True, True, False)))
+    for _ in range(3):
+        log.record_turn(*agent.act(session))
+    recent = log.recent()
+    assert [row["id"] for row in recent] == [3, 2, 1]
+    assert [row["event"] for row in recent] == ["action", "stop", "stop"]
+    assert len({row["screenshot"] for row in recent}) == 1
+    assert all("id" not in row for row in turns(tmp_path))

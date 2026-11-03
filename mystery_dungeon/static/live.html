@@ -21,7 +21,8 @@
     .eyebrow { color: var(--accent); font-size: .7rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
     h1 { margin: 3px 0 0; font-size: 1rem; letter-spacing: -.03em; }
     h2 { margin: 0; font-size: .8rem; font-weight: 700; }
-    .status { gap: 9px; padding: 7px 10px; border: 1px solid var(--line); color: var(--muted); font-size: .75rem; text-transform: capitalize; }
+    .status { min-width: 0; gap: 9px; padding: 7px 10px; border: 1px solid var(--line); color: var(--muted); font-size: .75rem; text-transform: capitalize; }
+    #status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .dot { width: 8px; height: 8px; flex: none; background: #a8b4c2; }
     .status.running .dot, .status.thinking .dot { background: #a7dbab; box-shadow: 0 0 9px #a7dbab44; }
     .status.resetting .dot { background: var(--accent); }
@@ -64,10 +65,13 @@
     .screen-wrap { position: relative; aspect-ratio: 3/2; display: grid; place-items: center; border: 3px solid #080f1c; outline: 1px solid #62708a; background: #080f1c; overflow: hidden; }
     #screen { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; image-rendering: pixelated; }
     .screen-empty { color: var(--muted); font-size: .85rem; }
-    .screen-activity { display: flex; align-items: center; gap: 10px; padding: 9px 0 0; font-size: .75rem; color: var(--accent); }
+    .screen-activity { display: flex; align-items: center; gap: 10px; height: 32px; flex: none; padding: 9px 0 0; overflow: hidden; white-space: nowrap; font-size: .75rem; color: var(--accent); }
+    /* Status changes reserve their space so the game display does not resize. */
+    .screen-activity[hidden] { display: flex !important; visibility: hidden; }
     .screen-activity strong { font-weight: 500; }
     .screen-activity small { display: none; }
-    .screen-foot { justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 10px 0 0; font-size: .7rem; color: var(--muted); }
+    .screen-foot { justify-content: space-between; flex-wrap: nowrap; gap: 4px 12px; min-height: 30px; flex: none; padding: 10px 0 0; font-size: .7rem; color: var(--muted); }
+    #screen-state { min-width: 0; text-align: right; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .controls { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
     label { display: block; margin: 0 0 7px; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
     textarea { display: block; width: 100%; height: 66px; min-height: 66px; max-height: 160px; resize: vertical; padding: 10px 12px; border: 1px solid #71829c; border-radius: 0; background: #101827; color: #f0eddb; font-size: .85rem; }
@@ -86,8 +90,7 @@
     .manual summary { color: var(--muted); font-size: .78rem; }
     .pad { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
     .pad .button { min-width: 42px; }
-    .feedback { margin-top: 10px; color: #ffb9ad; font-size: .78rem; overflow-wrap: anywhere; }
-    .feedback:empty { display: none; }
+    .feedback { min-height: 1.5em; margin-top: 10px; color: #ffb9ad; font-size: .78rem; overflow-wrap: anywhere; }
     .task-memory .card-head { margin-bottom: 16px; }
     .task-memory-body h3 { margin: 24px 0 10px; color: var(--accent); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
     .task-memory-body ul { margin: 0; padding: 0; list-style: none; }
@@ -105,7 +108,8 @@
       .game-column { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
       .game { display: flex; flex-direction: column; flex: 1; min-height: 210px; }
       .screen-wrap { flex: 1; min-height: 0; aspect-ratio: auto; }
-      .controls { flex: none; }
+      #screen-state { min-width: 0; text-align: right; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .controls { flex: none; }
     }
     @media (max-width: 999px) {
       .layout { grid-template-columns: 1fr; }
@@ -193,7 +197,10 @@
         item.tabIndex = selected ? 0 : -1;
         $(item.getAttribute('aria-controls')).hidden = !selected;
       }
-      if (tab === $('live-tab') && followLatest) scrollToLatest();
+      if (tab === $('live-tab')) {
+        if (currentState) renderTurns(currentState.history);
+        if (followLatest) scrollToLatest();
+      }
     }
     for (const [index, tab] of viewTabs.entries()) {
       tab.addEventListener('click', () => showView(tab));
@@ -326,19 +333,21 @@
     }
 
     function renderTurns(rows) {
+      // Hidden messages have no measurable height; reconcile after revealing the feed.
+      if ($('live-view').hidden) return;
       const feed = $('turn-feed'), messages = $('turn-messages');
-      const ids = new Set(rows.map(item => String(item.index)));
+      const ids = new Set(rows.map(item => String(item.id)));
       const scrollTop = feed.scrollTop;
       let removedHeight = 0;
       for (const message of [...messages.children]) {
-        if (ids.has(message.dataset.index)) continue;
+        if (ids.has(message.dataset.id)) continue;
         removedHeight += message.getBoundingClientRect().height;
         message.remove();
       }
-      const existing = new Set([...messages.children].map(message => message.dataset.index));
+      const existing = new Set([...messages.children].map(message => message.dataset.id));
       let appended = false;
       for (const item of [...rows].reverse()) {
-        if (existing.has(String(item.index))) continue;
+        if (existing.has(String(item.id))) continue;
         messages.append(turnMessage(item));
         appended = true;
       }
@@ -351,13 +360,13 @@
 
     function turnMessage(item) {
       const message = element('article', undefined, 'turn-message');
-      message.dataset.index = String(item.index);
+      message.dataset.id = String(item.id);
       const header = element('div', undefined, 'card-head');
-      header.append(element('h3', `Turn #${item.action_number}`),
-        element('span', `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms · tick ${item.tick_before}`, 'muted'));
+      header.append(element('h3', `Turn #${item.id}`),
+        element('span', `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms${item.event === 'stop' ? '' : ` · tick ${item.tick_before}`}`, 'muted'));
       const action = element('div', undefined, 'action-strip');
       action.append(element('span', 'Action', 'eyebrow'),
-        element('span', actionName(item.action), `choice ${item.source === 'manual' ? 'manual-choice' : ''}`));
+        element('span', item.event === 'stop' ? `STOP · ${item.outcome.toUpperCase()}` : actionName(item.action), `choice ${item.source === 'manual' ? 'manual-choice' : ''}`));
       message.append(header);
       if (item.task) message.append(element('div', `Task: ${item.task}`, 'detail'));
       message.append(action, element('p', item.reasoning || (item.source === 'manual'
@@ -366,7 +375,7 @@
       const screenshot = element('img', undefined, 'observation');
       screenshot.alt = `Screen turn #${item.action_number} was chosen from`;
       screenshot.loading = 'lazy';
-      screenshot.src = `/api/observation/${item.index}`;
+      screenshot.src = `/api/observation/${item.screenshot.split('/').pop().replace('.png', '')}`;
       observation.append(element('summary', 'View action observation'), screenshot);
       message.append(observation);
       return message;

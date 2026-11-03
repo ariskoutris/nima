@@ -29,10 +29,10 @@ function page() {
       for (const node of nodes) if (typeof node === 'object') node.parent = this;
     }
     remove() { this.parent.children = this.parent.children.filter(node => node !== this); }
-    getBoundingClientRect() { return {height: 100}; }
+    getBoundingClientRect() { return {height: nodes['live-view'].hidden ? 0 : 100}; }
     get scrollHeight() { return this.attrs.id === 'turn-feed' ? nodes['turn-messages'].children.length * 100 : 0; }
-    get scrollTop() { return this.position; }
-    set scrollTop(value) { this.position = this.attrs.id === 'turn-feed' ? Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)) : value; }
+    get scrollTop() { return this.attrs.id === 'turn-feed' && nodes['live-view'].hidden ? 0 : this.position; }
+    set scrollTop(value) { if (this.attrs.id === 'turn-feed' && nodes['live-view'].hidden) return; this.position = this.attrs.id === 'turn-feed' ? Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)) : value; }
     replaceChildren(...nodes) { this.children = nodes; }
     get childElementCount() { return this.children.length; }
     focus() { focused = this; }
@@ -60,7 +60,7 @@ function page() {
 function state() {
   return {status: 'thinking', running: true, game_state: {}, model: 'sample', output: 'sample',
     task: 'Explore', actions: ['A'], notes: ['Found: Exit'], findings: [], reset_count: 0,
-    history: [{index: 0, action_number: 1, action: {type: 'press', button: 'A'}, source: 'agent',
+    history: [{id: 1, event: 'action', screenshot: 'frames/000000.png', index: 0, action_number: 1, action: {type: 'press', button: 'A'}, source: 'agent',
       reasoning: '<b>Reasoning stays plain text</b>', task: 'Explore', model_ms: 10, tick_before: 20}]};
 }
 
@@ -86,7 +86,7 @@ test('turns and notes support keyboard navigation and retain reading position', 
 });
 
 function actions(count, start = 0) {
-  return Array.from({length: count}, (_, i) => ({...state().history[0], index: start + i,
+  return Array.from({length: count}, (_, i) => ({...state().history[0], index: start + i, id: start + i + 1,
     action_number: start + i + 1})).reverse();
 }
 
@@ -94,7 +94,7 @@ test('turns append chronologically without replacing messages or open observatio
   const {nodes, render} = page();
   render({...state(), history: actions(3)});
   const first = nodes['turn-messages'].children[0];
-  assert.deepEqual(nodes['turn-messages'].children.map(node => node.dataset.index), ['0', '1', '2']);
+  assert.deepEqual(nodes['turn-messages'].children.map(node => node.dataset.id), ['1', '2', '3']);
   assert.equal(first.children[3].textContent, state().history[0].reasoning);
   first.children[4].open = true;
   render({...state(), history: actions(4)});
@@ -132,8 +132,8 @@ test('trimming old messages preserves the reader position within surviving turns
   feed.handlers.scroll();
   render({...state(), history: actions(50, 1)});
   assert.equal(nodes['turn-messages'].children.length, 50);
-  assert.equal(nodes['turn-messages'].children[0].dataset.index, '1');
-  assert.equal(nodes['turn-messages'].children.at(-1).dataset.index, '50');
+  assert.equal(nodes['turn-messages'].children[0].dataset.id, '2');
+  assert.equal(nodes['turn-messages'].children.at(-1).dataset.id, '51');
   assert.equal(nodes['turn-messages'].children[2], kept);
   assert.equal(feed.scrollTop, 250);
 });
@@ -170,4 +170,36 @@ test('a disconnected server clears busy indicators and keeps polling', async () 
   assert.equal(nodes['thinking-line'].hidden, true);
   assert.equal(nodes['screen-activity'].hidden, true);
   assert.equal(scheduled, true);
+});
+
+
+test('trimming while Notes is open preserves the same surviving message on return', () => {
+  const {nodes, render} = page();
+  const feed = nodes['turn-feed'];
+  render({...state(), history: actions(50)});
+  const kept = nodes['turn-messages'].children[3];
+  feed.scrollTop = 350;
+  feed.handlers.scroll();
+  nodes['notes-tab'].handlers.click();
+  render({...state(), history: actions(50, 1)});
+  assert.equal(nodes['turn-messages'].children[0].dataset.id, '1');
+  nodes['live-tab'].handlers.click();
+  assert.equal(nodes['turn-messages'].children[2], kept);
+  assert.equal(feed.scrollTop, 250);
+  assert.equal(nodes['latest-button'].hidden, false);
+});
+
+test('Stop turns append with their outcome, reasoning, and original observation', () => {
+  const {nodes, render} = page();
+  const stop = {event: 'stop', id: 2, outcome: 'stuck', reasoning: 'The exit is blocked.',
+    source: 'agent', task: 'Explore', model_ms: 50, screenshot: 'frames/000007.png'};
+  render(state());
+  const first = nodes['turn-messages'].children[0];
+  render({...state(), history: [stop, ...state().history]});
+  const message = nodes['turn-messages'].children[1];
+  assert.equal(nodes['turn-messages'].children[0], first);
+  assert.equal(message.children[0].children[0].textContent, 'Turn #2');
+  assert.equal(message.children[2].children[1].textContent, 'STOP · STUCK');
+  assert.equal(message.children[3].textContent, 'The exit is blocked.');
+  assert.equal(message.children[4].children[1].src, '/api/observation/000007');
 });

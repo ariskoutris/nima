@@ -205,7 +205,11 @@ def test_stop_pauses_with_its_outcome_without_pressing(start_run):
     run.control({"task": "Find exit", "command": "start"})
     state = wait_until(run, lambda state: (
         state["notice"] == "Stopped (stuck): A wall blocks the exit."))
-    assert state["status"] == "paused" and state["history"] == []
+    assert state["running"] is False
+    [turn] = state["history"]
+    assert turn["event"] == "stop" and turn["outcome"] == "stuck"
+    assert turn["reasoning"] == "A wall blocks the exit."
+    assert turn["id"] == 1
     assert AGENT_PRESS not in game.steps
 
 
