@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.session import Observation, Transition
 
 FORMAT_VERSION = 22  # of run and benchmark output; bump when a field changes
-RECENT_ROWS = 40  # action rows the live view lists
+RECENT_ROWS = 50  # action messages retained in the live feed
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
 

@@ -114,7 +114,7 @@ def test_recent_rows_are_newest_first_capped_and_cleared_by_reset(tmp_path):
     for _ in range(RECENT_ROWS + 2):
         log.record_manual(Press("B"), agent.manual(session, Press("B")))
     recent = log.recent()
-    assert len(recent) == RECENT_ROWS
+    assert len(recent) == 50
     assert recent[0]["action_number"] == RECENT_ROWS + 2
     assert recent[0]["source"] == "manual"
     log.record_reset("frames/000000.png")

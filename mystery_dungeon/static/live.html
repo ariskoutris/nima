@@ -5,158 +5,212 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>mystery-dungeon · Live agent</title>
   <style>
-    :root { color-scheme: dark; font: 15px/1.45 system-ui, -apple-system, sans-serif; background: #0c1319; color: #e7eee9; }
-    * { box-sizing: border-box; }
+
+    :root { color-scheme: dark; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #101827; color: #f0eddb; --line: #485774; --muted: #b0bdd0; --accent: #f4ce79; }
+    * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #667895 #172236; }
     [hidden] { display: none !important; }
-    body { margin: 0; min-width: 320px; }
-    button, textarea, select { font: inherit; }
-    button { cursor: pointer; }
-    .shell { max-width: 1440px; margin: auto; padding: 24px clamp(16px, 3vw, 42px) 50px; }
-    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
-    .brand { display: flex; align-items: center; gap: 12px; }
-    .mark { display: grid; place-items: center; width: 39px; height: 39px; border: 1px solid #87d7ad; border-radius: 11px; color: #a5edc5; font-weight: 850; letter-spacing: -.08em; box-shadow: 0 0 22px #5cbe8e22; }
-    .eyebrow { color: #83a69a; font-size: .72rem; font-weight: 750; letter-spacing: .18em; }
-    h1 { margin: 0; font-size: 1.12rem; letter-spacing: -.02em; }
-    h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.02em; }
-    .status { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #2b3d3e; border-radius: 999px; color: #b8c9c5; background: #152125; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
-    .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a9b98; }
-    .status.running .dot, .status.thinking .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
-    .status.resetting .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
-    .status.error .dot { background: #ff938a; }
-    .layout { display: grid; grid-template-columns: minmax(0, 1.38fr) minmax(310px, .9fr); gap: 18px; align-items: start; }
-    .card { min-width: 0; border: 1px solid #2b3a3e; border-radius: 17px; background: #142026; overflow: hidden; box-shadow: 0 14px 40px #040a0d30; }
-    .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 18px 20px 14px; }
-    .muted { color: #91a7a5; font-size: .82rem; }
-    .screen-wrap { position: relative; margin: 0 20px 18px; aspect-ratio: 3/2; display: grid; place-items: center; border: 1px solid #344843; border-radius: 12px; background: #070d10; overflow: hidden; }
-    #screen { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
-    .screen-empty { color: #78928a; font-size: .85rem; }
-    .screen-activity { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 10px; width: fit-content; max-width: calc(100% - 24px); padding: 9px 12px; border: 1px solid #719f8e; border-radius: 9px; background: #09171de8; color: #e7eee9; box-shadow: 0 4px 20px #0008; font-size: .82rem; pointer-events: none; }
-    .screen-activity strong { display: block; }
-    .screen-activity small { display: block; color: #a9c4b7; }
-    .spinner { flex: none; width: 15px; height: 15px; border: 2px solid #608b79; border-top-color: #b6f2c8; border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    body { margin: 0; min-width: 320px; background-image: linear-gradient(#8eabc205 1px, transparent 1px), linear-gradient(90deg, #8eabc205 1px, transparent 1px); background-size: 24px 24px; }
+    button, textarea { font: inherit; }
+    button, summary { cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .shell { max-width: 1680px; margin: auto; padding: 20px clamp(12px, 2.5vw, 40px) 12px; }
+    header, .brand, .status, .card-head, .screen-foot, .actions, .view-nav { display: flex; align-items: center; }
+    header { justify-content: space-between; gap: 18px; padding-bottom: 18px; }
+    .brand { gap: 12px; min-width: 0; }
+    .mark { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border: 3px double var(--accent); color: var(--accent); font-size: 24px; font-weight: 900; box-shadow: 3px 3px 0 #080f1c; }
+    .eyebrow { color: var(--accent); font-size: .7rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 3px 0 0; font-size: 1rem; letter-spacing: -.03em; }
+    h2 { margin: 0; font-size: .8rem; font-weight: 700; }
+    .status { gap: 9px; padding: 7px 10px; border: 1px solid var(--line); color: var(--muted); font-size: .75rem; text-transform: capitalize; }
+    .dot { width: 8px; height: 8px; flex: none; background: #a8b4c2; }
+    .status.running .dot, .status.thinking .dot { background: #a7dbab; box-shadow: 0 0 9px #a7dbab44; }
+    .status.resetting .dot { background: var(--accent); }
+    .status.error .dot { background: #ffb9ad; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .thought, .game-column { min-width: 0; border: 3px double var(--line); background: #172236; box-shadow: 4px 4px 0 #080f1c; }
+    .thought { padding: 0 20px 20px; }
+    .view-nav { gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 0 -20px 18px; padding: 8px 10px; background: #1e2c44; }
+    .view-tab { min-height: 40px; border: 1px solid transparent; padding: 8px 12px; background: none; color: var(--muted); font-size: .8rem; }
+    .view-tab[aria-selected="true"] { border-color: var(--accent); background: #f4ce7912; color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+    .view-tab span { margin-left: 6px; padding: 1px 5px; background: #101827; font-size: .72rem; }
+    .card-head { justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+    .muted, .detail, .hint { color: var(--muted); font-size: .78rem; }
+    .mono { font-family: inherit; }
+    .turn-feed-head h2, .game .card-head h2 { color: var(--muted); text-transform: uppercase; font-size: .72rem; letter-spacing: .1em; }
+    .detail { margin: 14px 0; overflow-wrap: anywhere; }
+    .reasoning, .reasoning-empty { margin: 0; font-size: 1.08rem; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .reasoning-empty { color: var(--muted); }
+    .turn-feed { min-height: 0; max-height: 65dvh; overflow-y: auto; padding: 0 8px 8px 0; scrollbar-gutter: stable; overflow-anchor: none; overscroll-behavior-y: contain; }
+    .turn-feed-head { margin-bottom: 14px; }
+    .turn-message { padding: 20px 0; border-bottom: 1px dashed var(--line); }
+    .turn-message h3 { margin: 0; color: var(--accent); font-size: .8rem; }
+    .turn-message .action-strip { margin: 14px 0; }
+    .feed-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 48px; padding-top: 10px; }
+    .feed-foot .thinking-line { padding-top: 0; }
+    .action-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin: 0 0 18px; border: 3px double #8b9baf; padding: 12px 14px; background: #101a2a; }
+    .action-strip .eyebrow { color: var(--muted); }
+    .choice { font-size: 1.5rem; font-weight: 800; line-height: 1.2; color: #a7dbab; overflow-wrap: anywhere; }
+    .choice::before { content: '▶ '; font-size: .75em; }
+    .choice.manual-choice { color: var(--accent); }
+    .observation-details { margin-top: 20px; color: var(--muted); font-size: .78rem; }
+    summary { padding: 10px 0; min-height: 40px; }
+    .observation { display: block; width: min(100%, 240px); margin-top: 8px; border: 1px solid var(--line); image-rendering: pixelated; }
+    .thinking-line { display: flex; gap: 10px; align-items: center; color: var(--accent); font-size: .78rem; padding-top: 14px; }
+    .spinner { flex: none; width: 10px; height: 10px; background: var(--accent); animation: pulse 1.2s steps(2, end) infinite; }
+    @keyframes pulse { 50% { opacity: .3; } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
-    .screen-foot { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid #28393b; padding: 12px 20px; color: #91a7a5; font-size: .78rem; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .controls { padding-bottom: 19px; }
-    .controls .card-head { padding-bottom: 5px; }
-    .controls form, .manual { padding: 0 20px; }
-    label { display: block; margin: 15px 0 7px; color: #b9ccc7; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-    textarea { width: 100%; min-height: 88px; resize: vertical; padding: 11px 12px; border: 1px solid #39504d; border-radius: 9px; outline: none; background: #0b171b; color: #e7eee9; }
-    textarea:focus { border-color: #8de3b0; box-shadow: 0 0 0 3px #8de3b01e; }
-    textarea::placeholder { color: #6e8581; }
-    select { width: 100%; padding: 10px 12px; border: 1px solid #39504d; border-radius: 9px; background: #0b171b; color: #e7eee9; }
-    .hint { margin: 5px 0 0; color: #859a97; font-size: .76rem; }
-    .actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-    .actions .button { white-space: nowrap; }
-    #run-button { width: 7.5em; }  /* fits Resume, Pause and Pausing… so neighbours never shift */
+    .game-column { padding: 16px; }
+    .game .card-head { padding-bottom: 12px; }
+    .screen-wrap { position: relative; aspect-ratio: 3/2; display: grid; place-items: center; border: 3px solid #080f1c; outline: 1px solid #62708a; background: #080f1c; overflow: hidden; }
+    #screen { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; image-rendering: pixelated; }
+    .screen-empty { color: var(--muted); font-size: .85rem; }
+    .screen-activity { display: flex; align-items: center; gap: 10px; padding: 9px 0 0; font-size: .75rem; color: var(--accent); }
+    .screen-activity strong { font-weight: 500; }
+    .screen-activity small { display: none; }
+    .screen-foot { justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 10px 0 0; font-size: .7rem; color: var(--muted); }
+    .controls { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+    label { display: block; margin: 0 0 7px; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+    textarea { display: block; width: 100%; height: 66px; min-height: 66px; max-height: 160px; resize: vertical; padding: 10px 12px; border: 1px solid #71829c; border-radius: 0; background: #101827; color: #f0eddb; font-size: .85rem; }
+    textarea::placeholder { color: #a6b3c5; }
+    .hint { margin: 6px 0 0; font-size: .72rem; }
+    .actions { flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .button { min-height: 40px; border: 1px solid #8291a8; border-bottom: 3px solid #43516a; border-radius: 2px; padding: 7px 11px; background: #293a54; color: #f0eddb; font-size: .78rem; font-weight: 700; }
+    .button:hover { background: #354a68; border-color: var(--accent); }
+    .button:active { transform: translateY(1px); }
+    .button.primary { background: var(--accent); border-color: #ffe3a9; border-bottom-color: #a77b35; color: #24232b; }
+    .button.primary:hover { background: #ffe3a9; }
+    .button:disabled { opacity: .5; cursor: default; }
+    #run-button { width: 7.5em; }
     .actions .push { margin-left: auto; }
-    .button { border: 1px solid #405450; border-radius: 8px; padding: 9px 14px; background: #223239; color: #e3ebe6; font-weight: 700; }
-    .button:hover { border-color: #8ad5ad; }
-    .button:focus-visible { outline: 2px solid #b7f5d0; outline-offset: 2px; }
-    .button.primary { background: #9be8ba; border-color: #9be8ba; color: #10241e; }
-    .button.primary:hover { background: #c2f7d2; }
-    .button:disabled { opacity: .42; cursor: default; }
-    .divider { border-top: 1px solid #2b3a3e; margin: 20px 0 0; }
-    .manual-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-top: 15px; }
-    .manual-head strong { font-size: .82rem; }
-    .pad { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
-    .pad .button { min-width: 43px; padding: 7px 9px; font-size: .78rem; }
-    .feedback { min-height: 18px; margin: 12px 20px 0; color: #ffb9ad; font-size: .78rem; }
-    .latest, .task-memory, .history { grid-column: 1 / -1; }
-    .task-memory summary { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 18px 20px; cursor: pointer; list-style: none; }
-    .task-memory summary::-webkit-details-marker { display: none; }
-    .task-memory summary h2::before { content: '▸ '; color: #91a7a5; }
-    .task-memory details[open] summary h2::before { content: '▾ '; }
-    .task-memory summary:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
-    .task-memory-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 0 20px 18px; max-height: 320px; overflow: auto; color: #d3e0da; font-size: .85rem; }
-    .task-memory-body h3 { margin: 0 0 6px; color: #91a7a5; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-    .task-memory-body ul { margin: 0 0 10px; padding-left: 0; list-style: none; }
-    .task-memory-body li { padding: 3px 0; overflow-wrap: anywhere; }
-    .entry-label { color: #91a7a5; }
-    @media (max-width: 700px) { .task-memory-body { grid-template-columns: 1fr; } }
-    .latest-body { padding: 1px 20px 22px; }
-    .choice { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1; margin: 16px 0 7px; font-weight: 800; letter-spacing: -.06em; color: #adf0c3; }
-    .choice.manual-choice { color: #ebcf8c; }
-    .detail { color: #a4b9b2; font-size: .85rem; }
-    .reasoning { max-width: 75ch; margin: 14px 0 0; padding: 11px 14px; border-left: 3px solid #4f8a72; border-radius: 6px; background: #0f1a1f; color: #d3e0da; font-size: .88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .observation { display: block; width: min(100%, 240px); margin-top: 16px; border: 1px solid #39504d; border-radius: 6px; image-rendering: pixelated; }
-    .history-list { padding: 0 20px 18px; max-height: 290px; overflow: auto; }
-    .history-row { display: grid; grid-template-columns: 52px 85px 95px minmax(0, 1fr) 90px; gap: 10px; align-items: center; border-top: 1px solid #2a3a3c; padding: 10px 0; font-size: .79rem; }
-    .history-row:first-child { border-top: 0; }
-    button.history-row { width: 100%; background: transparent; color: inherit; text-align: left; border-right: 0; border-bottom: 0; border-left: 0; }
-    button.history-row:hover, button.history-row.selected { background: #1d3030; }
-    button.history-row:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
-    .history-row .task { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a3b7ae; }
-    .pill { width: fit-content; padding: 3px 7px; border-radius: 5px; color: #c6f4d6; background: #234d3c; font-size: .73rem; font-weight: 800; }
-    .pill.manual { color: #f1daac; background: #5c482a; }
-    .footer { margin-top: 17px; color: #728b85; font-size: .74rem; overflow-wrap: anywhere; }
-    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .latest, .history { grid-column: 1; } }
-    @media (max-width: 570px) { .shell { padding-top: 15px; } .actions { flex-wrap: wrap; } .actions .push { margin-left: 0; } .history-row { grid-template-columns: 40px 68px minmax(0, 1fr) 63px; } .history-row .source { display: none; } }
+    .manual { margin-top: 12px; border-top: 1px solid var(--line); }
+    .manual summary { color: var(--muted); font-size: .78rem; }
+    .pad { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+    .pad .button { min-width: 42px; }
+    .feedback { margin-top: 10px; color: #ffb9ad; font-size: .78rem; overflow-wrap: anywhere; }
+    .feedback:empty { display: none; }
+    .task-memory .card-head { margin-bottom: 16px; }
+    .task-memory-body h3 { margin: 24px 0 10px; color: var(--accent); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+    .task-memory-body ul { margin: 0; padding: 0; list-style: none; }
+    .task-memory-body li { padding: 14px 0; border-bottom: 1px dashed var(--line); font-size: .92rem; line-height: 1.8; overflow-wrap: anywhere; }
+    .entry-label { color: var(--accent); }
+    .footer { margin-top: 12px; color: var(--muted); font-size: .68rem; overflow-wrap: anywhere; }
+    /* The feed stays bounded on small screens; the surrounding controls use document scrolling. */
+    @media (min-width: 1000px) and (min-height: 800px) {
+      .shell { height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+      .layout { min-height: 0; align-items: stretch; }
+      .thought { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+      .live-feed { display: flex; flex-direction: column; min-height: 0; }
+      .turn-feed { flex: 1; max-height: none; }
+      .task-memory { min-height: 0; overflow-y: auto; padding: 4px 8px 8px 0; scrollbar-gutter: stable; overscroll-behavior-y: contain; }
+      .game-column { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+      .game { display: flex; flex-direction: column; flex: 1; min-height: 210px; }
+      .screen-wrap { flex: 1; min-height: 0; aspect-ratio: auto; }
+      .controls { flex: none; }
+    }
+    @media (max-width: 999px) {
+      .layout { grid-template-columns: 1fr; }
+      .screen-wrap { max-width: 600px; margin-inline: auto; }
+    }
+    @media (max-width: 570px) {
+      header { align-items: start; }
+      .mark { display: none; }
+      .status { max-width: 145px; font-size: .68rem; padding: 6px; }
+      .eyebrow { font-size: .62rem; }
+      h1 { font-size: .85rem; }
+      .thought { padding: 0 12px 14px; }
+      .view-nav { margin-inline: -12px; padding-inline: 6px; gap: 0; }
+      .view-tab { padding-inline: 9px; font-size: .75rem; }
+      .game-column { padding: 12px; }
+      .actions .push { margin-left: 0; }
+      .reasoning, .reasoning-empty { font-size: 1rem; }
+    }
   </style>
 </head>
+
 <body>
   <div class="shell">
     <header>
-      <div class="brand"><div class="mark">M</div><div><div class="eyebrow">mystery-dungeon / observation deck</div><h1>Live agent</h1></div></div>
-      <div id="status" class="status"><span class="dot"></span><span id="status-text">Connecting</span></div>
+      <div class="brand"><div class="mark" aria-hidden="true">M</div><div><div class="eyebrow">Pokémon Mystery Dungeon</div><h1>Red Rescue Team / Live</h1></div></div>
+      <div id="status" class="status" role="status"><span class="dot"></span><span id="status-text">Connecting</span></div>
     </header>
     <main class="layout">
-      <section class="card">
-        <div class="card-head"><h2>Live game</h2><span id="tick" class="muted mono">Tick —</span></div>
-        <div class="screen-wrap"><div id="screen-empty" class="screen-empty">Waiting for emulator…</div><img id="screen" alt="Live game screen" hidden><div id="screen-activity" class="screen-activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><span><strong id="activity-title"></strong><small id="activity-detail"></small></span></div></div>
-        <div class="screen-foot"><span>Latest game view</span><span id="screen-state">Connecting…</span></div>
-      </section>
-      <section class="card controls">
-        <div class="card-head"><h2>Guide the agent</h2><span class="muted">Input runs after the turn in progress</span></div>
-        <form id="control-form">
-          <label for="task">Task</label>
-          <textarea id="task" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
-          <p class="hint">Press Enter to save. Shift+Enter starts a new line.</p>
-          <div class="actions">
-            <button id="run-button" class="button primary" type="button">Resume</button>
-            <button class="button" type="button" data-command="turn">One turn</button>
-            <button class="button push" type="button" data-command="reset" title="Return to the current checkpoint and pause">Reset</button>
-            <button id="load-state-button" class="button" type="button" title="Load a .state or .ss0 checkpoint">Load state</button>
-            <input id="state-file" type="file" accept=".state,.ss0" hidden>
-          </div>
-        </form>
-        <div class="divider"></div>
-        <div class="manual">
-          <div class="manual-head"><strong>Manual move</strong><span class="muted">Pauses agent</span></div>
-          <div class="pad" id="pad"></div>
+      <div class="thought">
+        <div class="view-nav" role="tablist" aria-label="Agent view">
+          <button id="live-tab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="live-view" tabindex="0">Turns</button>
+          <button id="notes-tab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="notes-view" tabindex="-1">Notes <span id="notes-count">0</span></button>
         </div>
-        <div id="feedback" class="feedback" role="status"></div>
-      </section>
-      <section class="card latest">
-        <div class="card-head"><h2 id="action-title">Latest action</h2><div><button id="latest-button" class="button" type="button" hidden>Back to latest</button> <span id="action-meta" class="muted">Waiting for first action</span></div></div>
-        <div class="latest-body">
-          <div><div id="choice" class="choice">—</div><div id="choice-detail" class="detail">The agent's chosen action will appear here.</div><p id="reasoning" class="reasoning" hidden></p><img id="observation" class="observation" alt="Screen the latest action was chosen from" hidden><div id="observation-label" class="hint" hidden>Screen the action was chosen from</div></div>
-        </div>
-      </section>
-      <section class="card task-memory">
-        <details open>
-          <summary><h2>Notes and findings</h2><span id="notes-count" class="muted">No notes yet</span></summary>
-          <div class="task-memory-body">
-            <div><h3>Notes</h3><div id="notes"></div></div>
-            <div><h3>Findings of the last review</h3><div id="findings"></div></div>
+        <section id="live-view" class="live-feed" role="tabpanel" aria-labelledby="live-tab" tabindex="0">
+          <div class="card-head turn-feed-head"><h2>Turn feed</h2><span id="turn-count" class="muted">No turns yet</span></div>
+          <div id="turn-feed" class="turn-feed" role="region" aria-label="Recent turns, oldest first" tabindex="0">
+            <p id="feed-empty" class="reasoning-empty">Ready for the next move.<br>Start the agent to see its turns here.</p>
+            <div id="turn-messages" role="log" aria-label="Agent turns" aria-live="off"></div>
           </div>
-        </details>
-      </section>
-      <section class="card history">
-        <div class="card-head"><h2>Action history</h2><span class="muted">Latest 40 actions</span></div>
-        <div id="history" class="history-list"><span class="muted">No actions yet.</span></div>
-      </section>
+          <div class="feed-foot">
+            <div id="thinking-line" class="thinking-line" role="status" hidden><span class="spinner" aria-hidden="true"></span>Thinking about the next action…</div>
+            <button id="latest-button" class="button" type="button" hidden>Latest turn ↓</button>
+          </div>
+        </section>
+        <section id="notes-view" class="task-memory" role="tabpanel" aria-labelledby="notes-tab" tabindex="0" hidden>
+          <div class="card-head"><h2>Task notes</h2><span class="muted">Cleared when the task changes</span></div>
+          <div class="task-memory-body"><div id="notes"></div><h3>Findings of the last review</h3><div id="findings"></div></div>
+        </section>
+      </div>
+      <div class="game-column">
+        <section class="game" aria-label="Live game">
+          <div class="card-head"><h2>Live game</h2><span id="tick" class="muted mono">Tick —</span></div>
+          <div class="screen-wrap"><div id="screen-empty" class="screen-empty">Waiting for emulator…</div><img id="screen" alt="Live game screen" hidden></div>
+          <div id="screen-activity" class="screen-activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><span><strong id="activity-title"></strong><small id="activity-detail"></small></span></div>
+          <div class="screen-foot"><span>Latest game view</span><span id="screen-state">Connecting…</span></div>
+        </section>
+        <section class="controls" aria-label="Agent controls">
+          <form id="control-form">
+            <label for="task">Current task</label>
+            <textarea id="task" maxlength="1000" placeholder="e.g. Leave the base and reach the next rescue mission"></textarea>
+            <p class="hint">Enter to save · Shift+Enter for a new line · Input runs after the turn in progress</p>
+            <div class="actions">
+              <button id="run-button" class="button primary" type="button">Resume</button>
+              <button class="button" type="button" data-command="turn">One turn</button>
+              <button class="button push" type="button" data-command="reset" title="Return to the current checkpoint and pause">Reset</button>
+              <button id="load-state-button" class="button" type="button" title="Load a .state or .ss0 checkpoint">Load state</button>
+              <input id="state-file" type="file" accept=".state,.ss0" hidden>
+            </div>
+          </form>
+          <details class="manual"><summary>Manual controls</summary><p class="hint">Sending a move pauses the agent</p><div class="pad" id="pad"></div></details>
+          <div id="feedback" class="feedback" role="status"></div>
+        </section>
+      </div>
     </main>
     <div id="output" class="footer mono"></div>
   </div>
   <script>
     const $ = id => document.getElementById(id);
     const task = $('task');
+    const viewTabs = [...document.querySelectorAll('[role="tab"]')];
+    function showView(tab) {
+      for (const item of viewTabs) {
+        const selected = item === tab;
+        item.setAttribute('aria-selected', String(selected));
+        item.tabIndex = selected ? 0 : -1;
+        $(item.getAttribute('aria-controls')).hidden = !selected;
+      }
+      if (tab === $('live-tab') && followLatest) scrollToLatest();
+    }
+    for (const [index, tab] of viewTabs.entries()) {
+      tab.addEventListener('click', () => showView(tab));
+      tab.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? viewTabs[0] : event.key === 'End' ? viewTabs.at(-1) :
+          viewTabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + viewTabs.length) % viewTabs.length];
+        showView(next);
+        next.focus();
+      });
+    }
     const actionName = action => action.type === 'press' ? action.button : action.type.toUpperCase();
     const GOOD = '#a9d9b8', BAD = '#ffb9ad', NOTE = '#ebcf8c';
     const say = (text, color) => { $('feedback').style.color = color; $('feedback').textContent = text; };
-    let screenRevision = 0, screenUrl = null, lastHistory = -1, shownIndex = -1, selectedIndex = null, currentState = null, resetCount = 0;
+    const FOLLOW_THRESHOLD_PX = 32;
+    let screenRevision = 0, screenUrl = null, currentState = null, resetCount = 0, followLatest = true;
     let taskDirty = false, sending = false, shownTaskMemory = null;
     task.addEventListener('input', () => taskDirty = true);
     task.addEventListener('keydown', event => {
@@ -193,7 +247,18 @@
         say(error.message, BAD);
       } finally { sending = false; $('load-state-button').disabled = false; }
     });
-    $('latest-button').addEventListener('click', () => { selectedIndex = null; if (currentState) { renderHistory(currentState.history); renderAction(currentState.history[0]); } });
+    function scrollToLatest() {
+      followLatest = true;
+      $('turn-feed').scrollTop = $('turn-feed').scrollHeight;
+      $('latest-button').hidden = true;
+    }
+    $('latest-button').addEventListener('click', () => { scrollToLatest(); $('turn-feed').focus({preventScroll: true}); });
+    $('turn-feed').addEventListener('scroll', () => {
+      if ($('live-view').hidden) return;
+      const feed = $('turn-feed');
+      followLatest = feed.scrollHeight - feed.clientHeight - feed.scrollTop <= FOLLOW_THRESHOLD_PX;
+      $('latest-button').hidden = followLatest;
+    });
 
     async function send(command, action) {
       if (sending) return;
@@ -220,6 +285,7 @@
     function render(state) {
       currentState = state;
       $('status').className = `status ${state.status}`;
+      $('thinking-line').hidden = state.status !== 'thinking';
       $('status-text').textContent = [state.status, state.game_state?.mode,
         state.game_state?.text_printing ? 'printing' : ''].filter(Boolean).join(' · ');
       const activity = {
@@ -250,38 +316,60 @@
       else if (state.notice) say(state.notice, NOTE);
       if (state.reset_count !== resetCount) {
         resetCount = state.reset_count;
-        selectedIndex = null; shownIndex = -1; lastHistory = -1;
-        $('action-title').textContent = 'Latest action';
+        $('turn-messages').replaceChildren();
+        $('turn-feed').scrollTop = 0;
+        followLatest = true;
         $('latest-button').hidden = true;
-        $('action-meta').textContent = 'Waiting for first action';
-        $('choice').textContent = '—'; $('choice').className = 'choice';
-        $('choice-detail').textContent = 'The agent\'s chosen action will appear here.';
-        $('reasoning').hidden = true;
-        $('observation').hidden = true; $('observation-label').hidden = true;
-        $('history').textContent = 'No actions yet.';
       }
       renderTaskMemory(state.notes, state.findings);
-      const latest = state.history[0];
-      if (!latest) return;
-      if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
-      let chosen = selectedIndex === null ? latest : state.history.find(item => item.index === selectedIndex);
-      if (!chosen) { selectedIndex = null; chosen = latest; renderHistory(state.history); }
-      if (chosen.index !== shownIndex) renderAction(chosen);
+      renderTurns(state.history);
     }
 
-    function renderAction(item) {
-      shownIndex = item.index;
-      $('action-title').textContent = selectedIndex === null ? 'Latest action' : `Action #${item.action_number}`;
-      $('latest-button').hidden = selectedIndex === null;
-      $('choice').textContent = actionName(item.action);
-      $('choice').className = `choice ${item.source === 'manual' ? 'manual-choice' : ''}`;
-      $('action-meta').textContent = `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms · tick ${item.tick_before}`;
-      $('choice-detail').textContent = item.source === 'manual' ? 'Manual move' : `Task: ${item.task}`;
-      $('reasoning').textContent = item.reasoning || '';
-      $('reasoning').hidden = !item.reasoning;
-      $('observation').src = `/api/observation/${item.index}`;
-      $('observation').hidden = false;
-      $('observation-label').hidden = false;
+    function renderTurns(rows) {
+      const feed = $('turn-feed'), messages = $('turn-messages');
+      const ids = new Set(rows.map(item => String(item.index)));
+      const scrollTop = feed.scrollTop;
+      let removedHeight = 0;
+      for (const message of [...messages.children]) {
+        if (ids.has(message.dataset.index)) continue;
+        removedHeight += message.getBoundingClientRect().height;
+        message.remove();
+      }
+      const existing = new Set([...messages.children].map(message => message.dataset.index));
+      let appended = false;
+      for (const item of [...rows].reverse()) {
+        if (existing.has(String(item.index))) continue;
+        messages.append(turnMessage(item));
+        appended = true;
+      }
+      $('feed-empty').hidden = rows.length > 0;
+      $('turn-count').textContent = rows.length ? `${rows.length} recent turn${rows.length === 1 ? '' : 's'}` : 'No turns yet';
+      if (!appended && !removedHeight) return;
+      if (followLatest && !$('live-view').hidden) scrollToLatest();
+      else feed.scrollTop = Math.max(0, scrollTop - removedHeight);
+    }
+
+    function turnMessage(item) {
+      const message = element('article', undefined, 'turn-message');
+      message.dataset.index = String(item.index);
+      const header = element('div', undefined, 'card-head');
+      header.append(element('h3', `Turn #${item.action_number}`),
+        element('span', `${item.source === 'manual' ? 'Manual' : 'Agent'} · ${item.model_ms} ms · tick ${item.tick_before}`, 'muted'));
+      const action = element('div', undefined, 'action-strip');
+      action.append(element('span', 'Action', 'eyebrow'),
+        element('span', actionName(item.action), `choice ${item.source === 'manual' ? 'manual-choice' : ''}`));
+      message.append(header);
+      if (item.task) message.append(element('div', `Task: ${item.task}`, 'detail'));
+      message.append(action, element('p', item.reasoning || (item.source === 'manual'
+        ? 'Manual move. No model reasoning for this action.' : 'No reasoning recorded for this action.'), 'reasoning'));
+      const observation = element('details', undefined, 'observation-details');
+      const screenshot = element('img', undefined, 'observation');
+      screenshot.alt = `Screen turn #${item.action_number} was chosen from`;
+      screenshot.loading = 'lazy';
+      screenshot.src = `/api/observation/${item.index}`;
+      observation.append(element('summary', 'View action observation'), screenshot);
+      message.append(observation);
+      return message;
     }
 
     function element(tag, text, className) {
@@ -303,27 +391,13 @@
       const key = JSON.stringify([notes, findings]);
       if (key === shownTaskMemory) return;
       shownTaskMemory = key;
-      $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'No notes yet';
+      $('notes-count').textContent = String(notes.length);
       $('notes').replaceChildren(notes.length
         ? list(notes, note => [note])
         : element('div', 'Notes the agent keeps during the task will appear here.', 'muted'));
       $('findings').replaceChildren(findings.length
         ? list(findings, finding => [element('span', `(${finding.kind}) `, 'entry-label'), finding.text])
         : element('div', 'Facts about the game found in a task\'s turns will appear here when it stops.', 'muted'));
-    }
-
-    function renderHistory(rows) {
-      const container = $('history'); container.replaceChildren();
-      for (const item of rows) {
-        const row = document.createElement('button'); row.type = 'button'; row.className = `history-row ${item.index === selectedIndex ? 'selected' : ''}`;
-        row.addEventListener('click', () => { selectedIndex = item.index; renderHistory(currentState.history); renderAction(item); });
-        const number = document.createElement('span'); number.className = 'muted mono'; number.textContent = `#${item.action_number}`;
-        const action = document.createElement('span'); action.className = `pill ${item.source === 'manual' ? 'manual' : ''}`; action.textContent = actionName(item.action);
-        const source = document.createElement('span'); source.className = 'source muted'; source.textContent = item.source;
-        const task = document.createElement('span'); task.className = 'task'; task.textContent = item.task || '';
-        const latency = document.createElement('span'); latency.className = 'muted mono'; latency.textContent = `${item.model_ms} ms`;
-        row.append(number, action, source, task, latency); container.append(row);
-      }
     }
 
     async function watchScreen() {
@@ -352,6 +426,8 @@
         render(await response.json());
       } catch (error) {
         $('status').className = 'status error';
+        $('thinking-line').hidden = true;
+        $('screen-activity').hidden = true;
         $('status-text').textContent = 'Disconnected';
       } finally { setTimeout(poll, 400); }
     }
