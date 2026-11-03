@@ -50,6 +50,11 @@ ROUTES = {
     "square_north_exit": ["UP"] * 20,
     "square_approach_granbull": ["LEFT", "LEFT", "LEFT", "DOWN"],
     "square_talk_granbull": ["LEFT", "LEFT", "LEFT", "DOWN", "DOWN", "A"],
+    "square_charizard_then_granbull": ["LEFT"] * 4 + ["UP"] * 3 + ["A"] * 3 + ["DOWN"] * 5
+    + ["A"],
+    "square_talk_five": ["LEFT"] * 4 + ["UP"] * 3 + ["A"] * 3 + ["RIGHT", "RIGHT", "UP"]
+    + ["A"] * 3 + ["RIGHT"] * 4 + ["DOWN"] + ["A"] * 4 + ["RIGHT"] + ["DOWN"] * 4 + ["A"] * 9
+    + ["LEFT"] * 6 + ["DOWN", "A"],
     "face_npc_talk": ["A"],
     "face_lombre_finish": ["A"] * 9,
     "face_npc_talk_overlap": ["A"],
@@ -75,6 +80,17 @@ def test_case_is_reachable_by_scripted_play(town, case):
     assert result["reached"], result
     if case.criterion in ("finish", "finish_lombre"):
         assert result["stopped_reached"], result
+
+
+@pytest.mark.parametrize("criterion,route", [
+    ("charizard_granbull", ROUTES["square_talk_granbull"]),  # Granbull without Charizard
+    ("talk_five", ROUTES["square_talk_five"][:-2]),  # all but the last of the five
+])
+def test_multi_talk_criteria_need_every_talk(town, criterion, route):
+    game, seeds, output = town
+    case = Case(f"partial_{criterion}", "square", "Talk", criterion, len(route))
+    result = run_case(game, case, ScriptedModel(route), seeds, output / case.id)
+    assert result["ended"] == "limit" and not result["reached"]
 
 
 def test_lombre_finish_requires_closed_dialogue(town, tmp_path):

@@ -26,7 +26,9 @@ from mystery_dungeon.session import (
     read_ss0,
 )
 
-GRANBULL, LOMBRE, WIGGLYTUFF = 235, 296, 40  # species ids
+CHARIZARD, GRANBULL, LOMBRE, WIGGLYTUFF = 6, 235, 296, 40  # species ids
+TYRANITAR, SHIFTRY = 273, 300
+PLAZA = (CHARIZARD, TYRANITAR, SHIFTRY, LOMBRE, GRANBULL)
 WHISCASH_POND = 3  # ground map beyond the square's north exit
 
 
@@ -49,6 +51,11 @@ CASES = (
          "Stand just above the purple Pokémon on the left side of the square", "approach", 12),
     Case("square_talk_granbull", "square",
          "Walk to Granbull in the square and start a conversation", "granbull", 16),
+    Case("square_charizard_then_granbull", "square",
+         "Talk to Charizard and then to the purple Pokémon", "charizard_granbull", 40),
+    Case("square_talk_five", "square",
+         "Talk to each of the five Pokémon around the middle of the square: Charizard, "
+         "Tyranitar, Shiftry, Lombre and Granbull", "talk_five", 90),
     Case("face_npc_talk", "face-lombre",
          "Open dialogue with Lombre, the green Pokémon immediately to your right. "
          "Stop when Lombre's first dialogue box appears; do not advance or finish the conversation",
@@ -92,20 +99,23 @@ class Grader:
         if position is None:
             raise ValueError(f"player position unavailable in {case.start} checkpoint")
         self.initial_x, self.initial_y = position
-        self.saw_granbull = self.talking(GRANBULL)
-        self.saw_lombre = self.talking(LOMBRE)
+        self.spoke: set[int] = set()  # species seen speaking in a dialogue box so far
+        self._listen()
 
     def talking(self, species: int) -> bool:
         return self.ram.textbox_type() == 1 and self.ram.speaker() == species
 
+    def _listen(self) -> None:
+        if self.ram.textbox_type() == 1:
+            self.spoke.add(self.ram.speaker())
+
     def reached(self) -> bool:
+        self._listen()  # before the position check, so a box during a fade still counts
         position = self.ram.player_position()
         if position is None:
             return False
         x, y = position
         closed = self.ram.textbox_type() in (None, 0)
-        self.saw_granbull |= self.talking(GRANBULL)
-        self.saw_lombre |= self.talking(LOMBRE)
         match self.case.criterion:
             case "down":
                 return x == self.initial_x and y >= self.initial_y + 16
@@ -117,12 +127,16 @@ class Grader:
                         8 <= npc[1] - y <= 24 and closed)
             case "granbull":
                 return self.talking(GRANBULL)
+            case "charizard_granbull":
+                return CHARIZARD in self.spoke and self.talking(GRANBULL)
+            case "talk_five":
+                return self.spoke >= set(PLAZA)
             case "lombre":
                 return self.talking(LOMBRE)
             case "finish":
-                return self.saw_granbull and closed
+                return GRANBULL in self.spoke and closed
             case "finish_lombre":
-                return self.saw_lombre and closed
+                return LOMBRE in self.spoke and closed
             case "wigglytuff":
                 return self.ram.textbox_type() == 4 and self.ram.speaker() == WIGGLYTUFF
             case "buy_reply":
