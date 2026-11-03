@@ -39,9 +39,9 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         summaries.append({
             "variant": variant, "cases": rows,
             "reached": sum(row["reached"] for row in rows),
-            "stopped_reached": sum(row["stopped_reached"] for row in rows),
+            "claimed_reached": sum(row["claimed_reached"] for row in rows),
             "missed": sum(row["missed"] for row in rows),
-            "stopped_unreached": sum(row["stopped_unreached"] for row in rows),
+            "claimed_unreached": sum(row["claimed_unreached"] for row in rows),
             "model_errors": sum(row["ended"] == "model_error" for row in rows),
             "median_turn_ms": round(statistics.median(latencies)) if latencies else None,
         })
@@ -49,22 +49,22 @@ def summarize(output: Path, model: str, variants: list[str], cases: list[str]) -
         "model": model, "selected_cases": cases, "variants": summaries,
     }, indent=2) + "\n")
     lines = ["# Probe comparison", "", f"Model: {model}", "",
-             "| Variant | Cases | Reached | Stopped reached | Missed | Stopped unreached "
+             "| Variant | Cases | Reached | Claimed reached | Missed | Claimed unreached "
              "| Model errors | Median turn ms |",
              "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for item in summaries:
         lines.append(f"| {item['variant']} | {len(item['cases'])}/{len(cases)} | "
-                     f"{item['reached']} | {item['stopped_reached']} | {item['missed']} | "
-                     f"{item['stopped_unreached']} | {item['model_errors']} | "
+                     f"{item['reached']} | {item['claimed_reached']} | {item['missed']} | "
+                     f"{item['claimed_unreached']} | {item['model_errors']} | "
                      f"{item['median_turn_ms'] if item['median_turn_ms'] is not None else '—'} |")
     lines += ["", "## Case outcomes", "",
-              "| Variant | Case | Reached | Stopped reached | Ended | Outcome | Actions "
+              "| Variant | Case | Reached | Claimed reached | Ended | Outcome | Actions "
               "| Seconds |",
               "|---|---|:---:|:---:|---|---|---:|---:|"]
     for item in summaries:
         for row in item["cases"]:
             lines.append(f"| {item['variant']} | {row['case']} | {row['reached']} | "
-                         f"{row['stopped_reached']} | {row['ended']} | "
+                         f"{row['claimed_reached']} | {row['ended']} | "
                          f"{row['outcome'] or '—'} | {row['actions']} | {row['seconds']} |")
     (output / "report.md").write_text("\n".join(lines) + "\n")
     return summaries

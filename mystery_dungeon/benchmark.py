@@ -221,10 +221,11 @@ def run_case(game: GbaEmulator, case: Case, model: Model, reviewer: Reviewer,
     findings = review(reviewer, case.task, agent.turns)
     log.record_review(case.task, findings)
     reached = reached_at is not None
+    claimed = outcome == "complete"  # a stuck or invalid Stop gives up instead
     result = {"case": case.id, "task": case.task, "reached": reached,
-              "stopped_reached": ended == "stop" and reached,
-              "missed": reached and ended != "stop",
-              "stopped_unreached": ended == "stop" and not reached,
+              "claimed_reached": claimed and reached,
+              "missed": reached and not claimed,
+              "claimed_unreached": claimed and not reached,
               "reached_at": reached_at, "ended": ended, "outcome": outcome,
               "actions": session.action_count, "limit": case.limit, "turns": turns,
               "seconds": seconds, "error": error,
@@ -236,12 +237,12 @@ def run_case(game: GbaEmulator, case: Case, model: Model, reviewer: Reviewer,
 def report(results: list[dict], output: Path) -> None:
     (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     lines = ["# Game task benchmark", "",
-             "| Case | Reached | Stopped reached | Missed | Stopped unreached | Outcome "
+             "| Case | Reached | Claimed reached | Missed | Claimed unreached | Outcome "
              "| Actions | Seconds |",
              "|---|:---:|:---:|:---:|:---:|---|---:|---:|"]
     for row in results:
-        lines.append(f"| {row['case']} | {row['reached']} | {row['stopped_reached']} | "
-                     f"{row['missed']} | {row['stopped_unreached']} | "
+        lines.append(f"| {row['case']} | {row['reached']} | {row['claimed_reached']} | "
+                     f"{row['missed']} | {row['claimed_unreached']} | "
                      f"{row['outcome'] or '—'} | {row['actions']} | {row['seconds']} |")
     lines += ["", "The hidden grader measures reach independently from the model's stop.",
               f"Each turn is one request with up to {MEMORY_TURNS} earlier screenshots, so "

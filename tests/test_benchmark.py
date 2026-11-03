@@ -80,7 +80,7 @@ def test_case_is_reachable_by_scripted_play(town, case):
     result = run_case(game, case, model, ScriptedReviewer(), seeds, output / case.id)
     assert result["reached"], result
     if case.criterion in ("finish", "finish_lombre"):
-        assert result["stopped_reached"], result
+        assert result["claimed_reached"], result
 
 
 @pytest.mark.parametrize("criterion,route", [
@@ -121,7 +121,7 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     assert result["ended"] == "limit" and result["limit"] == 14
     assert result["outcome"] is None
     assert not result["reached"]
-    assert not result["stopped_reached"]
+    assert not result["claimed_reached"]
     log = rows(output / case.id / "turns.jsonl")
     assert [row["event"] for row in log].count("action") == 14  # no call past the limit
     assert {"ended": "limit", "outcome": None, "actions": 14, "limit": 14}.items() <= (
@@ -219,15 +219,14 @@ def test_dialogue_reach_and_stop_are_separate(town):
     game, seeds, output = town
     case = next(case for case in CASES if case.id == "face_npc_talk")
 
-    early = run_case(game, case, ScriptedModel(["A"], votes(True), outcome="stuck"),
+    early = run_case(game, case, ScriptedModel(["A"], votes(True)),
                      ScriptedReviewer(), seeds, output / "premature_stop")
-    assert early["stopped_unreached"] and not early["reached"]
-    assert early["ended"] == "stop" and early["outcome"] == "stuck"
-    assert {"ended": "stop", "outcome": "stuck"}.items() <= (
+    assert early["claimed_unreached"] and not early["reached"]
+    assert {"ended": "stop", "outcome": "complete"}.items() <= (
         rows(output / "premature_stop/turns.jsonl")[-2].items())
     finished = run_case(game, case, ScriptedModel(["A"], votes(False, True)),
                         ScriptedReviewer(), seeds, output / "correct_stop")
-    assert finished["stopped_reached"] and finished["actions"] == 1
+    assert finished["claimed_reached"] and finished["actions"] == 1
 
 
 def test_each_case_reviews_its_turns_after_the_attempt(town):
@@ -245,7 +244,20 @@ def test_each_case_reviews_its_turns_after_the_attempt(town):
     failed = run_case(game, case, ScriptedModel(["A"], votes(False, True)),
                       ScriptedReviewer(error=TimeoutError("timed out")), seeds,
                       output / "review_failed")
-    assert failed["stopped_reached"] and failed["review_error"] == "TimeoutError: timed out"
+    assert failed["claimed_reached"] and failed["review_error"] == "TimeoutError: timed out"
+
+
+@pytest.mark.parametrize("outcome", ["stuck", "invalid"])
+def test_only_a_complete_stop_claims_the_task(town, outcome):
+    game, seeds, output = town
+    case = next(case for case in CASES if case.id == "face_npc_talk")
+    early = run_case(game, case, ScriptedModel(["A"], votes(True), outcome=outcome),
+                     ScriptedReviewer(), seeds, output / f"early_{outcome}")
+    assert early["outcome"] == outcome and not early["reached"]
+    assert not early["claimed_unreached"]  # giving up is no false claim
+    late = run_case(game, case, ScriptedModel(["A"], votes(False, True), outcome=outcome),
+                    ScriptedReviewer(), seeds, output / f"late_{outcome}")
+    assert late["reached"] and late["missed"] and not late["claimed_reached"]
 
 
 def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monkeypatch):

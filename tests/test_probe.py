@@ -14,8 +14,8 @@ def write_result(command, ended="stop"):
     folder = output / "cases" / case
     folder.mkdir(parents=True)
     row = {"case": case, "reached": ended == "stop",
-           "stopped_reached": ended == "stop", "missed": False,
-           "stopped_unreached": False, "ended": ended,
+           "claimed_reached": ended == "stop", "missed": False,
+           "claimed_unreached": False, "ended": ended,
            "outcome": "complete" if ended == "stop" else None,
            "actions": 1, "seconds": 2.0}
     (output / "results.json").write_text(json.dumps([row]))
@@ -43,7 +43,7 @@ def test_variants_and_summary(tmp_path, monkeypatch):
     assert all(call[1]["check"] for call in calls)
     summary = json.loads((output / "summary.json").read_text())
     assert [item["variant"] for item in summary["variants"]] == list(probe.VARIANTS)
-    assert all(item["reached"] == item["stopped_reached"] == 1 and
+    assert all(item["reached"] == item["claimed_reached"] == 1 and
                item["median_turn_ms"] == 100 for item in summary["variants"])
 
 
