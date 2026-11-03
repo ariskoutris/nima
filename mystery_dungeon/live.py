@@ -20,6 +20,7 @@ from mystery_dungeon.actions import GAME_ACTIONS, GameAction, Stop
 from mystery_dungeon.agent import Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.ram_state import check_rom
+from mystery_dungeon.review import ChatReviewer, Finding, Reviewer, ReviewError, review
 from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
     HOLD_TICKS,
@@ -113,7 +114,7 @@ class LiveRun:
     """
 
     def __init__(self, rom: Path, core: Path, state: Path, output: Path,
-                 model: Model, hold_ticks: int, release_ticks: int,
+                 model: Model, reviewer: Reviewer, hold_ticks: int, release_ticks: int,
                  knowledge: str = "") -> None:
         if output.exists():
             raise FileExistsError(f"session output already exists: {output}")
@@ -126,6 +127,9 @@ class LiveRun:
                             "initial_state": str(state), "hold_ticks": hold_ticks,
                             "release_ticks": release_ticks}, knowledge)
         self._agent = Agent(self._log.model, knowledge)
+        self._reviewer = reviewer
+        self._findings: list[Finding] = []  # from the review of the last task that stopped
+        self._reviewing = False
         self._condition = threading.Condition()
         self._task = ""
         self._mode = "paused"  # paused | running | one_turn
@@ -149,6 +153,7 @@ class LiveRun:
                     "game_state": self._game_state,
                     "history": self._log.recent(),
                     "plan": self._agent.plan, "notes": list(self._agent.notes),
+                    "findings": [asdict(finding) for finding in self._findings],
                     "model": self._log.model.name,
                     "actions": list(GAME_ACTIONS), "output": str(self.output)}
 
@@ -278,6 +283,7 @@ class LiveRun:
             result, transition = self._agent.act(realtime)
         finally:
             realtime.halt()  # Stop and model errors end the turn without an action
+        stopped = False
         with self._condition:
             match result:
                 case ModelError(message=message):
@@ -289,11 +295,28 @@ class LiveRun:
                     self._log.record_turn(result, transition)
                     self._mode = "paused"
                     self._notice = f"Stopped ({outcome}): {result.reasoning}"
+                    stopped = self._reviewing = True
                 case Turn():
                     self._log.record_turn(result, transition)
                     if self._mode == "one_turn":
                         self._mode = "paused"
         self._after_step(session)
+        if stopped:
+            self._review(task)
+
+    def _review(self, task: str) -> None:
+        """Review the stopped task's turns; operator input waits for the review."""
+        result = review(self._reviewer, task, self._agent.turns)
+        self._agent.clear_turns()  # running the same task again reviews only its new turns
+        with self._condition:
+            self._log.record_review(task, result)
+            self._reviewing = False
+            match result:
+                case ReviewError(message):
+                    self._error = f"Review failed: {message}"
+                    self._findings = []
+                case findings:
+                    self._findings = findings
 
     def _manual(self, session: GameplaySession, action: GameAction, task: str) -> None:
         self._agent.set_task(task)
@@ -357,7 +380,7 @@ class LiveRun:
             return "loading"
         match self._current:
             case TakeTurn():
-                return "thinking"
+                return "reviewing" if self._reviewing else "thinking"
             case Load():
                 return "resetting"
         return "paused" if self._mode == "paused" else "running"
@@ -465,9 +488,10 @@ def main() -> None:
     if min(args.hold_ticks, args.release_ticks) < 1:
         parser.error("tick counts must be positive")
     check_rom(args.rom)
-    model = ChatModel(read_settings())  # fails on a missing key before any output exists
+    settings = read_settings()
+    model = ChatModel(settings)  # fails on a missing key before any output exists
     output = args.output or Path("runs/live") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    run = LiveRun(args.rom, args.core, args.state, output, model,
+    run = LiveRun(args.rom, args.core, args.state, output, model, ChatReviewer(settings),
                   args.hold_ticks, args.release_ticks,
                   args.knowledge.read_text() if args.knowledge else "")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(run))

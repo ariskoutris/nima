@@ -5,7 +5,7 @@ import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from fakes import ScriptedModel, press, rows, votes
+from fakes import ScriptedModel, ScriptedReviewer, press, rows, votes
 
 from emulator import GbaEmulator
 from mystery_dungeon import benchmark
@@ -23,6 +23,7 @@ from mystery_dungeon.benchmark import (
 )
 from mystery_dungeon.model import ChatSettings
 from mystery_dungeon.ram_state import GameRam
+from mystery_dungeon.review import Finding
 from mystery_dungeon.run_log import FORMAT_VERSION
 from mystery_dungeon.session import GameplaySession, read_ss0, restore
 
@@ -76,7 +77,7 @@ def test_case_is_reachable_by_scripted_play(town, case):
         return case.criterion in ("finish", "finish_lombre") and earlier_calls == len(route)
 
     model = ScriptedModel(route, stop)
-    result = run_case(game, case, model, seeds, output / case.id)
+    result = run_case(game, case, model, ScriptedReviewer(), seeds, output / case.id)
     assert result["reached"], result
     if case.criterion in ("finish", "finish_lombre"):
         assert result["stopped_reached"], result
@@ -89,7 +90,8 @@ def test_case_is_reachable_by_scripted_play(town, case):
 def test_multi_talk_criteria_need_every_talk(town, criterion, route):
     game, seeds, output = town
     case = Case(f"partial_{criterion}", "square", "Talk", criterion, len(route))
-    result = run_case(game, case, ScriptedModel(route), seeds, output / case.id)
+    result = run_case(game, case, ScriptedModel(route), ScriptedReviewer(), seeds,
+                      output / case.id)
     assert result["ended"] == "limit" and not result["reached"]
 
 
@@ -113,7 +115,8 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     game, seeds, output = town
     case = Case("reopened_granbull", "face-npc", "Finish talking to Granbull", "finish", 14)
 
-    result = run_case(game, case, ScriptedModel(["A"]), seeds, output / case.id)
+    result = run_case(game, case, ScriptedModel(["A"]), ScriptedReviewer(), seeds,
+                      output / case.id)
     assert result["actions"] == 14
     assert result["ended"] == "limit" and result["limit"] == 14
     assert result["outcome"] is None
@@ -122,7 +125,7 @@ def test_reopening_granbull_dialogue_does_not_count_as_finished(town):
     log = rows(output / case.id / "turns.jsonl")
     assert [row["event"] for row in log].count("action") == 14  # no call past the limit
     assert {"ended": "limit", "outcome": None, "actions": 14, "limit": 14}.items() <= (
-        log[-1].items())
+        log[-2].items())  # the review row follows
     assert Grader(case, GameRam(game)).talking(235)
 
 
@@ -217,14 +220,32 @@ def test_dialogue_reach_and_stop_are_separate(town):
     case = next(case for case in CASES if case.id == "face_npc_talk")
 
     early = run_case(game, case, ScriptedModel(["A"], votes(True), outcome="stuck"),
-                     seeds, output / "premature_stop")
+                     ScriptedReviewer(), seeds, output / "premature_stop")
     assert early["stopped_unreached"] and not early["reached"]
     assert early["ended"] == "stop" and early["outcome"] == "stuck"
     assert {"ended": "stop", "outcome": "stuck"}.items() <= (
-        rows(output / "premature_stop/turns.jsonl")[-1].items())
-    finished = run_case(game, case, ScriptedModel(["A"], votes(False, True)), seeds,
-                        output / "correct_stop")
+        rows(output / "premature_stop/turns.jsonl")[-2].items())
+    finished = run_case(game, case, ScriptedModel(["A"], votes(False, True)),
+                        ScriptedReviewer(), seeds, output / "correct_stop")
     assert finished["stopped_reached"] and finished["actions"] == 1
+
+
+def test_each_case_reviews_its_turns_after_the_attempt(town):
+    game, seeds, output = town
+    case = next(case for case in CASES if case.id == "face_npc_talk")
+    reviewer = ScriptedReviewer([Finding("dialogue", "Lombre: 'Hello.'")])
+    result = run_case(game, case, ScriptedModel(["A"], votes(False, True)), reviewer, seeds,
+                      output / "reviewed")
+    [(task, turns)] = reviewer.reviews
+    assert task == case.task and len(turns) == result["turns"] == 2
+    assert result["review_error"] is None
+    assert {"event": "review", "error": None,
+            "findings": [{"kind": "dialogue", "text": "Lombre: 'Hello.'"}]}.items() <= (
+        rows(output / "reviewed/turns.jsonl")[-1].items())
+    failed = run_case(game, case, ScriptedModel(["A"], votes(False, True)),
+                      ScriptedReviewer(error=TimeoutError("timed out")), seeds,
+                      output / "review_failed")
+    assert failed["stopped_reached"] and failed["review_error"] == "TimeoutError: timed out"
 
 
 def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monkeypatch):
@@ -238,8 +259,8 @@ def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monk
     case = Case("slow_one_action", "square", "Move one tile down", "down", 1)
     with monkeypatch.context() as patcher:
         patcher.setattr(benchmark.time, "monotonic", clock)
-        result = run_case(game, case, ScriptedModel(["DOWN"], slow_check), seeds,
-                          output / "late_turn")
+        result = run_case(game, case, ScriptedModel(["DOWN"], slow_check),
+                          ScriptedReviewer(), seeds, output / "late_turn")
     assert result["ended"] == "limit"
     assert result["reached"] and result["missed"]
     assert result["actions"] == result["turns"] == 1
@@ -268,8 +289,8 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     monkeypatch.setattr(benchmark, "report", Mock())
     benchmark.main()
     assert [call.args[2] for call in run.call_args_list] == [model, model]
-    assert run.call_args_list[0].args[4] == tmp_path / "run/cases/one"
-    assert run.call_args_list[1].args[4] == tmp_path / "run/cases/two"
+    assert run.call_args_list[0].args[5] == tmp_path / "run/cases/one"
+    assert run.call_args_list[1].args[5] == tmp_path / "run/cases/two"
     config = json.loads((tmp_path / "run/config.json").read_text())
     assert config["format_version"] == FORMAT_VERSION
     assert config["model"]["name"] == "vendor/model"
@@ -288,6 +309,7 @@ def test_benchmark_loads_the_configured_knowledge_unless_given_another(tmp_path,
     monkeypatch.setattr(benchmark, "check_rom", Mock())
     monkeypatch.setattr(benchmark, "build_fixtures", Mock(return_value={}))
     monkeypatch.setattr(benchmark, "ChatModel", Mock(return_value=object()))
+    monkeypatch.setattr(benchmark, "ChatReviewer", Mock(return_value=object()))
     run = Mock(return_value={"ended": "limit", "actions": 0})
     monkeypatch.setattr(benchmark, "run_case", run)
     monkeypatch.setattr(benchmark, "report", Mock())
@@ -299,4 +321,4 @@ def test_benchmark_loads_the_configured_knowledge_unless_given_another(tmp_path,
         benchmark.main()
         config = json.loads((output / "config.json").read_text())
         assert config["knowledge"] == str(path) and str(path) in config["hashes"]
-        assert run.call_args.args[5] == path.read_text()
+        assert run.call_args.args[6] == path.read_text()

@@ -63,6 +63,11 @@ One term per concept in code, prompts, log fields, flags and docs:
 - note: one line the model adds when something changed for good (a part done, an attempt that
   failed, a belief proved wrong). Notes are never changed or removed; a note repeated word for
   word is dropped. Plan and notes are cleared when the task changes.
+- review: the model calls after a task stops that read its turns (screenshots, game state,
+  reasoning and actions) for findings (`Reviewer`, `ChatReviewer`).
+- finding: a standalone fact about the game recorded by the review of a task's turns, with a
+  kind (dialogue, location, mechanic or other). Findings are for long-term memory and are never
+  shown to the model during the task.
 - short-term memory: recent reasoning, observations and turns, plus the plan and notes and
   information retrieved for the current task. Reasoning is shown only with its turn; anything
   later turns need goes into the plan or a note.

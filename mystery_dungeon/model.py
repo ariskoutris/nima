@@ -100,7 +100,7 @@ class ChatModel:
         if not isinstance(answer["plan"], str) or not isinstance(answer["note"], str):
             raise ValueError(f"{self.name} returned an invalid plan or note: {answer!r}")
         return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip(),
-                     _one_line(answer["plan"]), _one_line(answer["note"]) or None)
+                     one_line(answer["plan"]), one_line(answer["note"]) or None)
 
 
 def api_key(settings: ChatSettings) -> str | None:
@@ -152,7 +152,8 @@ def decode(response: dict, model: str) -> object:
         raise ValueError(f"{model} returned an invalid answer") from exc
 
 
-def _one_line(text: str) -> str:
+def one_line(text: str) -> str:
+    """Collapse whitespace, newlines included, to single spaces."""
     return " ".join(text.split())
 
 

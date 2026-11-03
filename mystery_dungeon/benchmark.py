@@ -17,6 +17,7 @@ from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
 from mystery_dungeon.model import ChatModel, Model, read_settings
 from mystery_dungeon.prompts import INSTRUCTIONS
 from mystery_dungeon.ram_state import GameRam, check_rom
+from mystery_dungeon.review import ChatReviewer, Reviewer, ReviewError, review
 from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
     HOLD_TICKS,
@@ -168,9 +169,10 @@ def build_fixtures(game: GbaEmulator, output: Path) -> dict[str, Checkpoint]:
     return checkpoints
 
 
-def run_case(game: GbaEmulator, case: Case, model: Model,
+def run_case(game: GbaEmulator, case: Case, model: Model, reviewer: Reviewer,
              checkpoints: dict[str, Checkpoint], output: Path, knowledge: str = "") -> dict:
-    """Run one case until its limit, Stop or a model error, and return its graded result."""
+    """Run one case until its limit, Stop or a model error, review its turns, and return its
+    graded result."""
     output.mkdir(parents=True, exist_ok=False)
     log = RunLog(output, model,
                  {"kind": "benchmark_case", "case": case.id, "start": case.start,
@@ -215,6 +217,9 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
     (output / "states/final.sav").write_bytes(game.save_ram())
     log.record_run_stop(ended, outcome, session.action_count, case.limit,
                         session.last_observation.screenshot)
+    seconds = round(time.monotonic() - started, 2)  # the attempt's, without its review
+    findings = review(reviewer, case.task, agent.turns)
+    log.record_review(case.task, findings)
     reached = reached_at is not None
     result = {"case": case.id, "task": case.task, "reached": reached,
               "stopped_reached": ended == "stop" and reached,
@@ -222,7 +227,8 @@ def run_case(game: GbaEmulator, case: Case, model: Model,
               "stopped_unreached": ended == "stop" and not reached,
               "reached_at": reached_at, "ended": ended, "outcome": outcome,
               "actions": session.action_count, "limit": case.limit, "turns": turns,
-              "seconds": round(time.monotonic() - started, 2), "error": error}
+              "seconds": seconds, "error": error,
+              "review_error": findings.message if isinstance(findings, ReviewError) else None}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
@@ -258,6 +264,7 @@ def main() -> None:
     check_rom(args.rom)
     settings = read_settings()
     model = ChatModel(settings)  # fails on a missing key before any output exists
+    reviewer = ChatReviewer(settings)
     selected = [case for case in CASES if args.case is None or case.id in args.case]
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "cases").mkdir()
@@ -278,8 +285,8 @@ def main() -> None:
         results = []
         for case in selected:
             print(case.id, flush=True)
-            result = run_case(game, case, model, checkpoints, args.output / "cases" / case.id,
-                              knowledge)
+            result = run_case(game, case, model, reviewer, checkpoints,
+                              args.output / "cases" / case.id, knowledge)
             results.append(result)
             report(results, args.output)
             print(f"  {result['ended']} after {result['actions']} actions", flush=True)

@@ -65,7 +65,8 @@ class ModelError:
 
 class Agent:
     """Agent that interacts with the game to complete the given task.
-    Chooses actions with a model and keeps recent turns plus the task's plan and notes."""
+    Chooses actions with a model and keeps short-term memory, plus the task's turns for its
+    review."""
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
         self._model = model
@@ -74,6 +75,7 @@ class Agent:
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
         self._plan = ""
         self._notes: list[str] = []
+        self._turns: list[Turn] = []
 
     @property
     def memory(self) -> tuple[MemoryEntry, ...]:
@@ -88,8 +90,17 @@ class Agent:
         """The task's notes, oldest first; a note is never changed or removed."""
         return tuple(self._notes)
 
+    @property
+    def turns(self) -> tuple[Turn, ...]:
+        """The task's turns since the last clear_turns, oldest first, for its review."""
+        return tuple(self._turns)
+
+    def clear_turns(self) -> None:
+        """Forget the turns kept for the review, once they are reviewed."""
+        self._turns.clear()
+
     def set_task(self, task: str) -> None:
-        """Switch tasks, forgetting the old task's memory, plan and notes."""
+        """Switch tasks, forgetting the old task's memory, plan, notes and turns."""
         task = task.strip()
         if self._task and task != self._task:
             self.clear_memory()
@@ -99,6 +110,7 @@ class Agent:
         self._memory.clear()
         self._plan = ""
         self._notes.clear()
+        self._turns.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
         """Take one turn: observe, ask the model and apply its action, plan and note."""
@@ -121,6 +133,7 @@ class Agent:
         # The model repeats a note word for word when it forgets it already wrote it.
         if reply.note and reply.note not in self._notes:
             self._notes.append(reply.note)
+        self._turns.append(turn)
         return turn, transition
 
     def manual(self, session: Session, action: GameAction) -> Transition:

@@ -7,10 +7,12 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from fakes import Game, ScriptedModel, rows, votes
+from fakes import Game, ScriptedModel, ScriptedReviewer, rows, votes
 
 from emulator import Frame
 from mystery_dungeon import live
+from mystery_dungeon.actions import Press, Stop
+from mystery_dungeon.review import Finding
 from mystery_dungeon.session import Checkpoint
 
 AGENT_PRESS = (8, ("A",))
@@ -36,13 +38,14 @@ def start_run(tmp_path, monkeypatch):
     threads = []
     monkeypatch.setattr(live, "TICK_SECONDS", 0)
 
-    def start(model):
+    def start(model, reviewer=None):
+        reviewer = reviewer or ScriptedReviewer()
         game = Game()
         state_file = tmp_path / "start.state"
         state_file.write_bytes(b"start")
         monkeypatch.setattr(live, "GbaEmulator", lambda rom, core: game)
         run = live.LiveRun(tmp_path / "game.gba", tmp_path / "core", state_file,
-                           tmp_path / "output", model, 8, 4)
+                           tmp_path / "output", model, reviewer, 8, 4)
         thread = threading.Thread(target=run.run)
         threads.append((run, thread))
         thread.start()
@@ -206,6 +209,38 @@ def test_stop_pauses_with_its_outcome_without_pressing(start_run):
         state["notice"] == "Stopped (stuck): A wall blocks the exit."))
     assert state["status"] == "paused" and state["history"] == []
     assert AGENT_PRESS not in game.steps
+
+
+def test_a_stop_reviews_the_task_and_shows_its_findings(start_run):
+    reviewer = ScriptedReviewer([Finding("dialogue", "Kecleon: 'Welcome!'")])
+    run, _ = start_run(ScriptedModel(stop=votes(False, True)), reviewer)
+    run.control({"task": "Find exit", "command": "start"})
+    state = wait_until(run, lambda state: state["findings"] and idle(state))
+    assert state["findings"] == [{"kind": "dialogue", "text": "Kecleon: 'Welcome!'"}]
+    [(task, turns)] = reviewer.reviews
+    assert task == "Find exit" and [type(turn.action) for turn in turns] == [Press, Stop]
+    review_row = rows(run.output / "turns.jsonl")[-1]
+    assert review_row["event"] == "review" and review_row["error"] is None
+    assert review_row["findings"] == state["findings"]
+
+
+def test_running_the_same_task_again_reviews_only_its_new_turns(start_run):
+    reviewer = ScriptedReviewer()
+    run, _ = start_run(ScriptedModel(stop=votes(False, True, False, True)), reviewer)
+    for count in (1, 2):
+        run.control({"task": "Find exit", "command": "start"})
+        wait_until(run, lambda state, count=count: len(reviewer.reviews) == count and idle(state))
+    assert [len(turns) for _, turns in reviewer.reviews] == [2, 2]
+
+
+def test_a_failed_review_shows_its_error(start_run):
+    run, _ = start_run(ScriptedModel(stop=votes(True)),
+                       ScriptedReviewer(error=TimeoutError("timed out")))
+    run.control({"task": "Find exit", "command": "start"})
+    state = wait_until(run, lambda state: state["status"] == "error")
+    assert state["error"] == "Review failed: TimeoutError: timed out"
+    assert state["findings"] == []
+    assert rows(run.output / "turns.jsonl")[-1]["error"] == "TimeoutError: timed out"
 
 
 def test_model_error_pauses_with_the_error(start_run):

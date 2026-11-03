@@ -20,7 +20,7 @@
     h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.02em; }
     .status { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #2b3d3e; border-radius: 999px; color: #b8c9c5; background: #152125; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a9b98; }
-    .status.running .dot, .status.thinking .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
+    .status.running .dot, .status.thinking .dot, .status.reviewing .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
     .status.resetting .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
     .status.error .dot { background: #ff938a; }
     .layout { display: grid; grid-template-columns: minmax(0, 1.38fr) minmax(310px, .9fr); gap: 18px; align-items: start; }
@@ -69,7 +69,7 @@
     .task-memory summary h2::before { content: '▸ '; color: #91a7a5; }
     .task-memory details[open] summary h2::before { content: '▾ '; }
     .task-memory summary:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
-    .task-memory-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 0 20px 18px; max-height: 320px; overflow: auto; color: #d3e0da; font-size: .85rem; }
+    .task-memory-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; padding: 0 20px 18px; max-height: 320px; overflow: auto; color: #d3e0da; font-size: .85rem; }
     .task-memory-body h3 { margin: 0 0 6px; color: #91a7a5; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
     .task-memory-body ul { margin: 0 0 10px; padding-left: 0; list-style: none; }
     .task-memory-body li { padding: 3px 0; overflow-wrap: anywhere; }
@@ -136,10 +136,11 @@
       </section>
       <section class="card task-memory">
         <details open>
-          <summary><h2>Plan and notes</h2><span id="notes-count" class="muted">No notes yet</span></summary>
+          <summary><h2>Plan, notes and findings</h2><span id="notes-count" class="muted">No notes yet</span></summary>
           <div class="task-memory-body">
             <div><h3>Plan</h3><div id="plan"></div></div>
             <div><h3>Notes</h3><div id="notes"></div></div>
+            <div><h3>Findings of the last review</h3><div id="findings"></div></div>
           </div>
         </details>
       </section>
@@ -225,6 +226,7 @@
       const activity = {
         loading: ['Starting emulator', 'Preparing the game view'],
         thinking: ['Waiting for the model', `${state.model} is choosing an action`],
+        reviewing: ['Reviewing the task', `${state.model} is reading its turns for findings`],
         resetting: ['Restoring game', 'Loading the selected state']
       }[state.status];
       $('screen-activity').hidden = !activity;
@@ -260,7 +262,7 @@
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('history').textContent = 'No actions yet.';
       }
-      renderTaskMemory(state.plan, state.notes);
+      renderTaskMemory(state.plan, state.notes, state.findings);
       const latest = state.history[0];
       if (!latest) return;
       if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
@@ -299,8 +301,8 @@
       return container;
     }
 
-    function renderTaskMemory(plan, notes) {
-      const key = JSON.stringify([plan, notes]);
+    function renderTaskMemory(plan, notes, findings) {
+      const key = JSON.stringify([plan, notes, findings]);
       if (key === shownTaskMemory) return;
       shownTaskMemory = key;
       $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'No notes yet';
@@ -310,6 +312,9 @@
       $('notes').replaceChildren(notes.length
         ? list(notes, note => [note])
         : element('div', 'Notes the agent keeps during the task will appear here.', 'muted'));
+      $('findings').replaceChildren(findings.length
+        ? list(findings, finding => [element('span', `(${finding.kind}) `, 'entry-label'), finding.text])
+        : element('div', 'Facts about the game found in a task\'s turns will appear here when it stops.', 'muted'));
     }
 
     function renderHistory(rows) {

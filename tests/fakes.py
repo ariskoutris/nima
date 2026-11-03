@@ -10,6 +10,7 @@ from typing import Callable, Sequence
 from emulator import Frame
 from mystery_dungeon.actions import GAME_ACTIONS, Outcome, Stop
 from mystery_dungeon.model import Reply
+from mystery_dungeon.review import Finding
 from mystery_dungeon.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))
@@ -63,6 +64,22 @@ class ScriptedModel:
             assert self.gate.wait(2), "test gate was never released"
         if self.error is not None:
             raise self.error
+
+
+class ScriptedReviewer:
+    """Return fixed findings, or raise ``error``, and record each task and its turns."""
+
+    def __init__(self, findings: Sequence[Finding] = (), error: Exception | None = None) -> None:
+        self.findings = list(findings)
+        self.error = error
+        self.reviews: list[tuple[str, tuple]] = []
+        self.name = "scripted"
+
+    def review(self, task, turns) -> list[Finding]:
+        self.reviews.append((task, tuple(turns)))
+        if self.error is not None:
+            raise self.error
+        return list(self.findings)
 
 
 def votes(*answers: bool) -> Callable[[], bool]:

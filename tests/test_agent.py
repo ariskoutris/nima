@@ -92,6 +92,27 @@ def test_a_stop_applies_its_plan_and_note(tmp_path):
     assert (agent.plan, agent.notes) == ("Nothing left.", ("Done: talked to Kecleon.",))
 
 
+def test_the_task_keeps_its_turns_for_the_review(tmp_path):
+    agent = agent_with(ScriptedModel())
+    session = start(tmp_path)
+    turns = [agent.act(session)[0] for _ in range(MEMORY_TURNS + 1)]
+    assert agent.turns == tuple(turns)  # more than memory keeps
+    agent.set_task("Talk to Granbull")
+    assert agent.turns == ()
+    agent.act(session)
+    agent.clear_memory()
+    assert agent.turns == ()
+    agent.act(session)
+    agent.clear_turns()
+    assert agent.turns == () and len(agent.memory) == 1  # memory stays for the model
+
+
+def test_a_model_error_is_no_turn_of_the_task(tmp_path):
+    agent = agent_with(ScriptedModel(error=RuntimeError("model down")))
+    agent.act(start(tmp_path))
+    assert agent.turns == ()
+
+
 def test_the_first_task_keeps_earlier_manual_actions(tmp_path):
     agent = Agent(ScriptedModel())
     session = start(tmp_path)

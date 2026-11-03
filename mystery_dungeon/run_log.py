@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 from mystery_dungeon.actions import GameAction, Stop, to_json
 from mystery_dungeon.model import internal_reasoning, token_usage
+from mystery_dungeon.review import Finding, ReviewError
 
 if TYPE_CHECKING:
     from emulator import Frame
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import Observation, Transition
 
-FORMAT_VERSION = 19  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 20  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
@@ -113,6 +114,16 @@ class RunLog:
         """Record how the attempt ended; outcome is the Stop's, None for any other ending."""
         self._write("run_stop", {"ended": ended, "outcome": outcome, "actions": actions,
                                  "limit": limit, "screenshot": screenshot})
+
+    def record_review(self, task: str, result: list[Finding] | ReviewError) -> None:
+        """Record the review of a task's turns: its findings, or why it failed."""
+        match result:
+            case ReviewError(message):
+                self._write("review", {"task": task, "findings": None, "error": message})
+            case findings:
+                self._write("review", {"task": task, "error": None,
+                                       "findings": [dataclasses.asdict(finding)
+                                                    for finding in findings]})
 
     def _write_turn(self, event: str, observation: Observation, context: Context,
                     fields: dict) -> dict:
