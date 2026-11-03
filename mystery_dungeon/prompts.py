@@ -13,7 +13,8 @@ that confirms or breaks something you assumed; then your next action. Your reaso
 to you for a few turns only.
 - note: your notes are your only memory of this task beyond the last few turns. "" on most \
 turns. Otherwise one line that starts with its kind: "Done:" a part of the task finished, on \
-the turn the screen shows it finished, saying what showed it; "Failed:" an attempt that didn't \
+the turn the screen shows it finished, saying what showed it, also when an operator turn \
+finished it; "Failed:" an attempt that didn't \
 work, saying what you did and what happened, as an event and not as a rule; "Wrong:" something \
 you believed that turned out false; "Found:" where someone or something you still need is, \
 described by landmarks, written once. The current state (what is open or in progress, where \
