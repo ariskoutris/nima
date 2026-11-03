@@ -22,8 +22,10 @@ from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
 from mystery_dungeon.session import (
     HOLD_TICKS,
     RELEASE_TICKS,
+    TICK_SECONDS,
     Checkpoint,
     GameplaySession,
+    RealtimeSession,
     read_ss0,
 )
 
@@ -184,21 +186,29 @@ def run_case(game: GbaEmulator, case: Case, model: Model, reviewer: Reviewer,
     session = GameplaySession(game, output)
     session.load(checkpoints[case.start])
     grader = Grader(case, session.ram)
+    realtime = RealtimeSession(session)  # the game runs on while the model thinks, as live
     started = time.monotonic()
     ended = "limit"
     error = None
     outcome = None
     turns = 0
     reached_at = None
-    while True:
+
+    def graded(reached_at: int | None) -> int | None:
+        """The turn the case was first reached at, given the game as it is now."""
         success = grader.reached()
         if case.criterion in ("finish", "finish_lombre") and not success:
-            reached_at = None  # A reopened the conversation after it had ended.
-        elif success and reached_at is None:
-            reached_at = turns
+            return None  # A reopened the conversation after it had ended.
+        return turns if success and reached_at is None else reached_at
+
+    while True:
+        reached_at = graded(reached_at)
         if session.action_count >= case.limit:
             break
-        result, transition = agent.act(session)
+        try:
+            result, transition = agent.act(realtime)
+        finally:
+            realtime.halt()  # Stop and model errors end the turn without an action
         match result:
             case ModelError(message=message):
                 log.record_model_error(result)
@@ -212,6 +222,10 @@ def run_case(game: GbaEmulator, case: Case, model: Model, reviewer: Reviewer,
             case Turn():
                 log.record_turn(result, transition)
                 turns += 1
+    if ended != "limit":
+        # The game ran on while the model thought; grade and show the state it ended in.
+        session.observe()
+        reached_at = graded(reached_at)
     (output / "states").mkdir(exist_ok=True)
     (output / "states/final.state").write_bytes(game.save_state())
     (output / "states/final.sav").write_bytes(game.save_ram())
@@ -280,6 +294,7 @@ def main() -> None:
         "cases": [asdict(c) for c in selected],
         "hashes": hashes, "knowledge": str(args.knowledge) if args.knowledge else None,
         "hold_ticks": HOLD_TICKS, "release_ticks": RELEASE_TICKS,
+        "realtime_tick_seconds": TICK_SECONDS,  # the game runs on while the model thinks
     }, indent=2) + "\n")
     with GbaEmulator(args.rom, args.core) as game:
         checkpoints = build_fixtures(game, args.output)

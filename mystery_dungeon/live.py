@@ -25,10 +25,10 @@ from mystery_dungeon.run_log import RunLog
 from mystery_dungeon.session import (
     HOLD_TICKS,
     RELEASE_TICKS,
+    TICK_SECONDS,
     Checkpoint,
     GameplaySession,
-    Observation,
-    Transition,
+    RealtimeSession,
     read_checkpoint,
     read_ss0,
 )
@@ -36,7 +36,6 @@ from mystery_dungeon.session import (
 COMMANDS = ("start", "pause", "turn", "manual", "reset")
 MAX_TASK_LENGTH = 1000
 SCREEN_WAIT_SECONDS = 15
-TICK_SECONDS = 1 / 60  # one tick at the GBA's refresh rate, to pace streamed frames
 
 
 @dataclass(frozen=True)
@@ -57,52 +56,6 @@ class TakeTurn:
 
 Request = Manual | Load
 Work = Request | TakeTurn
-
-
-class RealtimeSession:
-    """Keep the game running without input from each observation until the next action.
-
-    The game doesn't wait for the model, so an action meets the game as it is when the
-    reply arrives, not as the model saw it.
-    """
-
-    def __init__(self, session: GameplaySession) -> None:
-        self._session = session
-        self._running = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._error: Exception | None = None
-
-    def observe(self) -> Observation:
-        observation = self._session.observe()
-        self._running.set()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        return observation
-
-    def apply(self, action: GameAction) -> Transition:
-        self.halt()
-        return self._session.apply(action)
-
-    def halt(self) -> None:
-        """Stop the game after its current tick.
-
-        Raises:
-            Exception: the emulator's error if a tick failed while the game ran.
-        """
-        self._running.clear()
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
-        if (error := self._error) is not None:
-            self._error = None
-            raise error
-
-    def _run(self) -> None:
-        try:
-            while self._running.is_set():
-                self._session.idle()
-        except Exception as exc:
-            self._error = exc
 
 
 class LiveRun:

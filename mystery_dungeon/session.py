@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import struct
+import threading
+import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,7 @@ from emulator import Frame, GbaEmulator
 from mystery_dungeon.actions import GameAction, Press, Wait
 from mystery_dungeon.ram_state import GameRam, RamState
 
+TICK_SECONDS = 1 / 60  # one tick at the GBA's refresh rate
 HOLD_TICKS = 8  # ticks each action holds its input
 RELEASE_TICKS = 4  # ticks with no input after each action
 TEXT_WAIT_LIMIT = 300  # most ticks spent waiting for one page of text to print
@@ -256,3 +259,55 @@ class GameplaySession:
         temporary = states / f"{filename}.tmp"
         temporary.write_bytes(self.emulator.save_state())
         temporary.replace(states / filename)
+
+
+class RealtimeSession:
+    """Keep the game running without input, at real speed, from each observation until the
+    next action.
+
+    The game doesn't wait for the model, so an action meets the game as it is when the
+    reply arrives, not as the model saw it.
+    """
+
+    def __init__(self, session: GameplaySession) -> None:
+        self._session = session
+        self._halted = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._error: Exception | None = None
+
+    def observe(self) -> Observation:
+        self.halt()  # one idle thread at a time
+        observation = self._session.observe()
+        self._halted.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return observation
+
+    def apply(self, action: GameAction) -> Transition:
+        self.halt()
+        return self._session.apply(action)
+
+    def halt(self) -> None:
+        """Stop the game after its current tick.
+
+        Raises:
+            Exception: the emulator's error if a tick failed while the game ran.
+        """
+        self._halted.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+        if (error := self._error) is not None:
+            self._error = None
+            raise error
+
+    def _run(self) -> None:
+        started, ticks = time.monotonic(), 0
+        try:
+            # Each tick waits for its time, so the game runs as many ticks as the GBA would.
+            while not self._halted.wait(max(0.0, started + ticks * TICK_SECONDS
+                                            - time.monotonic())):
+                self._session.idle()
+                ticks += 1
+        except Exception as exc:
+            self._error = exc

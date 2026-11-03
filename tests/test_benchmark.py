@@ -2,6 +2,8 @@
 
 import json
 import sys
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -260,6 +262,37 @@ def test_only_a_complete_stop_claims_the_task(town, outcome):
     assert late["reached"] and late["missed"] and not late["claimed_reached"]
 
 
+def test_the_game_runs_while_the_model_thinks(town):
+    game, seeds, output = town
+
+    def thinking():
+        time.sleep(0.3)
+        return False
+
+    case = Case("thinking", "square", "Move one tile down", "down", 2)
+    run_case(game, case, ScriptedModel(["DOWN"], thinking), ScriptedReviewer(), seeds,
+             output / "thinking")
+    first, second = [row for row in rows(output / "thinking/turns.jsonl")
+                     if row["event"] == "action"]
+    assert second["tick_before"] - first["tick_after"] >= 0.2 * 60  # idle ticks while thinking
+
+
+def test_a_stop_is_graded_and_shown_as_the_game_ended_after_thinking(town):
+    game, seeds, output = town
+
+    def thinking():
+        time.sleep(0.2)
+        return True
+
+    case = Case("stop_after_thinking", "square", "Move one tile down", "down", 2)
+    run_case(game, case, ScriptedModel(["DOWN"], thinking), ScriptedReviewer(), seeds,
+             output / "stop_after_thinking")
+    log = rows(output / "stop_after_thinking/turns.jsonl")
+    stop = next(row for row in log if row["event"] == "stop")
+    run_stop = next(row for row in log if row["event"] == "run_stop")
+    assert run_stop["screenshot"] != stop["screenshot"]  # observed again after the idle ticks
+
+
 def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monkeypatch):
     game, seeds, output = town
     clock = Mock(return_value=0)
@@ -270,7 +303,7 @@ def test_slow_inference_still_acts_but_action_limit_stops_after_reach(town, monk
 
     case = Case("slow_one_action", "square", "Move one tile down", "down", 1)
     with monkeypatch.context() as patcher:
-        patcher.setattr(benchmark.time, "monotonic", clock)
+        patcher.setattr(benchmark, "time", SimpleNamespace(monotonic=clock))  # not the pacer's
         result = run_case(game, case, ScriptedModel(["DOWN"], slow_check),
                           ScriptedReviewer(), seeds, output / "late_turn")
     assert result["ended"] == "limit"
@@ -307,6 +340,7 @@ def test_main_runs_every_case_with_one_model(tmp_path, monkeypatch):
     assert config["format_version"] == FORMAT_VERSION
     assert config["model"]["name"] == "vendor/model"
     assert config["memory_turns"] == benchmark.MEMORY_TURNS and config["instructions_sha256"]
+    assert config["realtime_tick_seconds"] == benchmark.TICK_SECONDS
     assert config["hashes"][str(rom)] == benchmark.sha256(rom)
 
 

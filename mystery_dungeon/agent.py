@@ -16,7 +16,7 @@ MEMORY_TURNS = 5  # not yet tuned
 
 
 class Session(Protocol):
-    """The game as the agent sees it: GameplaySession, or live's RealtimeSession."""
+    """The game as the agent sees it: GameplaySession, or RealtimeSession around one."""
 
     def observe(self) -> Observation: ...
 
