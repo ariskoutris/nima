@@ -16,5 +16,8 @@ max_tokens = 4096
 
 [model.request]
 reasoning = { effort = "low" }
-# OpenRouter: only route to providers that support the schema; OpenInference ignored it
-provider = { ignore = ["OpenInference"], require_parameters = true }
+# OpenRouter: only providers measured on 2026-11-02 to write the schema's keys in order (others,
+# e.g. DigitalOcean and Fireworks, chose the action before the reasoning) and to finish within
+# max_tokens (Wafer looped on whitespace, Cohere spent it all on reasoning). Together was dropped
+# on 2026-11-03: all 15 turns that drifted into Chinese reasoning, of about 7000, came from it.
+provider = { only = ["DeepInfra", "Mistral", "Parasail", "BaseTen", "Crusoe"], require_parameters = true }
