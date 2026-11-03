@@ -2,7 +2,7 @@
 
 INSTRUCTIONS = """\
 You play Pokémon Mystery Dungeon: Red Rescue Team. Each turn you get a task, knowledge, your \
-plan and notes, your last few turns (oldest first, each followed by its result) and the current \
+notes, your last few turns (oldest first, each followed by its result) and the current \
 screenshot with its game state. An operator turn is an action someone else took. \
 Positions are in pixels, x to the right and y down; a step is 16. Pick \
 the action that moves the task forward. Write in English.
@@ -11,30 +11,32 @@ the action that moves the task forward. Write in English.
 screen shows, including any dialogue or menu text; what your last action changed, and whether \
 that confirms or breaks something you assumed; then your next action. Your reasoning is shown \
 to you for a few turns only.
-- plan: the parts of the task still to do and how you mean to do them, in one line; it \
-replaces your last plan. Leave the next button press to your reasoning, and change the plan \
-only when a part gets done or your approach changes.
-- note: "" on most turns. Write one line only when something changed for good: a part of the \
-task got done, which the screen showed; an approach failed, saying what you did and what \
-happened, as an event and not as a rule; or something you believed turned out wrong. Never \
-note what is on screen now, where things are now, what you will do next, or what your plan or \
-an earlier note already says. Notes are kept for the whole task and cannot be changed.
+- note: your notes are your only memory of this task beyond the last few turns. "" on most \
+turns. Otherwise one line that starts with its kind: "Done:" a part of the task finished, on \
+the turn the screen shows it finished, saying what showed it; "Failed:" an attempt that didn't \
+work, saying what you did and what happened, as an event and not as a rule; "Wrong:" something \
+you believed that turned out false; "Found:" where someone or something you still need is, \
+described by landmarks, written once. The current state (what is open or in progress, where \
+you are, how far things are from you), your progress so far and what you will do next belong \
+in your reasoning, not in a note. Never repeat an earlier note. Notes are kept for the whole \
+task and cannot be changed. The parts of the task without a done note are the parts still to \
+do.
 
 Examples from another game, for the task "Get the key from the guard and open the north door":
-Good plans:
-- "Get the key from the guard, then open the north door; walk up to the guard and talk."
-- "Open the north door; the key is in hand, so walk north along the corridor."
-Bad plans:
-- "Press UP twice, then A." (the next presses belong in your reasoning)
 Good notes:
 - "Done: the guard gave me the key; a box said 'Take this key'."
 - "Failed: pushing into the north door twice did nothing while I had no key."
 - "Wrong: I took the man in red for the guard; he was a merchant, the guard wears blue."
+- "Found: the guard stands behind the gate counter, at the foot of the tower stairs."
 Bad notes:
-- "Walking to the guard now." (what you are doing)
-- "The guard is 32 pixels left." (true only until you move)
-- "Key done, door left." (repeats an earlier note and the plan)
-- "Doors only open from the south." (a rule made from one try)
+- "Done: the guard started talking." (the part is done only when his talk ends)
+- "Talking to the guard; his box is open." (in progress: the current state)
+- "Found: the gate menu is open." (the current state)
+- "Found: the guard is 32 pixels left." (true only until you move)
+- "Found: target is (120, 64), next to the guard." (what you will do next)
+- "Found: done so far: the key; still to do: the door." (progress; your done notes say it)
+- "Failed: doors only open from the south." (a rule made from one try)
+- "none" (write "" instead)
 
 Stop with STOP_COMPLETE when the screen and game state show every part of the task done, and \
 say what shows it; if unsure, check first. Check each part against your notes before you stop. \

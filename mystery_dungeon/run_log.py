@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from mystery_dungeon.model import Model, Reply
     from mystery_dungeon.session import Observation, Transition
 
-FORMAT_VERSION = 20  # of run and benchmark output; bump when a field changes
+FORMAT_VERSION = 21  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 40  # action rows the live view lists
 
 Ending = Literal["stop", "limit", "model_error"]  # how an attempt ended
@@ -131,7 +131,7 @@ class RunLog:
         self._turns += 1
         calls, self._calls[:] = self._calls.copy(), []
         model_input = {"task": context.task,
-                       "plan": context.plan, "notes": list(context.notes),
+                       "notes": list(context.notes),
                        "screenshot": observation.screenshot,
                        "game_state": dataclasses.asdict(context.game_state),
                        "memory": [{"screenshot": entry.observation.screenshot,
@@ -156,7 +156,7 @@ class RunLog:
 
 
 def _reply_fields(turn: Turn) -> dict:
-    return {"reasoning": turn.reasoning, "plan": turn.plan, "note": turn.note}
+    return {"reasoning": turn.reasoning, "note": turn.note}
 
 
 def _append(path: Path, row: dict) -> dict:

@@ -69,7 +69,7 @@
     .task-memory summary h2::before { content: '▸ '; color: #91a7a5; }
     .task-memory details[open] summary h2::before { content: '▾ '; }
     .task-memory summary:focus-visible { outline: 2px solid #b7f5d0; outline-offset: -2px; }
-    .task-memory-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; padding: 0 20px 18px; max-height: 320px; overflow: auto; color: #d3e0da; font-size: .85rem; }
+    .task-memory-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 0 20px 18px; max-height: 320px; overflow: auto; color: #d3e0da; font-size: .85rem; }
     .task-memory-body h3 { margin: 0 0 6px; color: #91a7a5; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
     .task-memory-body ul { margin: 0 0 10px; padding-left: 0; list-style: none; }
     .task-memory-body li { padding: 3px 0; overflow-wrap: anywhere; }
@@ -136,9 +136,8 @@
       </section>
       <section class="card task-memory">
         <details open>
-          <summary><h2>Plan, notes and findings</h2><span id="notes-count" class="muted">No notes yet</span></summary>
+          <summary><h2>Notes and findings</h2><span id="notes-count" class="muted">No notes yet</span></summary>
           <div class="task-memory-body">
-            <div><h3>Plan</h3><div id="plan"></div></div>
             <div><h3>Notes</h3><div id="notes"></div></div>
             <div><h3>Findings of the last review</h3><div id="findings"></div></div>
           </div>
@@ -261,7 +260,7 @@
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('history').textContent = 'No actions yet.';
       }
-      renderTaskMemory(state.plan, state.notes, state.findings);
+      renderTaskMemory(state.notes, state.findings);
       const latest = state.history[0];
       if (!latest) return;
       if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
@@ -300,14 +299,11 @@
       return container;
     }
 
-    function renderTaskMemory(plan, notes, findings) {
-      const key = JSON.stringify([plan, notes, findings]);
+    function renderTaskMemory(notes, findings) {
+      const key = JSON.stringify([notes, findings]);
       if (key === shownTaskMemory) return;
       shownTaskMemory = key;
       $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'No notes yet';
-      $('plan').replaceChildren(plan
-        ? element('div', plan)
-        : element('div', 'The agent\'s plan for the task will appear here.', 'muted'));
       $('notes').replaceChildren(notes.length
         ? list(notes, note => [note])
         : element('div', 'Notes the agent keeps during the task will appear here.', 'muted'));

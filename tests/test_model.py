@@ -28,7 +28,7 @@ MEMORY = (MemoryEntry(Observation(FRAME, "before.png", UNKNOWN), Press("UP"),
           MemoryEntry(Observation(FRAME, "manual.png", UNKNOWN), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
-EMPTY = {"plan": "", "note": ""}
+EMPTY = {"note": ""}
 
 
 def answering(monkeypatch, *responses):
@@ -53,15 +53,13 @@ def reply(answer, finish_reason="stop"):
 
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({
-        "reasoning": " The door is ahead. ", "plan": " Leave the house\n by the south door. ",
-        "note": " Done: found the door. ", "action": "DOWN"}))
+        "reasoning": " The door is ahead. ", "note": " Done: found\n the door. ",
+        "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
     context = Context("Find the exit", "Avoid walls", MEMORY, UNKNOWN,
-                      plan="Leave the house.", notes=("Done: left the bedroom.",
-                                                      "Failed: the east door is locked."))
+                      notes=("Done: left the bedroom.", "Failed: the east door is locked."))
     answer = chat_model.call(context, FRAME)
-    assert answer == Reply(Press("DOWN"), "The door is ahead.",
-                           "Leave the house by the south door.", "Done: found the door.")
+    assert answer == Reply(Press("DOWN"), "The door is ahead.", "Done: found the door.")
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
     payload = json.loads(sent[0].data)
@@ -70,8 +68,7 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     system, user = payload["messages"]
     assert system["content"] == INSTRUCTIONS
     assert "# Task\nFind the exit" in user["content"][0]["text"]
-    assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
-    assert ("# Your plan\nLeave the house.\n\n# Your notes\n- Done: left the bedroom.\n"
+    assert ("# Knowledge\nAvoid walls\n\n# Your notes\n- Done: left the bedroom.\n"
             "- Failed: the east door is locked.\n\n# Actions" in user["content"][0]["text"])
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
@@ -83,8 +80,8 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]
-    assert list(schema["properties"]) == ["reasoning", "plan", "note", "action"]
-    assert schema["required"] == ["reasoning", "plan", "note", "action"]
+    assert list(schema["properties"]) == ["reasoning", "note", "action"]
+    assert schema["required"] == ["reasoning", "note", "action"]
     assert {"WAIT", "STOP_STUCK"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
@@ -95,16 +92,16 @@ def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
     answering(monkeypatch, reply({"reasoning": "The dialogue closed.", **EMPTY,
                                   "action": action}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY, UNKNOWN), FRAME)
-    assert answer == Reply(Stop(outcome), "The dialogue closed.", "", None)
+    assert answer == Reply(Stop(outcome), "The dialogue closed.", None)
 
 
 def test_a_blank_note_is_no_note_and_an_empty_memory_is_shown_as_none_yet(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Wait.", "plan": " ", "note": " \n ",
+    sent = answering(monkeypatch, reply({"reasoning": "Wait.", "note": " \n ",
                                          "action": "WAIT"}))
     answer = ChatModel(SETTINGS).call(Context("Talk", "", (), UNKNOWN), FRAME)
-    assert (answer.plan, answer.note) == ("", None)
+    assert answer.note is None
     text = json.loads(sent[0].data)["messages"][1]["content"][0]["text"]
-    assert "# Your plan\n(none yet)\n\n# Your notes\n(none yet)\n\n# Actions" in text
+    assert "# Task\nTalk\n\n# Your notes\n(none yet)\n\n# Actions" in text
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
@@ -134,11 +131,9 @@ def test_settings_come_from_the_model_table(tmp_path):
     (reply({"reasoning": "Start.", **EMPTY, "action": "START"}), "unknown action"),
     (reply({"reasoning": "Press A.", **EMPTY, "action": ["A"]}), "unknown action"),
     (reply({"reasoning": " ", **EMPTY, "action": "A"}), "no reasoning"),
-    (reply({"reasoning": "Press A.", **EMPTY, "plan": None, "action": "A"}),
-     "invalid plan or note"),
-    (reply({"reasoning": "Press A.", **EMPTY, "note": ["Done."], "action": "A"}),
-     "invalid plan or note"),
-    (reply({"reasoning": "Press A.", "plan": "", "action": "A"}), "invalid answer"),
+    (reply({"reasoning": "Press A.", "note": None, "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Press A.", "note": ["Done."], "action": "A"}), "invalid note"),
+    (reply({"reasoning": "Press A.", **EMPTY, "extra": "", "action": "A"}), "invalid answer"),
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),

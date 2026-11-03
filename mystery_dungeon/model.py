@@ -22,27 +22,25 @@ if TYPE_CHECKING:
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
-# The model judges the screen and updates its plan and notes before it commits to an action.
+# The model judges the screen and may add a note before it commits to an action.
 ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
         "reasoning": {"type": "string"},
-        "plan": {"type": "string"},
         "note": {"type": "string"},
         "action": {"type": "string", "enum": list(ACTION_NAMES)},
     },
-    "required": ["reasoning", "plan", "note", "action"],
+    "required": ["reasoning", "note", "action"],
     "additionalProperties": False,
 }
 
 
 @dataclass(frozen=True)
 class Reply:
-    """The model's action and reasoning, its plan, and a note to keep (None for none)."""
+    """The model's action and reasoning, and a note to keep (None for none)."""
 
     action: Action
     reasoning: str
-    plan: str  # blank keeps the last plan
     note: str | None
 
 
@@ -97,10 +95,10 @@ class ChatModel:
             raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
         if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
-        if not isinstance(answer["plan"], str) or not isinstance(answer["note"], str):
-            raise ValueError(f"{self.name} returned an invalid plan or note: {answer!r}")
+        if not isinstance(answer["note"], str):
+            raise ValueError(f"{self.name} returned an invalid note: {answer['note']!r}")
         return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip(),
-                     one_line(answer["plan"]), one_line(answer["note"]) or None)
+                     one_line(answer["note"]) or None)
 
 
 def api_key(settings: ChatSettings) -> str | None:
@@ -183,12 +181,11 @@ def token_usage(response: dict | None) -> dict | None:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """Build the user message: task, knowledge, plan, notes and actions, earlier turns,
+    """Build the user message: task, knowledge, notes and actions, earlier turns,
     current frame."""
     text = [f"# Task\n{context.task}"]
     if context.knowledge:
         text.append(f"# Knowledge\n{context.knowledge}")
-    text.append(f"# Your plan\n{context.plan or '(none yet)'}")
     text.append("# Your notes\n" + ("\n".join(
         f"- {note}" for note in context.notes) or "(none yet)"))
     text.append("# Actions\n" + "\n".join(

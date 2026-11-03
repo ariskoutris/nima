@@ -58,19 +58,19 @@ One term per concept in code, prompts, log fields, flags and docs:
   `GameAction` (Press, Wait) is what the game performs; Stop ends the task with its outcome:
   complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
   reasoning.
-- plan: one line the model rewrites each turn: the parts of the task still to do and how. A
-  blank plan keeps the last one.
-- note: one line the model adds when something changed for good (a part done, an attempt that
-  failed, a belief proved wrong). Notes are never changed or removed; a note repeated word for
-  word is dropped. Plan and notes are cleared when the task changes.
+- note: one line the model adds when it learns something that stays true and needed for the
+  task, starting with its kind: Done (a part finished), Failed (an attempt that didn't work),
+  Wrong (a belief proved false) or Found (where something still needed is). The current state
+  and next steps belong in the reasoning. Notes are never changed or removed; a repeat of an
+  earlier note, ignoring case and the final period, is dropped. Notes are cleared when the task changes.
 - review: the model calls after a task stops that read its turns (screenshots, game state,
   reasoning and actions) for findings (`Reviewer`, `ChatReviewer`).
 - finding: a standalone fact about the game recorded by the review of a task's turns, with a
   kind (dialogue, location, mechanic or other). Findings are for long-term memory and are never
   shown to the model during the task.
-- short-term memory: recent reasoning, observations and turns, plus the plan and notes and
-  information retrieved for the current task. Reasoning is shown only with its turn; anything
-  later turns need goes into the plan or a note.
+- short-term memory: recent reasoning, observations and turns, plus the notes and information
+  retrieved for the current task. Reasoning is shown only with its turn; a lasting fact later
+  turns need goes into a note.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
   during play. The agent draws on it to plan new tasks, judge which are feasible and prioritize;
   task information comes from here. It starts with prerequisite information such as

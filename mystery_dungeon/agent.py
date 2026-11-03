@@ -40,7 +40,6 @@ class Context:
     knowledge: str
     memory: tuple[MemoryEntry, ...]
     game_state: GameState  # with the current frame
-    plan: str = ""
     notes: tuple[str, ...] = ()
 
 
@@ -50,7 +49,6 @@ class Turn:
     context: Context
     action: Action
     reasoning: str
-    plan: str  # as the model wrote it; blank kept the last plan
     note: str | None
 
 
@@ -73,17 +71,12 @@ class Agent:
         self._knowledge = knowledge.strip()
         self._task = ""
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
-        self._plan = ""
         self._notes: list[str] = []
         self._turns: list[Turn] = []
 
     @property
     def memory(self) -> tuple[MemoryEntry, ...]:
         return tuple(self._memory)
-
-    @property
-    def plan(self) -> str:
-        return self._plan
 
     @property
     def notes(self) -> tuple[str, ...]:
@@ -100,7 +93,7 @@ class Agent:
         self._turns.clear()
 
     def set_task(self, task: str) -> None:
-        """Switch tasks, forgetting the old task's memory, plan, notes and turns."""
+        """Switch tasks, forgetting the old task's memory, notes and turns."""
         task = task.strip()
         if self._task and task != self._task:
             self.clear_memory()
@@ -108,30 +101,29 @@ class Agent:
 
     def clear_memory(self) -> None:
         self._memory.clear()
-        self._plan = ""
         self._notes.clear()
         self._turns.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
-        """Take one turn: observe, ask the model and apply its action, plan and note."""
+        """Take one turn: observe, ask the model and apply its action and note."""
         if not self._task:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
         context = Context(self._task, self._knowledge, self.memory, observation.game_state,
-                          self._plan, self.notes)
+                          self.notes)
         try:
             reply = self._model.call(context, observation.frame)
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
-        turn = Turn(observation, context, reply.action, reply.reasoning, reply.plan, reply.note)
+        turn = Turn(observation, context, reply.action, reply.reasoning, reply.note)
         match reply.action:
             case Stop():
                 transition = None
             case action:
                 transition = self._apply(session, action, reply.reasoning)
-        self._plan = reply.plan or self._plan
-        # The model repeats a note word for word when it forgets it already wrote it.
-        if reply.note and reply.note not in self._notes:
+        # The model repeats a note when it forgets it already wrote it, sometimes changing only
+        # the case or the final period (seen in the guided notes runs).
+        if reply.note and _same(reply.note) not in map(_same, self._notes):
             self._notes.append(reply.note)
         self._turns.append(turn)
         return turn, transition
@@ -145,3 +137,8 @@ class Agent:
         transition = session.apply(action)
         self._memory.append(MemoryEntry(transition.before, action, reasoning))
         return transition
+
+
+def _same(note: str) -> str:
+    """A note's text for spotting repeats: case and final punctuation ignored."""
+    return note.casefold().rstrip(" .!")

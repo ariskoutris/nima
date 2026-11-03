@@ -66,21 +66,20 @@ def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
     unknown = {"position": None, "tile": None, "direction": None, "characters": [],
                "species": None}
     assert second["input"] == {
-        "task": "Find exit", "plan": "", "notes": [],
+        "task": "Find exit", "notes": [],
         "screenshot": "frames/000001.png", "game_state": unknown,
         "memory": [{"screenshot": "frames/000000.png", "game_state": unknown,
                     "action": {"type": "press", "button": "A"}, "reasoning": "Scripted."}]}
 
 
 def test_agent_rows_carry_the_model_reasoning(tmp_path):
-    model = ScriptedModel(reasoning="Door ahead.", plans=["Find the door."],
+    model = ScriptedModel(reasoning="Door ahead.",
                           notes=["Done: Kecleon in Pokémon Square sells X-Ray Specs."])
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
     log.record_manual(Press("B"), agent.manual(session, Press("B")))
     action, manual = turns(tmp_path)
     assert action["reasoning"] == "Door ahead."
-    assert action["plan"] == "Find the door."
     assert action["note"] == "Done: Kecleon in Pokémon Square sells X-Ray Specs."
     assert "reasoning" not in manual
     assert log.recent()[1]["reasoning"] == "Door ahead."  # the live view shows it
@@ -97,7 +96,7 @@ def test_stop_and_model_error_rows(tmp_path):
     assert [stop["event"], error_row["event"]] == ["stop", "model_error"]
     assert "action" not in stop and stop["outcome"] == "stuck"
     assert stop["reasoning"] == "Blocked by a wall."
-    assert stop["plan"] == "" and stop["note"] is None
+    assert stop["note"] is None
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()

@@ -161,18 +161,16 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
     assert AGENT_PRESS in game.steps
 
 
-def test_the_view_shows_the_task_plan_and_notes(start_run):
-    run, _ = start_run(ScriptedModel(plans=["Find the exit."],
-                                     notes=["Done: Kecleon sells Oran Berries."]))
+def test_the_view_shows_the_task_notes(start_run):
+    run, _ = start_run(ScriptedModel(notes=["Done: Kecleon sells Oran Berries."]))
     run.control({"task": "Find exit", "command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
-    assert state["plan"] == "Find the exit."
     assert state["notes"] == ["Done: Kecleon sells Oran Berries."]
     run.control({"task": "Talk to Granbull"})
     state = wait_until(run, lambda state: state["task"] == "Talk to Granbull")
     run.control({"command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 2 and idle(state))
-    assert (state["plan"], state["notes"]) == ("", [])  # the new task starts empty
+    assert state["notes"] == []  # the new task starts empty
 
 
 def test_stop_for_a_replaced_task_does_not_end_the_new_one(start_run):

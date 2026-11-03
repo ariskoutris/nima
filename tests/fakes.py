@@ -19,8 +19,8 @@ FRAME = Frame(16, 16, bytes(16 * 16 * 4))
 class ScriptedModel:
     """Answer from fixed scripts and record every call.
 
-    Actions are model-facing names, and the last one repeats. Plans and notes go with the
-    calls in order and run out, then the plan is blank and there is no note. Each call replies
+    Actions are model-facing names, and the last one repeats. Notes go with the calls in
+    order and run out, then there is no note. Each call replies
     Stop with ``outcome`` instead when ``stop()`` returns True, and raises ``error`` when one is
     given.
     With a ``gate``, each call sets ``entered`` and then waits for the gate.
@@ -29,11 +29,10 @@ class ScriptedModel:
     def __init__(self, actions: Sequence[str] = ("A",),
                  stop: Callable[[], bool] = lambda: False, *,
                  gate: threading.Event | None = None, error: Exception | None = None,
-                 reasoning: str = "Scripted.", plans: Sequence[str] = (),
+                 reasoning: str = "Scripted.",
                  notes: Sequence[str | None] = (),
                  outcome: Outcome = "complete") -> None:
         self.actions = list(actions)
-        self.plans = list(plans)
         self.notes = list(notes)
         self.reasoning = reasoning
         self.stop = stop
@@ -49,13 +48,12 @@ class ScriptedModel:
     def call(self, context, frame) -> Reply:
         self._called("call", context, frame)
         index = len(self.calls) - 1
-        plan = self.plans[index] if index < len(self.plans) else ""
         note = self.notes[index] if index < len(self.notes) else None
         if self.stop():
-            return Reply(Stop(self.outcome), self.reasoning, plan, note)
+            return Reply(Stop(self.outcome), self.reasoning, note)
         action = self.actions[min(self._chosen, len(self.actions) - 1)]
         self._chosen += 1
-        return Reply(GAME_ACTIONS[action], self.reasoning, plan, note)
+        return Reply(GAME_ACTIONS[action], self.reasoning, note)
 
     def _called(self, *call) -> None:
         self.calls.append(call)

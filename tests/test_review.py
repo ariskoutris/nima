@@ -32,7 +32,7 @@ PRESS_A = Press("A")
 
 def turn(reasoning="Lombre is below.", action=PRESS_A) -> Turn:
     observation = Observation(FRAME, "000001.png", STATE)
-    return Turn(observation, Context("Talk to Lombre", "", (), STATE), action, reasoning, "", None)
+    return Turn(observation, Context("Talk to Lombre", "", (), STATE), action, reasoning, None)
 
 
 def answering(monkeypatch, answer):

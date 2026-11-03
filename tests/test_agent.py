@@ -44,52 +44,48 @@ def test_a_new_task_clears_memory(tmp_path):
     assert agent.memory == ()
 
 
-def test_the_plan_is_replaced_and_notes_are_kept_in_order(tmp_path):
-    model = ScriptedModel(["A"], plans=["Find Kecleon, then buy a berry.", "",
-                                        "Buy a berry from Kecleon."],
-                          notes=["Done: found Kecleon at the shop.", None,
-                                 "Failed: A facing away from Kecleon opened nothing."])
+def test_notes_are_kept_in_order_and_shown_on_later_turns(tmp_path):
+    model = ScriptedModel(["A"], notes=["Done: found Kecleon at the shop.", None,
+                                        "Failed: A facing away from Kecleon opened nothing."])
     agent = agent_with(model)
     session = start(tmp_path)
     for _ in range(4):
         agent.act(session)
-    assert (model.calls[0][1].plan, model.calls[0][1].notes) == ("", ())
-    assert model.calls[2][1].plan == "Find Kecleon, then buy a berry."  # blank kept it
-    assert model.calls[3][1].plan == agent.plan == "Buy a berry from Kecleon."
-    assert agent.notes == ("Done: found Kecleon at the shop.",
-                           "Failed: A facing away from Kecleon opened nothing.")
+    assert model.calls[0][1].notes == ()
+    assert model.calls[2][1].notes == ("Done: found Kecleon at the shop.",)
+    assert agent.notes == model.calls[3][1].notes == (
+        "Done: found Kecleon at the shop.", "Failed: A facing away from Kecleon opened nothing.")
 
 
-def test_a_note_written_again_word_for_word_is_kept_once(tmp_path):
-    agent = agent_with(ScriptedModel(notes=["Done: talked to Kecleon."] * 2))
+def test_a_note_written_again_is_kept_once(tmp_path):
+    agent = agent_with(ScriptedModel(notes=["Done: talked to Kecleon.", "Done: talked to Kecleon",
+                                            "done: Talked to Kecleon.", "Done: Kecleon talked."]))
     session = start(tmp_path)
-    agent.act(session)
-    agent.act(session)
-    assert agent.notes == ("Done: talked to Kecleon.",)
+    for _ in range(4):
+        agent.act(session)
+    assert agent.notes == ("Done: talked to Kecleon.", "Done: Kecleon talked.")
 
 
-def test_a_new_task_or_cleared_memory_forgets_plan_and_notes(tmp_path):
-    model = ScriptedModel(["A"], plans=["Leave."] * 3, notes=["A line."] * 3)
+def test_a_new_task_or_cleared_memory_forgets_the_notes(tmp_path):
+    model = ScriptedModel(["A"], notes=["Done: a line."] * 3)
     agent = agent_with(model)
     session = start(tmp_path)
     agent.act(session)
     agent.set_task("Find exit")
-    assert (agent.plan, agent.notes) == ("Leave.", ("A line.",))  # the same task keeps them
+    assert agent.notes == ("Done: a line.",)  # the same task keeps them
     agent.set_task("Talk to Granbull")
-    assert (agent.plan, agent.notes) == ("", ())
+    assert agent.notes == ()
     agent.act(session)
     agent.clear_memory()
-    assert (agent.plan, agent.notes) == ("", ())
+    assert agent.notes == ()
 
 
-def test_a_stop_applies_its_plan_and_note(tmp_path):
-    model = ScriptedModel(stop=votes(True), plans=["Nothing left."],
-                          notes=["Done: talked to Kecleon."])
+def test_a_stop_applies_its_note(tmp_path):
+    model = ScriptedModel(stop=votes(True), notes=["Done: talked to Kecleon."])
     agent = agent_with(model)
     turn, transition = agent.act(start(tmp_path))
-    assert transition is None and (turn.plan, turn.note) == ("Nothing left.",
-                                                              "Done: talked to Kecleon.")
-    assert (agent.plan, agent.notes) == ("Nothing left.", ("Done: talked to Kecleon.",))
+    assert transition is None and turn.note == "Done: talked to Kecleon."
+    assert agent.notes == ("Done: talked to Kecleon.",)
 
 
 def test_the_task_keeps_its_turns_for_the_review(tmp_path):
@@ -207,7 +203,7 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "context", "action", "reasoning", "plan", "note"}
+        "observation", "context", "action", "reasoning", "note"}
 
 
 def test_agent_writes_no_files(tmp_path):
