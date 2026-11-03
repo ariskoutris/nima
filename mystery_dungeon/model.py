@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, get_args
+from typing import TYPE_CHECKING, Protocol
 from urllib.request import Request, urlopen
 
 from emulator import Frame
@@ -23,88 +22,28 @@ if TYPE_CHECKING:
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.
 IMAGE_SCALE = 2
-FindingKind = Literal["dialogue", "location", "mechanic", "other"]
-NUMBERED = re.compile(r"\[\d+\]")  # a scratchpad line number as the context shows it
-# The model judges the screen, edits its scratchpad and records findings before it commits to
-# an action.
+# The model judges the screen and updates its plan and notes before it commits to an action.
 ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
         "reasoning": {"type": "string"},
-        "scratchpad": {"type": "object", "properties": {
-            "rewrite": {"type": ["array", "null"], "items": {"type": "string"}},
-            "lines": {"type": "array", "items": {
-                "type": "object", "properties": {"line": {"type": "integer"},
-                                                 "text": {"type": ["string", "null"]}},
-                "required": ["line", "text"], "additionalProperties": False}},
-            "add": {"type": "array", "items": {"type": "string"}}},
-            "required": ["rewrite", "lines", "add"], "additionalProperties": False},
-        "findings": {"type": "array", "items": {
-            "type": "object",
-            "properties": {"kind": {"type": "string", "enum": list(get_args(FindingKind))},
-                           "text": {"type": "string"}},
-            "required": ["kind", "text"], "additionalProperties": False}},
+        "plan": {"type": "string"},
+        "note": {"type": "string"},
         "action": {"type": "string", "enum": list(ACTION_NAMES)},
     },
-    "required": ["reasoning", "scratchpad", "findings", "action"],
+    "required": ["reasoning", "plan", "note", "action"],
     "additionalProperties": False,
 }
 
 
 @dataclass(frozen=True)
-class LineChange:
-    """New text for a scratchpad line, by the number shown this turn; None deletes it."""
-
-    line: int
-    text: str | None
-
-
-@dataclass(frozen=True)
-class ScratchpadEdit:
-    """Either a rewrite of the whole scratchpad, or changes to shown lines plus lines appended
-    at the end."""
-
-    rewrite: tuple[str, ...] | None = None
-    lines: tuple[LineChange, ...] = ()
-    add: tuple[str, ...] = ()
-
-    def problem(self, shown: int) -> str | None:
-        """Say why the edit can't apply to a scratchpad of ``shown`` lines, or None if it can."""
-        if self.rewrite is not None and (self.lines or self.add):
-            return "a rewrite came with line changes or additions"
-        numbers = [change.line for change in self.lines]
-        if len(set(numbers)) != len(numbers):
-            twice = sorted({number for number in numbers if numbers.count(number) > 1})
-            return f"lines {twice} were changed more than once"
-        missing = sorted(number for number in numbers if not 1 <= number <= shown)
-        if missing:
-            return f"lines {missing} are not shown"
-        texts = [*(self.rewrite or ()), *self.add,
-                 *(change.text for change in self.lines if change.text is not None)]
-        if not all(text.strip() for text in texts):
-            return "a line was empty; delete a line with null instead"
-        # The model copied shown numbers like "[4]" into its text, then edited by those.
-        if any(NUMBERED.match(text.strip()) for text in texts):
-            return "a line's text started with a line number"
-        return None
-
-
-@dataclass(frozen=True)
-class Finding:
-    """A standalone fact about the game; any uncertainty is stated in its text."""
-
-    kind: FindingKind
-    text: str
-
-
-@dataclass(frozen=True)
 class Reply:
-    """The model's action, its reasoning, its scratchpad edit and its findings (often none)."""
+    """The model's action and reasoning, its plan, and a note to keep (None for none)."""
 
     action: Action
     reasoning: str
-    scratchpad: ScratchpadEdit
-    findings: tuple[Finding, ...]
+    plan: str  # blank keeps the last plan
+    note: str | None
 
 
 class Model(Protocol):
@@ -143,77 +82,78 @@ class ChatModel:
 
     def __init__(self, settings: ChatSettings) -> None:
         self._settings = settings
-        self._api_key = os.getenv(settings.api_key_env) if settings.api_key_env else None
-        if settings.api_key_env and not self._api_key:
-            raise ValueError(f"{settings.api_key_env} is required for {settings.name}")
+        self._api_key = api_key(settings)
         self.name = settings.name
         self.last_response: dict | None = None
 
     def call(self, context: Context, frame: Frame) -> Reply:
-        answer = self._send(_content(context, frame))
+        self.last_response = None
+        self.last_response = post(self._settings, self._api_key, INSTRUCTIONS,
+                                  _content(context, frame), ANSWER_SCHEMA)
+        answer = decode(self.last_response, self.name)
         if not isinstance(answer, dict) or answer.keys() != ANSWER_SCHEMA["properties"].keys():
             raise ValueError(f"{self.name} returned an invalid answer: {answer!r}")
         if not isinstance(answer["action"], str) or answer["action"] not in ACTION_NAMES:
             raise ValueError(f"{self.name} returned an unknown action: {answer['action']!r}")
         if not isinstance(answer["reasoning"], str) or not answer["reasoning"].strip():
             raise ValueError(f"{self.name} returned no reasoning: {answer['reasoning']!r}")
-        if not isinstance(answer["findings"], list):
-            raise ValueError(f"{self.name} returned invalid findings: {answer['findings']!r}")
+        if not isinstance(answer["plan"], str) or not isinstance(answer["note"], str):
+            raise ValueError(f"{self.name} returned an invalid plan or note: {answer!r}")
         return Reply(ACTIONS[answer["action"]], answer["reasoning"].strip(),
-                     self._edit(answer["scratchpad"]),
-                     tuple(self._finding(finding) for finding in answer["findings"]))
+                     _one_line(answer["plan"]), _one_line(answer["note"]) or None)
 
-    def _edit(self, edit: object) -> ScratchpadEdit:
-        """Check the edit's shape; ScratchpadEdit.problem judges whether it can apply."""
-        if (not isinstance(edit, dict) or edit.keys() != {"rewrite", "lines", "add"}
-                or not isinstance(edit["rewrite"], list | None)
-                or not isinstance(edit["lines"], list) or not isinstance(edit["add"], list)
-                or not all(isinstance(change, dict) and change.keys() == {"line", "text"}
-                           and type(change["line"]) is int
-                           and isinstance(change["text"], str | None)
-                           for change in edit["lines"])
-                or not all(isinstance(text, str)
-                           for text in [*(edit["rewrite"] or ()), *edit["add"]])):
-            raise ValueError(f"{self.name} returned an invalid scratchpad edit: {edit!r}")
-        return ScratchpadEdit(
-            # An empty rewrite means no rewrite; clearing every line would lose the scratchpad.
-            tuple(text.strip() for text in edit["rewrite"]) if edit["rewrite"] else None,
-            tuple(LineChange(change["line"], None if change["text"] is None
-                             else change["text"].strip()) for change in edit["lines"]),
-            tuple(text.strip() for text in edit["add"]))
 
-    def _finding(self, finding: object) -> Finding:
-        if (not isinstance(finding, dict) or finding.keys() != {"kind", "text"}
-                or finding["kind"] not in get_args(FindingKind)
-                or not isinstance(finding["text"], str) or not finding["text"].strip()):
-            raise ValueError(f"{self.name} returned an invalid finding: {finding!r}")
-        return Finding(finding["kind"], finding["text"].strip())
+def api_key(settings: ChatSettings) -> str | None:
+    """The key named by settings.api_key_env, or None when the endpoint needs none.
 
-    def _send(self, content: list[dict]) -> object:
-        """Post one request and return the model's answer as decoded JSON."""
-        self.last_response = None
-        payload = {
-            **self._settings.request,
-            "model": self._settings.name,
-            "messages": [{"role": "system", "content": INSTRUCTIONS},
-                         {"role": "user", "content": content}],
-            "response_format": {"type": "json_schema", "json_schema": {
-                "name": "answer", "strict": True, "schema": ANSWER_SCHEMA}},
-            "max_tokens": self._settings.max_tokens,
-        }
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        request = Request(self._settings.url, data=json.dumps(payload).encode(), headers=headers)
-        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            data = json.load(response)
-        self.last_response = data
-        if data["choices"][0].get("finish_reason") == "length":
-            raise ValueError(f"{self.name} exhausted max_tokens before answering")
-        try:
-            return json.loads(data["choices"][0]["message"]["content"])
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"{self.name} returned an invalid answer") from exc
+    Raises:
+        ValueError: when the named variable is unset.
+    """
+    if not settings.api_key_env:
+        return None
+    key = os.getenv(settings.api_key_env)
+    if not key:
+        raise ValueError(f"{settings.api_key_env} is required for {settings.name}")
+    return key
+
+
+def post(settings: ChatSettings, key: str | None, system: str, content: list[dict],
+         schema: dict) -> dict:
+    """Send one chat request whose answer must match a strict JSON schema; return the raw
+    response."""
+    payload = {
+        **settings.request,
+        "model": settings.name,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": content}],
+        "response_format": {"type": "json_schema", "json_schema": {
+            "name": "answer", "strict": True, "schema": schema}},
+        "max_tokens": settings.max_tokens,
+    }
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    request = Request(settings.url, data=json.dumps(payload).encode(), headers=headers)
+    with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        return json.load(response)
+
+
+def decode(response: dict, model: str) -> object:
+    """Return a chat response's answer as decoded JSON.
+
+    Raises:
+        ValueError: when the answer was cut off or isn't JSON.
+    """
+    if response["choices"][0].get("finish_reason") == "length":
+        raise ValueError(f"{model} exhausted max_tokens before answering")
+    try:
+        return json.loads(response["choices"][0]["message"]["content"])
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{model} returned an invalid answer") from exc
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
 
 
 def internal_reasoning(response: dict | None) -> str | None:
@@ -242,13 +182,14 @@ def token_usage(response: dict | None) -> dict | None:
 
 
 def _content(context: Context, frame: Frame) -> list[dict]:
-    """Build the user message: task, knowledge, scratchpad and actions, earlier turns, current
-    frame."""
+    """Build the user message: task, knowledge, plan, notes and actions, earlier turns,
+    current frame."""
     text = [f"# Task\n{context.task}"]
     if context.knowledge:
         text.append(f"# Knowledge\n{context.knowledge}")
-    text.append("# Your scratchpad\n" + ("\n".join(
-        f"[{number}] {line}" for number, line in enumerate(context.scratchpad, 1)) or "(empty)"))
+    text.append(f"# Your plan\n{context.plan or '(none yet)'}")
+    text.append("# Your notes\n" + ("\n".join(
+        f"- {note}" for note in context.notes) or "(none yet)"))
     text.append("# Actions\n" + "\n".join(
         f"- {action}: {description}" for action, description in ACTION_DESCRIPTIONS.items()))
     if context.memory:
@@ -262,9 +203,9 @@ def _content(context: Context, frame: Frame) -> list[dict]:
             heading = f"## Turn -{age}"
             after.append(f"Reasoning: {entry.reasoning}")
         after.append(f"Action: {name(entry.action)}")
-        content += [{"type": "text", "text": heading}, _image(entry.observation.frame),
+        content += [{"type": "text", "text": heading}, image(entry.observation.frame),
                     {"type": "text", "text": "\n".join(after)}]
-    current = [{"type": "text", "text": "# Current screenshot"}, _image(frame)]
+    current = [{"type": "text", "text": "# Current screenshot"}, image(frame)]
     state = context.game_state
     you = [] if state.species is None else [f"You play as {state.species}."]
     current.append({"type": "text", "text": "# Game state\n" + "\n".join(
@@ -288,7 +229,8 @@ def nearby(state: GameState) -> list[str]:
     """Describe each on-screen character by its offset from the player."""
     if state.position is None or not state.characters:
         return []
-    lines = ["Characters on screen, relative to you:"]
+    # Without the unit the model sometimes read offsets as tiles ("1 right, 2 up").
+    lines = ["Characters on screen, offset from you in pixels:"]
     for character in state.characters:
         offset = ", ".join(part for part in (
             _offset(character.position[0] - state.position[0], "right", "left"),
@@ -304,7 +246,8 @@ def _offset(distance: int, positive: str, negative: str) -> str:
     return f"{abs(distance)} {positive if distance > 0 else negative}"
 
 
-def _image(frame: Frame) -> dict:
+def image(frame: Frame) -> dict:
+    """A frame as an image part of a chat message, enlarged by IMAGE_SCALE."""
     return {"type": "image_url", "image_url": {"url": scaled(frame, IMAGE_SCALE).data_url}}
 
 

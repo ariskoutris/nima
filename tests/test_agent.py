@@ -3,18 +3,16 @@
 from dataclasses import fields
 
 import pytest
-from fakes import Game, ScriptedModel, finding, start, votes
+from fakes import Game, ScriptedModel, start, votes
 
 from mystery_dungeon.actions import Press, Stop, Wait
 from mystery_dungeon.agent import (
-    EDIT_REJECTED,
     MEMORY_TURNS,
     Agent,
     Context,
     ModelError,
     Turn,
 )
-from mystery_dungeon.model import LineChange, ScratchpadEdit
 from mystery_dungeon.session import GameState
 
 
@@ -46,92 +44,52 @@ def test_a_new_task_clears_memory(tmp_path):
     assert agent.memory == ()
 
 
-def test_scratchpad_edits_use_the_numbers_shown_this_turn(tmp_path):
-    model = ScriptedModel(["A"], edits=[
-        ScratchpadEdit(add=("Find Kecleon.", "Shop is east, a guess.", "Buy a berry.")),
-        ScratchpadEdit(lines=(LineChange(1, None), LineChange(2, "Shop is east of the well.")),
-                       add=("Talked to Kecleon.",)),
-        ScratchpadEdit(lines=(LineChange(1, None), LineChange(3, None))),
-        ScratchpadEdit(rewrite=("Bought a berry.", "Task done."))])
+def test_the_plan_is_replaced_and_notes_are_kept_in_order(tmp_path):
+    model = ScriptedModel(["A"], plans=["Find Kecleon, then buy a berry.", "",
+                                        "Buy a berry from Kecleon."],
+                          notes=["Done: found Kecleon at the shop.", None,
+                                 "Failed: A facing away from Kecleon opened nothing."])
     agent = agent_with(model)
     session = start(tmp_path)
     for _ in range(4):
         agent.act(session)
-    assert model.calls[0][1].scratchpad == ()
-    assert model.calls[1][1].scratchpad == ("Find Kecleon.", "Shop is east, a guess.",
-                                            "Buy a berry.")
-    # Changed in place, the deletion renumbers, and the addition goes at the end.
-    assert model.calls[2][1].scratchpad == ("Shop is east of the well.", "Buy a berry.",
-                                            "Talked to Kecleon.")
-    assert model.calls[3][1].scratchpad == ("Buy a berry.",)
-    assert agent.scratchpad == ("Bought a berry.", "Task done.")
+    assert (model.calls[0][1].plan, model.calls[0][1].notes) == ("", ())
+    assert model.calls[2][1].plan == "Find Kecleon, then buy a berry."  # blank kept it
+    assert model.calls[3][1].plan == agent.plan == "Buy a berry from Kecleon."
+    assert agent.notes == ("Done: found Kecleon at the shop.",
+                           "Failed: A facing away from Kecleon opened nothing.")
 
 
-@pytest.mark.parametrize("edit,problem", [
-    (ScratchpadEdit(lines=(LineChange(7, None),)), "lines [7] are not shown"),
-    (ScratchpadEdit(lines=(LineChange(1, None), LineChange(1, "Twice."))),
-     "lines [1] were changed more than once"),
-    (ScratchpadEdit(rewrite=("Fresh.",), add=("More.",)), "a rewrite came with"),
-    (ScratchpadEdit(add=(" ",)), "a line was empty"),
-    (ScratchpadEdit(rewrite=("[1] Talked to Kecleon.",)), "started with a line number"),
-])
-def test_a_rejected_edit_keeps_the_turn_and_says_why_in_the_scratchpad(tmp_path, edit, problem):
-    game = Game()
-    model = ScriptedModel(["A"], edits=[ScratchpadEdit(add=("Find Kecleon.",)), edit],
-                          findings=[[], [finding("Kecleon runs the shop in Pokémon Square.")]])
-    agent = agent_with(model)
-    session = start(tmp_path, game)
-    agent.act(session)
-    turn, transition = agent.act(session)
-    assert problem in turn.scratchpad_problem
-    assert transition is not None and len(agent.findings) == 1  # the action and findings apply
-    first, note = agent.scratchpad
-    assert first == "Find Kecleon." and note == EDIT_REJECTED.format(
-        problem=turn.scratchpad_problem)
-
-
-def test_an_edit_that_applies_has_no_problem(tmp_path):
-    turn, _ = agent_with(ScriptedModel(edits=[ScratchpadEdit(add=("Find Kecleon.",))])).act(
-        start(tmp_path))
-    assert turn.scratchpad_problem is None
-
-
-def test_findings_accumulate_without_reaching_the_model(tmp_path):
-    first, second = finding("Charizard in Pokémon Square says its team is Gold Rank."), finding(
-        "Granbull stands south of the plaza in Pokémon Square.", kind="location")
-    model = ScriptedModel(["A"], findings=[[first], [], [second]])
-    agent = agent_with(model)
+def test_a_note_written_again_word_for_word_is_kept_once(tmp_path):
+    agent = agent_with(ScriptedModel(notes=["Done: talked to Kecleon."] * 2))
     session = start(tmp_path)
-    for _ in range(3):
-        turn, _ = agent.act(session)
-    assert turn.findings == (second,)
-    assert agent.findings == (first, second)
-    assert "findings" not in {field.name for field in fields(Context)}
+    agent.act(session)
+    agent.act(session)
+    assert agent.notes == ("Done: talked to Kecleon.",)
 
 
-def test_a_new_task_or_cleared_memory_forgets_scratchpad_and_findings(tmp_path):
-    model = ScriptedModel(["A"], edits=[ScratchpadEdit(add=("A line.",))] * 3,
-                          findings=[[finding("A fact.")]] * 3)
+def test_a_new_task_or_cleared_memory_forgets_plan_and_notes(tmp_path):
+    model = ScriptedModel(["A"], plans=["Leave."] * 3, notes=["A line."] * 3)
     agent = agent_with(model)
     session = start(tmp_path)
     agent.act(session)
     agent.set_task("Find exit")
-    assert len(agent.scratchpad) == len(agent.findings) == 1  # the same task keeps them
+    assert (agent.plan, agent.notes) == ("Leave.", ("A line.",))  # the same task keeps them
     agent.set_task("Talk to Granbull")
-    assert agent.scratchpad == () and agent.findings == ()
+    assert (agent.plan, agent.notes) == ("", ())
     agent.act(session)
-    assert agent.scratchpad == ("A line.",)
     agent.clear_memory()
-    assert agent.scratchpad == () and agent.findings == ()
+    assert (agent.plan, agent.notes) == ("", ())
 
 
-def test_a_stop_applies_its_scratchpad_edit_and_findings(tmp_path):
-    model = ScriptedModel(stop=votes(True), edits=[ScratchpadEdit(add=("Talked to Kecleon.",))],
-                          findings=[[finding("Kecleon runs the shop in Pokémon Square.")]])
+def test_a_stop_applies_its_plan_and_note(tmp_path):
+    model = ScriptedModel(stop=votes(True), plans=["Nothing left."],
+                          notes=["Done: talked to Kecleon."])
     agent = agent_with(model)
-    agent.act(start(tmp_path))
-    assert agent.scratchpad == ("Talked to Kecleon.",)
-    assert len(agent.findings) == 1
+    turn, transition = agent.act(start(tmp_path))
+    assert transition is None and (turn.plan, turn.note) == ("Nothing left.",
+                                                              "Done: talked to Kecleon.")
+    assert (agent.plan, agent.notes) == ("Nothing left.", ("Done: talked to Kecleon.",))
 
 
 def test_the_first_task_keeps_earlier_manual_actions(tmp_path):
@@ -228,8 +186,7 @@ def test_missing_task_fails_before_any_model_call(tmp_path):
 
 def test_turn_holds_only_what_the_agent_produced():
     assert {field.name for field in fields(Turn)} == {
-        "observation", "context", "action", "reasoning", "scratchpad", "findings",
-        "scratchpad_problem"}
+        "observation", "context", "action", "reasoning", "plan", "note"}
 
 
 def test_agent_writes_no_files(tmp_path):

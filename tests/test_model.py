@@ -13,10 +13,7 @@ from mystery_dungeon.agent import Context, MemoryEntry
 from mystery_dungeon.model import (
     ChatModel,
     ChatSettings,
-    Finding,
-    LineChange,
     Reply,
-    ScratchpadEdit,
     internal_reasoning,
     read_settings,
     scaled,
@@ -31,9 +28,7 @@ MEMORY = (MemoryEntry(Observation(FRAME, "before.png", UNKNOWN), Press("UP"),
           MemoryEntry(Observation(FRAME, "manual.png", UNKNOWN), Press("A"), None))
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY", 512,
                         {"reasoning": {"effort": "low"}})
-EMPTY = {"scratchpad": {"rewrite": None, "lines": [], "add": []}, "findings": []}
-CHARIZARD = {"kind": "dialogue",
-             "text": " Charizard in Pokémon Square says its team reached Gold Rank. "}
+EMPTY = {"plan": "", "note": ""}
 
 
 def answering(monkeypatch, *responses):
@@ -58,20 +53,15 @@ def reply(answer, finish_reason="stop"):
 
 def test_request_carries_instructions_settings_and_memory(monkeypatch):
     sent = answering(monkeypatch, reply({
-        "reasoning": " The door is ahead. ",
-        "scratchpad": {"rewrite": None, "add": [" Found the door. "],
-                       "lines": [{"line": 1, "text": " Left the house, a guess. "},
-                                 {"line": 2, "text": None}]},
-        "findings": [CHARIZARD], "action": "DOWN"}))
+        "reasoning": " The door is ahead. ", "plan": " Leave the house\n by the south door. ",
+        "note": " Done: found the door. ", "action": "DOWN"}))
     chat_model = ChatModel(SETTINGS)
     context = Context("Find the exit", "Avoid walls", MEMORY, UNKNOWN,
-                      scratchpad=("Left the house.", "The exit is south, a guess."))
+                      plan="Leave the house.", notes=("Done: left the bedroom.",
+                                                      "Failed: the east door is locked."))
     answer = chat_model.call(context, FRAME)
     assert answer == Reply(Press("DOWN"), "The door is ahead.",
-                           ScratchpadEdit(lines=(LineChange(1, "Left the house, a guess."),
-                                                 LineChange(2, None)),
-                                          add=("Found the door.",)),
-                           (Finding("dialogue", CHARIZARD["text"].strip()),))
+                           "Leave the house by the south door.", "Done: found the door.")
     assert sent[0].full_url == "http://endpoint/v1/chat/completions"
     assert sent[0].get_header("Authorization") == "Bearer secret"
     payload = json.loads(sent[0].data)
@@ -81,8 +71,8 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert system["content"] == INSTRUCTIONS
     assert "# Task\nFind the exit" in user["content"][0]["text"]
     assert "# Knowledge\nAvoid walls" in user["content"][0]["text"]
-    assert ("# Your scratchpad\n[1] Left the house.\n[2] The exit is south, a guess.\n\n"
-            "# Actions" in user["content"][0]["text"])
+    assert ("# Your plan\nLeave the house.\n\n# Your notes\n- Done: left the bedroom.\n"
+            "- Failed: the east door is locked.\n\n# Actions" in user["content"][0]["text"])
     assert user["content"][0]["text"].endswith("# Earlier turns (oldest first)")
     texts = [part.get("text") for part in user["content"]]
     assert texts == [user["content"][0]["text"],
@@ -93,10 +83,8 @@ def test_request_carries_instructions_settings_and_memory(monkeypatch):
     assert all(part["image_url"]["url"].startswith("data:image/png;base64,")
                for part in user["content"] if part["type"] == "image_url")
     schema = payload["response_format"]["json_schema"]["schema"]
-    assert list(schema["properties"]) == ["reasoning", "scratchpad", "findings", "action"]
-    assert schema["required"] == ["reasoning", "scratchpad", "findings", "action"]
-    assert schema["properties"]["findings"]["items"]["properties"]["kind"]["enum"] == [
-        "dialogue", "location", "mechanic", "other"]
+    assert list(schema["properties"]) == ["reasoning", "plan", "note", "action"]
+    assert schema["required"] == ["reasoning", "plan", "note", "action"]
     assert {"WAIT", "STOP_STUCK"} <= set(schema["properties"]["action"]["enum"])
     assert chat_model.last_response["choices"][0]["message"]["reasoning"] == "The NPC is ahead."
 
@@ -107,22 +95,16 @@ def test_each_stop_action_carries_its_outcome(monkeypatch, action, outcome):
     answering(monkeypatch, reply({"reasoning": "The dialogue closed.", **EMPTY,
                                   "action": action}))
     answer = ChatModel(SETTINGS).call(Context("Find the exit", "", MEMORY, UNKNOWN), FRAME)
-    assert answer == Reply(Stop(outcome), "The dialogue closed.", ScratchpadEdit(), ())
+    assert answer == Reply(Stop(outcome), "The dialogue closed.", "", None)
 
 
-@pytest.mark.parametrize("add", [[], ["Talked to Kecleon."]])
-def test_an_empty_rewrite_means_no_rewrite(monkeypatch, add):
-    answering(monkeypatch, reply({"reasoning": "Wait.", "findings": [], "action": "WAIT",
-                                  "scratchpad": {"rewrite": [], "lines": [], "add": add}}))
-    edit = ChatModel(SETTINGS).call(Context("Talk", "", (), UNKNOWN), FRAME).scratchpad
-    assert edit == ScratchpadEdit(add=tuple(add)) and edit.problem(0) is None
-
-
-def test_an_empty_scratchpad_is_shown_as_empty(monkeypatch):
-    sent = answering(monkeypatch, reply({"reasoning": "Wait.", **EMPTY, "action": "WAIT"}))
-    assert ChatModel(SETTINGS).call(Context("Talk", "", (), UNKNOWN), FRAME).findings == ()
+def test_a_blank_note_is_no_note_and_an_empty_memory_is_shown_as_none_yet(monkeypatch):
+    sent = answering(monkeypatch, reply({"reasoning": "Wait.", "plan": " ", "note": " \n ",
+                                         "action": "WAIT"}))
+    answer = ChatModel(SETTINGS).call(Context("Talk", "", (), UNKNOWN), FRAME)
+    assert (answer.plan, answer.note) == ("", None)
     text = json.loads(sent[0].data)["messages"][1]["content"][0]["text"]
-    assert "# Your scratchpad\n(empty)\n\n# Actions" in text
+    assert "# Your plan\n(none yet)\n\n# Your notes\n(none yet)\n\n# Actions" in text
 
 
 def test_endpoints_without_a_key_get_no_authorization(monkeypatch):
@@ -152,20 +134,11 @@ def test_settings_come_from_the_model_table(tmp_path):
     (reply({"reasoning": "Start.", **EMPTY, "action": "START"}), "unknown action"),
     (reply({"reasoning": "Press A.", **EMPTY, "action": ["A"]}), "unknown action"),
     (reply({"reasoning": " ", **EMPTY, "action": "A"}), "no reasoning"),
-    (reply({"reasoning": "Press A.", **EMPTY, "findings": None, "action": "A"}),
-     "invalid findings"),
-    (reply({"reasoning": "Press A.", **EMPTY, "findings": [{**CHARIZARD, "kind": "item"}],
-            "action": "A"}), "invalid finding"),
-    (reply({"reasoning": "Press A.", **EMPTY, "findings": [{**CHARIZARD, "text": " "}],
-            "action": "A"}), "invalid finding"),
-    (reply({"reasoning": "Press A.", **EMPTY, "findings": ["Charizard is Gold Rank."],
-            "action": "A"}), "invalid finding"),
-    *[(reply({"reasoning": "Press A.", **EMPTY, "action": "A",
-                "scratchpad": {"rewrite": None, "lines": [], "add": [], **edit}}),
-       "invalid scratchpad edit") for edit in (
-        {"rewrite": "All of it."}, {"add": None}, {"add": [1]}, {"lines": [{"line": 1}]},
-        {"lines": [{"line": "1", "text": None}]}, {"lines": [{"line": True, "text": "x"}]},
-        {"lines": [{"line": 1, "text": 2}]}, {"clear": True})],
+    (reply({"reasoning": "Press A.", **EMPTY, "plan": None, "action": "A"}),
+     "invalid plan or note"),
+    (reply({"reasoning": "Press A.", **EMPTY, "note": ["Done."], "action": "A"}),
+     "invalid plan or note"),
+    (reply({"reasoning": "Press A.", "plan": "", "action": "A"}), "invalid answer"),
     (reply({"action": "A"}), "invalid answer"),
     (reply({"button": "A"}), "invalid answer"),
     (reply({}, finish_reason="length"), "max_tokens"),
@@ -232,6 +205,6 @@ def test_on_screen_characters_are_described_relative_to_the_player(monkeypatch):
     user = json.loads(sent[0].data)["messages"][1]["content"]
     assert user[-1]["text"] == (
         "# Game state\nYou play as Quilava.\nplayer position (464, 332) pixels, facing west\n"
-        "Characters on screen, relative to you:\n"
+        "Characters on screen, offset from you in pixels:\n"
         "- Granbull: 8 left, 20 down, facing south\n"
         "- Lombre: same position, facing east")

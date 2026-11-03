@@ -9,35 +9,31 @@ from typing import Callable, Sequence
 
 from emulator import Frame
 from mystery_dungeon.actions import GAME_ACTIONS, Outcome, Stop
-from mystery_dungeon.model import Finding, FindingKind, Reply, ScratchpadEdit
+from mystery_dungeon.model import Reply
 from mystery_dungeon.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))
 
 
-def finding(text: str, kind: FindingKind = "dialogue") -> Finding:
-    return Finding(kind, text)
-
-
 class ScriptedModel:
     """Answer from fixed scripts and record every call.
 
-    Actions are model-facing names, and the last one repeats. Scratchpad edits and findings go
-    with the calls in order and run out. Each
-    call replies Stop with ``outcome`` instead when ``stop()`` returns True, and raises
-    ``error`` when one is given.
+    Actions are model-facing names, and the last one repeats. Plans and notes go with the
+    calls in order and run out, then the plan is blank and there is no note. Each call replies
+    Stop with ``outcome`` instead when ``stop()`` returns True, and raises ``error`` when one is
+    given.
     With a ``gate``, each call sets ``entered`` and then waits for the gate.
     """
 
     def __init__(self, actions: Sequence[str] = ("A",),
                  stop: Callable[[], bool] = lambda: False, *,
                  gate: threading.Event | None = None, error: Exception | None = None,
-                 reasoning: str = "Scripted.", edits: Sequence[ScratchpadEdit] = (),
-                 findings: Sequence[Sequence[Finding]] = (),
+                 reasoning: str = "Scripted.", plans: Sequence[str] = (),
+                 notes: Sequence[str | None] = (),
                  outcome: Outcome = "complete") -> None:
         self.actions = list(actions)
-        self.edits = list(edits)
-        self.findings = list(findings)
+        self.plans = list(plans)
+        self.notes = list(notes)
         self.reasoning = reasoning
         self.stop = stop
         self.outcome = outcome
@@ -52,13 +48,13 @@ class ScriptedModel:
     def call(self, context, frame) -> Reply:
         self._called("call", context, frame)
         index = len(self.calls) - 1
-        edit = self.edits[index] if index < len(self.edits) else ScratchpadEdit()
-        findings = tuple(self.findings[index]) if index < len(self.findings) else ()
+        plan = self.plans[index] if index < len(self.plans) else ""
+        note = self.notes[index] if index < len(self.notes) else None
         if self.stop():
-            return Reply(Stop(self.outcome), self.reasoning, edit, findings)
+            return Reply(Stop(self.outcome), self.reasoning, plan, note)
         action = self.actions[min(self._chosen, len(self.actions) - 1)]
         self._chosen += 1
-        return Reply(GAME_ACTIONS[action], self.reasoning, edit, findings)
+        return Reply(GAME_ACTIONS[action], self.reasoning, plan, note)
 
     def _called(self, *call) -> None:
         self.calls.append(call)

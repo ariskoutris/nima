@@ -58,15 +58,14 @@ One term per concept in code, prompts, log fields, flags and docs:
   `GameAction` (Press, Wait) is what the game performs; Stop ends the task with its outcome:
   complete, stuck, or invalid (the task no longer makes sense). The why is in that turn's
   reasoning.
-- scratchpad: the model's working lines for the current task (what is done, what was
-  tried, the plan, guesses), shown numbered from 1 every turn. An edit either rewrites it or
-  changes and deletes lines by those numbers and appends new ones; an edit that can't apply is
-  skipped and the agent adds a line saying why. It is cleared when the task changes.
-- finding: a standalone fact about the game the model records (a kind and a text that states
-  any uncertainty). Findings are never shown back to the model; they are logged with each turn
-  for the orchestrator, which will merge them into knowledge.
-- short-term memory: recent reasoning, observations and turns, plus information retrieved for the
-  current task.
+- plan: one line the model rewrites each turn: the parts of the task still to do and how. A
+  blank plan keeps the last one.
+- note: one line the model adds when something changed for good (a part done, an attempt that
+  failed, a belief proved wrong). Notes are never changed or removed; a note repeated word for
+  word is dropped. Plan and notes are cleared when the task changes.
+- short-term memory: recent reasoning, observations and turns, plus the plan and notes and
+  information retrieved for the current task. Reasoning is shown only with its turn; anything
+  later turns need goes into the plan or a note.
 - long-term memory (knowledge): a journal of observations, experiences and information gathered
   during play. The agent draws on it to plan new tasks, judge which are feasible and prioritize;
   task information comes from here. It starts with prerequisite information such as
@@ -75,7 +74,7 @@ One term per concept in code, prompts, log fields, flags and docs:
 - model: what the agent calls each turn for an action and its reasoning (`Model`, `ChatModel`),
   configured by `[model]` in `config.toml`; `name` is its endpoint id.
 - context: what the model acts on each turn besides the current frame: the task, knowledge,
-  RAM-derived game state, short-term memory and the scratchpad (`agent.Context`).
+  RAM-derived game state and short-term memory (`agent.Context`).
 - RAM-derived game state: the limited facts read from RAM that the model gets with a frame
   (`session.GameState`). A saved emulator state is a save state.
 - frame: an image in memory. screenshot: its saved PNG. tick: one emulated GBA frame; counts

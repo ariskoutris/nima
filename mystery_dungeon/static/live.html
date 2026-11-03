@@ -136,10 +136,10 @@
       </section>
       <section class="card task-memory">
         <details open>
-          <summary><h2>Scratchpad and findings</h2><span id="findings-count" class="muted">No findings yet</span></summary>
+          <summary><h2>Plan and notes</h2><span id="notes-count" class="muted">No notes yet</span></summary>
           <div class="task-memory-body">
-            <div><h3>Scratchpad</h3><div id="scratchpad"></div></div>
-            <div><h3>Findings</h3><div id="findings"></div></div>
+            <div><h3>Plan</h3><div id="plan"></div></div>
+            <div><h3>Notes</h3><div id="notes"></div></div>
           </div>
         </details>
       </section>
@@ -260,7 +260,7 @@
         $('observation').hidden = true; $('observation-label').hidden = true;
         $('history').textContent = 'No actions yet.';
       }
-      renderTaskMemory(state.scratchpad, state.findings);
+      renderTaskMemory(state.plan, state.notes);
       const latest = state.history[0];
       if (!latest) return;
       if (latest.index !== lastHistory) { lastHistory = latest.index; renderHistory(state.history); }
@@ -299,17 +299,17 @@
       return container;
     }
 
-    function renderTaskMemory(scratchpad, findings) {
-      const key = JSON.stringify([scratchpad, findings]);
+    function renderTaskMemory(plan, notes) {
+      const key = JSON.stringify([plan, notes]);
       if (key === shownTaskMemory) return;
       shownTaskMemory = key;
-      $('findings-count').textContent = findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'No findings yet';
-      $('scratchpad').replaceChildren(scratchpad.length
-        ? list(scratchpad.map((text, index) => [index + 1, text]), ([number, text]) => [element('span', `[${number}] `, 'entry-label'), text])
-        : element('div', 'The agent\'s working lines for the task will appear here.', 'muted'));
-      $('findings').replaceChildren(findings.length
-        ? list(findings, finding => [element('span', `(${finding.kind}) `, 'entry-label'), finding.text])
-        : element('div', 'Findings the agent records during the task will appear here.', 'muted'));
+      $('notes-count').textContent = notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'No notes yet';
+      $('plan').replaceChildren(plan
+        ? element('div', plan)
+        : element('div', 'The agent\'s plan for the task will appear here.', 'muted'));
+      $('notes').replaceChildren(notes.length
+        ? list(notes, note => [note])
+        : element('div', 'Notes the agent keeps during the task will appear here.', 'muted'));
     }
 
     function renderHistory(rows) {

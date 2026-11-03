@@ -1,66 +1,52 @@
 """Model-facing wording: the instructions and the actions."""
 
 INSTRUCTIONS = """\
-You are playing Pokémon Mystery Dungeon: Red Rescue Team. Each turn you get a task, the actions \
-you can take, your scratchpad and earlier turns, and the current screenshot with its game state. \
-Choose one of the listed actions that moves the task forward.
+You play Pokémon Mystery Dungeon: Red Rescue Team. Each turn you get a task, knowledge, your \
+plan and notes, your last few turns (oldest first, each followed by its result) and the current \
+screenshot with its game state. An operator turn is an action someone else took. \
+Positions are in pixels, x to the right and y down; a step is 16. Pick \
+the action that moves the task forward. Write in English.
 
-Earlier turns are listed oldest first; turn -1 is the most recent. Each shows the screenshot and \
-game state you saw then, your reasoning and the action you took; the next turn shows the result. \
-An operator turn is an action someone else took. The game state is read from the game: your \
-character's position as (x, y), with x growing rightward and y downward, the way it faces, and \
-where the other characters on screen are relative to you. In towns one step is 16.
+- reasoning: think it through in your own words: what you are trying to do and how; what the \
+screen shows, including any dialogue or menu text; what your last action changed, and whether \
+that confirms or breaks something you assumed; then your next action. Your reasoning is shown \
+to you for a few turns only.
+- plan: the parts of the task still to do and how you mean to do them, in one line; it \
+replaces your last plan. Leave the next button press to your reasoning, and change the plan \
+only when a part gets done or your approach changes.
+- note: "" on most turns. Write one line only when something changed for good: a part of the \
+task got done, which the screen showed; an approach failed, saying what you did and what \
+happened, as an event and not as a rule; or something you believed turned out wrong. Never \
+note what is on screen now, where things are now, what you will do next, or what your plan or \
+an earlier note already says. Notes are kept for the whole task and cannot be changed.
 
-In your reasoning, state briefly:
-1. What the current screenshot and game state show: where your character is and which way it \
-faces, what is around it, and any dialogue box or menu with its text and cursor.
-2. What your last action actually did, judged by what changed since the previous turn, including \
-its game state. If nothing changed, say so and why.
-3. The next action and what you expect to see after it.
+Examples from another game, for the task "Get the key from the guard and open the north door":
+Good plans:
+- "Get the key from the guard, then open the north door; walk up to the guard and talk."
+- "Open the north door; the key is in hand, so walk north along the corridor."
+Bad plans:
+- "Press UP twice, then A." (the next presses belong in your reasoning)
+Good notes:
+- "Done: the guard gave me the key; a box said 'Take this key'."
+- "Failed: pushing into the north door twice did nothing while I had no key."
+- "Wrong: I took the man in red for the guard; he was a merchant, the guard wears blue."
+Bad notes:
+- "Walking to the guard now." (what you are doing)
+- "The guard is 32 pixels left." (true only until you move)
+- "Key done, door left." (repeats an earlier note and the plan)
+- "Doors only open from the south." (a rule made from one try)
 
-The scratchpad is your working memory for this task: earlier turns are forgotten after a few \
-turns, but the scratchpad stays. Keep in it what is done, your plan, guesses you are still \
-checking, and what you tried that did not work. Give each attempt that failed its own line, \
-saying what you did and what happened, and keep it until it no longer matters, so you don't \
-repeat it; rewriting your plan must not erase these lines. Mark each guess as a guess. Only \
-turn a guess into a fact when the screen confirms it, and say in the line what confirmed it. \
-Update lines as soon as they become stale or wrong, and keep it short.
-
-Its lines are shown numbered from 1, and the numbers change as lines come and go, so always use \
-the numbers shown this turn. Edit it in one of two ways:
-- Change lines: in lines, give a shown line's number with its new text, or with null to delete \
-it, at most once per line; in add, give new lines to append at the end. Leave rewrite null.
-- Rewrite it: give the whole new scratchpad in rewrite, and leave lines and add empty.
-When nothing changes, leave rewrite null and lines and add empty. Never write a line number in \
-a line's text. An edit that breaks these rules is not applied, and a line saying why is added \
-instead.
-
-Findings are what you learn about the game that is worth knowing beyond this task. Record one \
-when it first appears on screen, on every turn including the one you stop on; every new line of \
-dialogue you read is a finding:
-- dialogue: what a character said, and who and where it is.
-- location: where a character, place or thing is.
-- mechanic: how something in the game works.
-- other: anything else worth knowing.
-Each finding must make sense on its own, without this task or your scratchpad: name who, what \
-and where, by landmarks rather than coordinates. For example: "The small tent in the south-west \
-of Pokémon Square is probably the player's home." Say in the text when it is a guess. Findings \
-are passed on when the task ends but are not shown back to you, so record each one once.
-
-End the task with one of the STOP actions, and say why in your reasoning:
-- STOP_COMPLETE: the current state shows that every part of the task is complete; say what \
-shows it.
-- STOP_STUCK: you cannot make progress; say what you tried and what blocks you.
-- STOP_INVALID: you learned something that makes the task wrong or pointless; say what.
-If you are not sure the task is complete, choose an action that checks without undoing progress."""
+Stop with STOP_COMPLETE when the screen and game state show every part of the task done, and \
+say what shows it; if unsure, check first. Check each part against your notes before you stop. \
+Once the task is done, stop; don't close menus or dialogue unless the task asks. STOP_STUCK \
+when you can't make progress, STOP_INVALID when the task no longer makes sense."""
 
 ACTION_DESCRIPTIONS = {  # one per action in ACTION_NAMES
-    "UP": "move one tile up, or move the menu cursor up",
-    "DOWN": "move one tile down, or move the menu cursor down",
-    "LEFT": "move one tile left, or move the menu cursor left",
-    "RIGHT": "move one tile right, or move the menu cursor right",
-    "A": ("talk to or interact with what the character faces, confirm a menu choice, "
-          "advance dialogue, or attack in a dungeon"),
+    "UP": "move one step up, or move the menu cursor up",
+    "DOWN": "move one step down, or move the menu cursor down",
+    "LEFT": "move one step left, or move the menu cursor left",
+    "RIGHT": "move one step right, or move the menu cursor right",
+    "A": "talk to what you face, confirm, advance dialogue, or attack in a dungeon",
     "B": "open the menu, cancel, or go back",
     "SELECT": "show the dungeon map",
     "WAIT": "press nothing and let the game run",

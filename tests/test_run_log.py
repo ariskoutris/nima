@@ -4,11 +4,10 @@ import hashlib
 import json
 
 import pytest
-from fakes import ScriptedModel, finding, rows, start, votes
+from fakes import ScriptedModel, rows, start, votes
 
 from mystery_dungeon.actions import Press
 from mystery_dungeon.agent import Agent
-from mystery_dungeon.model import ScratchpadEdit
 from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
 
 
@@ -67,24 +66,22 @@ def test_model_call_rows_carry_input_and_response_by_turn(tmp_path):
     unknown = {"position": None, "tile": None, "direction": None, "characters": [],
                "species": None}
     assert second["input"] == {
-        "task": "Find exit", "scratchpad": [],
+        "task": "Find exit", "plan": "", "notes": [],
         "screenshot": "frames/000001.png", "game_state": unknown,
         "memory": [{"screenshot": "frames/000000.png", "game_state": unknown,
                     "action": {"type": "press", "button": "A"}, "reasoning": "Scripted."}]}
 
 
 def test_agent_rows_carry_the_model_reasoning(tmp_path):
-    model = ScriptedModel(reasoning="Door ahead.", edits=[ScratchpadEdit(add=("Find the door.",))],
-                          findings=[[finding("Kecleon in Pokémon Square sells X-Ray Specs.")]])
+    model = ScriptedModel(reasoning="Door ahead.", plans=["Find the door."],
+                          notes=["Done: Kecleon in Pokémon Square sells X-Ray Specs."])
     log, agent, session = setup(tmp_path, model)
     log.record_turn(*agent.act(session))
     log.record_manual(Press("B"), agent.manual(session, Press("B")))
     action, manual = turns(tmp_path)
     assert action["reasoning"] == "Door ahead."
-    assert action["scratchpad"] == {"rewrite": None, "lines": [], "add": ["Find the door."]}
-    assert action["scratchpad_problem"] is None
-    assert action["findings"] == [{"kind": "dialogue",
-                                   "text": "Kecleon in Pokémon Square sells X-Ray Specs."}]
+    assert action["plan"] == "Find the door."
+    assert action["note"] == "Done: Kecleon in Pokémon Square sells X-Ray Specs."
     assert "reasoning" not in manual
     assert log.recent()[1]["reasoning"] == "Door ahead."  # the live view shows it
 
@@ -99,8 +96,8 @@ def test_stop_and_model_error_rows(tmp_path):
     stop, error_row = turns(tmp_path)
     assert [stop["event"], error_row["event"]] == ["stop", "model_error"]
     assert "action" not in stop and stop["outcome"] == "stuck"
-    assert stop["reasoning"] == "Blocked by a wall." and stop["findings"] == []
-    assert stop["scratchpad"] == {"rewrite": None, "lines": [], "add": []}
+    assert stop["reasoning"] == "Blocked by a wall."
+    assert stop["plan"] == "" and stop["note"] is None
     assert error_row["error"] == "RuntimeError: down" and error_row["task"] == "Find exit"
     assert [call["turn"] for call in model_calls(tmp_path)] == [1, 2]
     assert not log.recent()

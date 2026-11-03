@@ -148,8 +148,7 @@ class LiveRun:
                     "reset_count": self._reset_count,
                     "game_state": self._game_state,
                     "history": self._log.recent(),
-                    "scratchpad": list(self._agent.scratchpad),
-                    "findings": [asdict(finding) for finding in self._agent.findings],
+                    "plan": self._agent.plan, "notes": list(self._agent.notes),
                     "model": self._log.model.name,
                     "actions": list(GAME_ACTIONS), "output": str(self.output)}
 

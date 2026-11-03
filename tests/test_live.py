@@ -7,11 +7,10 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from fakes import Game, ScriptedModel, finding, rows, votes
+from fakes import Game, ScriptedModel, rows, votes
 
 from emulator import Frame
 from mystery_dungeon import live
-from mystery_dungeon.model import ScratchpadEdit
 from mystery_dungeon.session import Checkpoint
 
 AGENT_PRESS = (8, ("A",))
@@ -159,19 +158,18 @@ def test_operator_input_waits_for_the_turn_in_progress(start_run, operate, took_
     assert AGENT_PRESS in game.steps
 
 
-def test_the_view_shows_the_task_scratchpad_and_findings(start_run):
-    run, _ = start_run(ScriptedModel(edits=[ScratchpadEdit(add=("Find the exit.",))],
-                                     findings=[[finding("Kecleon sells Oran Berries.")]]))
+def test_the_view_shows_the_task_plan_and_notes(start_run):
+    run, _ = start_run(ScriptedModel(plans=["Find the exit."],
+                                     notes=["Done: Kecleon sells Oran Berries."]))
     run.control({"task": "Find exit", "command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 1 and idle(state))
-    assert state["scratchpad"] == ["Find the exit."]
-    assert state["findings"] == [{"kind": "dialogue",
-                                  "text": "Kecleon sells Oran Berries."}]
+    assert state["plan"] == "Find the exit."
+    assert state["notes"] == ["Done: Kecleon sells Oran Berries."]
     run.control({"task": "Talk to Granbull"})
     state = wait_until(run, lambda state: state["task"] == "Talk to Granbull")
     run.control({"command": "turn"})
     state = wait_until(run, lambda state: len(state["history"]) == 2 and idle(state))
-    assert state["scratchpad"] == state["findings"] == []  # the new task starts empty
+    assert (state["plan"], state["notes"]) == ("", [])  # the new task starts empty
 
 
 def test_stop_for_a_replaced_task_does_not_end_the_new_one(start_run):

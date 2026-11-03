@@ -9,12 +9,10 @@ from typing import TYPE_CHECKING, Protocol
 from mystery_dungeon.actions import Action, GameAction, Stop
 
 if TYPE_CHECKING:
-    from mystery_dungeon.model import Finding, Model, ScratchpadEdit
+    from mystery_dungeon.model import Model
     from mystery_dungeon.session import GameState, Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
-EDIT_REJECTED = ("A scratchpad edit of yours was rejected, so none of it applied: {problem}. "
-                 "Delete this line once you have redone the edit.")
 
 
 class Session(Protocol):
@@ -42,7 +40,8 @@ class Context:
     knowledge: str
     memory: tuple[MemoryEntry, ...]
     game_state: GameState  # with the current frame
-    scratchpad: tuple[str, ...] = ()  # shown numbered from 1
+    plan: str = ""
+    notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,9 +50,8 @@ class Turn:
     context: Context
     action: Action
     reasoning: str
-    scratchpad: ScratchpadEdit
-    findings: tuple[Finding, ...]
-    scratchpad_problem: str | None  # why the edit was rejected; None when it applied
+    plan: str  # as the model wrote it; blank kept the last plan
+    note: str | None
 
 
 @dataclass(frozen=True)
@@ -67,32 +65,31 @@ class ModelError:
 
 class Agent:
     """Agent that interacts with the game to complete the given task.
-    Chooses actions with a model, keeps recent turns in memory and the task's scratchpad and
-    findings."""
+    Chooses actions with a model and keeps recent turns plus the task's plan and notes."""
 
     def __init__(self, model: Model, knowledge: str = "") -> None:
         self._model = model
         self._knowledge = knowledge.strip()
         self._task = ""
         self._memory: deque[MemoryEntry] = deque(maxlen=MEMORY_TURNS)
-        self._scratchpad: list[str] = []
-        self._findings: list[Finding] = []
+        self._plan = ""
+        self._notes: list[str] = []
 
     @property
     def memory(self) -> tuple[MemoryEntry, ...]:
         return tuple(self._memory)
 
     @property
-    def scratchpad(self) -> tuple[str, ...]:
-        return tuple(self._scratchpad)
+    def plan(self) -> str:
+        return self._plan
 
     @property
-    def findings(self) -> tuple[Finding, ...]:
-        """The task's findings so far; they are logged, never shown to the model."""
-        return tuple(self._findings)
+    def notes(self) -> tuple[str, ...]:
+        """The task's notes, oldest first; a note is never changed or removed."""
+        return tuple(self._notes)
 
     def set_task(self, task: str) -> None:
-        """Switch tasks, forgetting the old task's memory, scratchpad and findings."""
+        """Switch tasks, forgetting the old task's memory, plan and notes."""
         task = task.strip()
         if self._task and task != self._task:
             self.clear_memory()
@@ -100,45 +97,31 @@ class Agent:
 
     def clear_memory(self) -> None:
         self._memory.clear()
-        self._scratchpad.clear()
-        self._findings.clear()
+        self._plan = ""
+        self._notes.clear()
 
     def act(self, session: Session) -> tuple[Turn | ModelError, Transition | None]:
-        """Take one turn: observe, ask the model and apply its action and scratchpad edit."""
+        """Take one turn: observe, ask the model and apply its action, plan and note."""
         if not self._task:
             raise ValueError("give the agent a task before it acts")
         observation = session.observe()
         context = Context(self._task, self._knowledge, self.memory, observation.game_state,
-                          self.scratchpad)
+                          self._plan, self.notes)
         try:
             reply = self._model.call(context, observation.frame)
         except Exception as exc:
             return ModelError(observation, context, f"{type(exc).__name__}: {exc}"), None
-        # A bad edit costs only itself: in a live run one discarded a correct STOP.
-        problem = reply.scratchpad.problem(len(self._scratchpad))
-        turn = Turn(observation, context, reply.action, reply.reasoning, reply.scratchpad,
-                    reply.findings, problem)
+        turn = Turn(observation, context, reply.action, reply.reasoning, reply.plan, reply.note)
         match reply.action:
             case Stop():
                 transition = None
             case action:
                 transition = self._apply(session, action, reply.reasoning)
-        if problem is None:
-            self._edit(reply.scratchpad)
-        else:
-            self._scratchpad.append(EDIT_REJECTED.format(problem=problem))
-        self._findings.extend(reply.findings)
+        self._plan = reply.plan or self._plan
+        # The model repeats a note word for word when it forgets it already wrote it.
+        if reply.note and reply.note not in self._notes:
+            self._notes.append(reply.note)
         return turn, transition
-
-    def _edit(self, edit: ScratchpadEdit) -> None:
-        """Apply a valid edit by the numbers the model saw."""
-        if edit.rewrite is not None:
-            self._scratchpad = list(edit.rewrite)
-            return
-        changes = {change.line: change.text for change in edit.lines}
-        self._scratchpad = [text for number, line in enumerate(self._scratchpad, 1)
-                            if (text := changes.get(number, line)) is not None]
-        self._scratchpad.extend(edit.add)
 
     def manual(self, session: Session, action: GameAction) -> Transition:
         """Apply an operator's action."""
