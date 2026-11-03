@@ -20,7 +20,7 @@
     h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.02em; }
     .status { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #2b3d3e; border-radius: 999px; color: #b8c9c5; background: #152125; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a9b98; }
-    .status.running .dot, .status.thinking .dot, .status.reviewing .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
+    .status.running .dot, .status.thinking .dot { background: #82e4a8; box-shadow: 0 0 11px #82e4a8; }
     .status.resetting .dot { background: #ebcf8c; box-shadow: 0 0 11px #ebcf8c; }
     .status.error .dot { background: #ff938a; }
     .layout { display: grid; grid-template-columns: minmax(0, 1.38fr) minmax(310px, .9fr); gap: 18px; align-items: start; }
@@ -226,7 +226,6 @@
       const activity = {
         loading: ['Starting emulator', 'Preparing the game view'],
         thinking: ['Waiting for the model', `${state.model} is choosing an action`],
-        reviewing: ['Reviewing the task', `${state.model} is reading its turns for findings`],
         resetting: ['Restoring game', 'Loading the selected state']
       }[state.status];
       $('screen-activity').hidden = !activity;

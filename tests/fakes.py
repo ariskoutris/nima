@@ -73,7 +73,6 @@ class ScriptedReviewer:
         self.findings = list(findings)
         self.error = error
         self.reviews: list[tuple[str, tuple]] = []
-        self.name = "scripted"
 
     def review(self, task, turns) -> list[Finding]:
         self.reviews.append((task, tuple(turns)))

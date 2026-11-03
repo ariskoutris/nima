@@ -129,7 +129,6 @@ class LiveRun:
         self._agent = Agent(self._log.model, knowledge)
         self._reviewer = reviewer
         self._findings: list[Finding] = []  # from the review of the last task that stopped
-        self._reviewing = False
         self._condition = threading.Condition()
         self._task = ""
         self._mode = "paused"  # paused | running | one_turn
@@ -295,7 +294,7 @@ class LiveRun:
                     self._log.record_turn(result, transition)
                     self._mode = "paused"
                     self._notice = f"Stopped ({outcome}): {result.reasoning}"
-                    stopped = self._reviewing = True
+                    stopped = True
                 case Turn():
                     self._log.record_turn(result, transition)
                     if self._mode == "one_turn":
@@ -310,7 +309,6 @@ class LiveRun:
         self._agent.clear_turns()  # running the same task again reviews only its new turns
         with self._condition:
             self._log.record_review(task, result)
-            self._reviewing = False
             match result:
                 case ReviewError(message):
                     self._error = f"Review failed: {message}"
@@ -380,7 +378,7 @@ class LiveRun:
             return "loading"
         match self._current:
             case TakeTurn():
-                return "reviewing" if self._reviewing else "thinking"
+                return "thinking"
             case Load():
                 return "resetting"
         return "paused" if self._mode == "paused" else "running"

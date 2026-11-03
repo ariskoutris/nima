@@ -78,8 +78,6 @@ class ReviewError:
 class Reviewer(Protocol):
     """Find facts about the game in a task's turns."""
 
-    name: str
-
     def review(self, task: str, turns: Sequence[Turn]) -> list[Finding]:
         """Return the findings in the turns, in turn order.
 
@@ -103,7 +101,6 @@ class ChatReviewer:
     def __init__(self, settings: ChatSettings) -> None:
         self._settings = replace(settings, max_tokens=REVIEW_MAX_TOKENS)
         self._api_key = api_key(settings)
-        self.name = settings.name
 
     def review(self, task: str, turns: Sequence[Turn]) -> list[Finding]:
         starts = range(0, len(turns), REVIEW_TURNS)
@@ -116,11 +113,11 @@ class ChatReviewer:
     def _review(self, task: str, turns: Sequence[Turn], first: int) -> list[Finding]:
         response = post(self._settings, self._api_key, REVIEW_INSTRUCTIONS,
                         _content(task, turns, first), REVIEW_SCHEMA)
-        answer = decode(response, self.name)
+        answer = decode(response, self._settings.name)
         if not isinstance(answer, dict) or answer.keys() != {"findings"} or not isinstance(
                 answer["findings"], list):
-            raise ValueError(f"{self.name} returned an invalid review: {answer!r}")
-        return [_finding(item, self.name) for item in answer["findings"]]
+            raise ValueError(f"{self._settings.name} returned an invalid review: {answer!r}")
+        return [_finding(item, self._settings.name) for item in answer["findings"]]
 
 
 def _finding(item: object, model: str) -> Finding:
