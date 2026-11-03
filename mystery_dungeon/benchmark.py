@@ -76,7 +76,8 @@ CASES = (
          "Talk to Granbull until the conversation ends", "finish", 22),
     Case("shop_talk", "shop-interact", "Talk to the shopkeeper in front of you", "wigglytuff", 5),
     Case("shop_buy_friend_area", "shop-interact",
-         "Open the Friend Areas list at Wigglytuff's shop and choose one to buy", "buy_reply", 24),
+         "Open the Friend Areas list at Wigglytuff's shop and try to buy one. "
+         "Stop when the shopkeeper replies to your purchase attempt", "buy_reply", 24),
     Case("shop_check_pidgey", "shop-interact",
          "Choose Check at Wigglytuff's shop, then select Pidgey from the Pokémon list",
          "check_pidgey", 30),
