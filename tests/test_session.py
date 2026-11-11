@@ -1,13 +1,47 @@
 """Checkpoint loading, observations and the game running in real time."""
 
+import struct
 import time
+import zlib
 
 import pytest
 from fakes import FRAME, Game
 
 from emulator import Frame
 from mystery_dungeon.actions import Press
-from mystery_dungeon.session import TICK_SECONDS, Checkpoint, GameplaySession, RealtimeSession
+from mystery_dungeon.session import (
+    TICK_SECONDS,
+    Checkpoint,
+    GameplaySession,
+    RealtimeSession,
+    read_ss0,
+)
+
+
+def png_chunk(kind, payload):
+    return (struct.pack(">I", len(payload)) + kind + payload
+            + struct.pack(">I", zlib.crc32(kind + payload)))
+
+
+@pytest.fixture
+def checkpoint_png():
+    return (b"\x89PNG\r\n\x1a\n"
+            + png_chunk(b"gbAs", zlib.compress(b"core-state"))
+            + png_chunk(b"gbAx", b"\x02\0\0\0" + b"\0" * 4 + zlib.compress(b"save-ram"))
+            + png_chunk(b"IEND", b""))
+
+
+def test_ss0_extracts_state_and_ram_from_complete_png(checkpoint_png):
+    assert read_ss0(checkpoint_png) == Checkpoint(b"core-state", b"save-ram")
+
+
+@pytest.mark.parametrize("ending", [
+    b"", b"partial", png_chunk(b"IEND", b"unexpected"),
+    png_chunk(b"IEND", b"") + b"trailing",
+])
+def test_ss0_rejects_missing_or_invalid_png_end(checkpoint_png, ending):
+    with pytest.raises(ValueError, match="PNG end marker"):
+        read_ss0(checkpoint_png[:-12] + ending)
 
 
 def test_load_resets_counters_and_restores_save_ram(tmp_path):

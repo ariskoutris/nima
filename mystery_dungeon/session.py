@@ -92,6 +92,7 @@ def read_ss0(path: Path | bytes) -> Checkpoint:
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("checkpoint is not a PNG/mGBA save state")
     state = save_ram = None
+    ended = False
     offset = 8
     while offset + 12 <= len(data):
         size = struct.unpack_from(">I", data, offset)[0]
@@ -102,6 +103,10 @@ def read_ss0(path: Path | bytes) -> Checkpoint:
         crc = struct.unpack_from(">I", data, end - 4)[0]
         if zlib.crc32(kind + payload) != crc:
             raise ValueError(f"bad {kind!r} checksum")
+        if kind == b"IEND":
+            if payload or end != len(data):
+                raise ValueError("invalid PNG end marker in mGBA save state")
+            ended = True
         try:
             if kind == b"gbAs":
                 state = zlib.decompress(payload)
@@ -110,6 +115,8 @@ def read_ss0(path: Path | bytes) -> Checkpoint:
         except zlib.error as exc:
             raise ValueError("invalid compressed mGBA save state") from exc
         offset = end
+    if not ended:
+        raise ValueError("mGBA save state is missing PNG end marker")
     if state is None or save_ram is None:
         raise ValueError("mGBA state or save RAM is missing")
     return Checkpoint(state, save_ram)
