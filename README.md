@@ -1,10 +1,30 @@
 # nima
 
-A vision-based agent for Pokémon Mystery Dungeon: Red Rescue Team. Give it a task in the browser, and it chooses actions from screenshots of the game.
+An agent that plays Pokémon Mystery Dungeon: Red Rescue Team using a vision model. Give it a task such as talking to a character or buying an item, and watch it play in the browser. You can follow its reasoning and take control between turns.
+
+## The agent loop
+
+The agent is given a task and operates in a simple loop:
+
+1. Observe the current game state, consisting of the frame and information derived from RAM (e.g. player position).
+2. Think about what to do next to complete the task.
+3. Choose an action: press a button, wait, or stop and mark the task as complete or failed.
+
+To keep the model's context small, only the five most recent turns are kept in memory. To preserve information that is useful in the long term (e.g. completed parts of a task, failed attempts, useful dialogue), the agent maintains a notepad that it can write to each turn. It can then refer to this notepad in later turns.
+
+[WIP] A higher-level orchestrator prioritizes and assigns tasks and reconciles the agent’s notepad entries into long-term memory. This higher level function is necessary to act autonomously for hours, to make decisions informed by past experience and to choose what to explore next.
 
 ## Setup
 
-Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro core, and a save state, then set their paths under `[game]` in `config.toml`; `checkpoints` is the folder of benchmark save states. The agent asks a vision model behind any OpenAI-compatible chat-completions endpoint, set under `[model]` in `config.toml`; the default is GLM-5.3-Flash through OpenRouter, so put `OPENROUTER_API_KEY` in `.env`.
+With Python 3.12+ and `uv` installed, run this from the project directory to install the dependencies:
+
+```sh
+uv sync
+```
+
+Then point the `[game]` section of `config.toml` to your own Red Rescue Team ROM, mGBA Libretro core and starting save state.
+
+The `[model]` section selects the vision model and its OpenAI-compatible endpoint. It defaults to GLM-5.3-Flash through OpenRouter, whose API key goes in `.env` as `OPENROUTER_API_KEY`.
 
 ## Run
 
@@ -12,17 +32,7 @@ Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro c
 uv run --env-file .env -m nima.live
 ```
 
-Open <http://127.0.0.1:8765> and enter a task. Input from the browser runs after the current agent turn. The agent starts out knowing `nima/knowledge/game-facts.md`, set by `knowledge` in `config.toml`; `--knowledge PATH` gives it another file.
-
-## How it works
-
-On each turn, the model sees the task, the current screenshot with its RAM-derived game state (e.g. player position), and the last few turns with their screenshots, RAM-derived game state, reasoning and actions, plus its notes for the task. It reasons, may add a note, then chooses a button press, a wait, or one of three STOP actions to end the task as complete, stuck, or invalid (the task no longer makes sense). Live sessions save screenshots, save states, and event logs under `runs/live/`.
-
-## Test
-
-```sh
-uv run python -m pytest -q
-```
+Open <http://127.0.0.1:8765> and enter a task. The browser shows the game, reasoning, actions and notes. You can pause the agent, press buttons yourself or load a save state. Sessions are saved under `runs/live/`.
 
 ## Benchmark
 
@@ -30,4 +40,19 @@ uv run python -m pytest -q
 uv run --env-file .env -m nima.benchmark
 ```
 
-It records the model settings, memory length, an instructions hash and the hashes of the ROM, core, checkpoints and knowledge in `config.json`. Results are saved under `runs/benchmarks/`.
+The benchmark tests various tasks covering movement, conversations and shop menus. It grades progress from RAM independently of the model's completion claim. Use `--case ID` to run one case.
+
+Results, frames, save states and model responses are saved under `runs/benchmarks/`. Each run records its settings and input hashes in `config.json`.
+
+## Development
+
+```sh
+uv run python -m pytest -q
+uv run ruff check
+```
+
+The browser UI tests require Node.js:
+
+```sh
+node --test tests/live_ui.test.cjs
+```
