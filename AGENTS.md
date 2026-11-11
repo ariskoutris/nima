@@ -32,8 +32,8 @@ experiments and deletion over backwards compatibility.
 - When the user calls a decision final, delete what it replaces: no versioned files, no flags to
   restore old behaviour.
 - Experiment settings live in `scripts/probe.py`. Production code gets a setting only once the user
-  adopts it. When an experiment ends, record question → result → decision in `docs/` and delete its
-  code.
+  adopts it. When an experiment ends, record question → result → decision in local experiment
+  notes and delete its code.
 - On a correction, change only what it names. If the scope is unclear, restate what changes and
   what stays first.
 - Back claims with evidence ("measured on the shop menu and Pokémon list"), not "guaranteed".
@@ -95,7 +95,7 @@ One term per concept in code, prompts, log fields, flags and docs:
 - Write comments that explain why (game quirks, timing, constraints). Delete comments that restate the code, and match the surrounding comment density.
 - Delete removed concepts completely: no commented-out code, compatibility aliases or stale names in code, prompts, logs, tests or docs.
 - README.md covers setup and the commands it lists; change it only when those change.
-- `docs/` holds dated experiment notes and is not updated afterwards.
+- Experiment notes are dated and are not updated afterwards.
 
 ## General practice
 - Type-hint every public signature. Put constants in UPPER_CASE at module top.

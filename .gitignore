@@ -4,15 +4,20 @@
 *.gba
 *.sav
 *.state
+*.ss0
 
 # Python environment and cache
 .venv/
 __pycache__/
+.pytest_cache/
+.ruff_cache/
 .env
 
+# Local editor settings
+/.zed/
+
 # Local reference material
-/docs/manuals/
-/docs/pilot_plan.md
+/docs/
 
 # Mac OS
 .DS_Store

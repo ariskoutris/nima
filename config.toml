@@ -16,8 +16,6 @@ max_tokens = 4096
 
 [model.request]
 reasoning = { effort = "low" }
-# OpenRouter: only providers measured on 2026-11-02 to write the schema's keys in order (others,
-# e.g. DigitalOcean and Fireworks, chose the action before the reasoning) and to finish within
-# max_tokens (Wafer looped on whitespace, Cohere spent it all on reasoning). Together was dropped
-# on 2026-11-03: all 15 turns that drifted into Chinese reasoning, of about 7000, came from it.
+# Providers measured on 2026-11-02 and 2026-11-03 to preserve schema key order, finish within
+# max_tokens and keep reasoning in English. Key order puts reasoning before the action.
 provider = { only = ["DeepInfra", "Mistral", "Parasail", "BaseTen", "Crusoe"], require_parameters = true }

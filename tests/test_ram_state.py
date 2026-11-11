@@ -1,4 +1,4 @@
-"""RAM observations against the checked-in Red Rescue Team checkpoints."""
+"""RAM observations against the local Red Rescue Team checkpoints."""
 
 import struct
 
