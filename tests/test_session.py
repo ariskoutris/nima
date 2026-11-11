@@ -8,8 +8,8 @@ import pytest
 from fakes import FRAME, Game
 
 from emulator import Frame
-from mystery_dungeon.actions import Press
-from mystery_dungeon.session import (
+from nima.actions import Press
+from nima.session import (
     TICK_SECONDS,
     Checkpoint,
     GameplaySession,

@@ -6,9 +6,9 @@ import json
 import pytest
 from fakes import ScriptedModel, rows, start, votes
 
-from mystery_dungeon.actions import Press
-from mystery_dungeon.agent import Agent
-from mystery_dungeon.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
+from nima.actions import Press
+from nima.agent import Agent
+from nima.run_log import FORMAT_VERSION, RECENT_ROWS, RunLog
 
 
 def turns(tmp_path):

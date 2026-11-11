@@ -1,4 +1,4 @@
-# mystery-dungeon
+# nima
 
 Vision agent for Pokémon Mystery Dungeon: Red Rescue Team. A solo research project: favour clear
 experiments and deletion over backwards compatibility.
@@ -6,8 +6,8 @@ experiments and deletion over backwards compatibility.
 ## Commands
 - Test: `uv run python -m pytest -q`
 - Lint: `uv run ruff check` (`--fix` sorts imports)
-- Play: `uv run --env-file .env -m mystery_dungeon.live`
-- Benchmark: `uv run --env-file .env -m mystery_dungeon.benchmark [--case ID]`
+- Play: `uv run --env-file .env -m nima.live`
+- Benchmark: `uv run --env-file .env -m nima.benchmark [--case ID]`
 - Probe: `uv run --env-file .env -m scripts.probe [--case ID] [--variant NAME]`
 - `--env-file .env` supplies the API key named by `[model] api_key_env` in `config.toml`.
 - Don't start benchmarks, probes or model runs unless asked; give the command instead.

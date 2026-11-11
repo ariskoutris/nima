@@ -11,13 +11,13 @@ from typing import TYPE_CHECKING, Protocol
 from urllib.request import Request, urlopen
 
 from emulator import Frame
-from mystery_dungeon import CONFIG
-from mystery_dungeon.actions import ACTION_NAMES, ACTIONS, Action, name
-from mystery_dungeon.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
+from nima import CONFIG
+from nima.actions import ACTION_NAMES, ACTIONS, Action, name
+from nima.prompts import ACTION_DESCRIPTIONS, INSTRUCTIONS
 
 if TYPE_CHECKING:
-    from mystery_dungeon.agent import Context
-    from mystery_dungeon.session import GameState
+    from nima.agent import Context
+    from nima.session import GameState
 
 TIMEOUT_SECONDS = 120
 # Frames go to the model enlarged; at native 240x160 it misread the shop menu cursor.

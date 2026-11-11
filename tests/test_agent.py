@@ -5,15 +5,15 @@ from dataclasses import fields
 import pytest
 from fakes import Game, ScriptedModel, start, votes
 
-from mystery_dungeon.actions import Press, Stop, Wait
-from mystery_dungeon.agent import (
+from nima.actions import Press, Stop, Wait
+from nima.agent import (
     MEMORY_TURNS,
     Agent,
     Context,
     ModelError,
     Turn,
 )
-from mystery_dungeon.session import GameState
+from nima.session import GameState
 
 
 def agent_with(model, task="Find exit", knowledge=""):

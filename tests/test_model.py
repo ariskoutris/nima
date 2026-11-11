@@ -7,10 +7,10 @@ import pytest
 from fakes import FRAME
 
 from emulator import Frame
-from mystery_dungeon import model
-from mystery_dungeon.actions import Press, Stop
-from mystery_dungeon.agent import Context, MemoryEntry
-from mystery_dungeon.model import (
+from nima import model
+from nima.actions import Press, Stop
+from nima.agent import Context, MemoryEntry
+from nima.model import (
     ChatModel,
     ChatSettings,
     Reply,
@@ -19,8 +19,8 @@ from mystery_dungeon.model import (
     scaled,
     token_usage,
 )
-from mystery_dungeon.prompts import INSTRUCTIONS
-from mystery_dungeon.session import Character, GameState, Observation
+from nima.prompts import INSTRUCTIONS
+from nima.session import Character, GameState, Observation
 
 UNKNOWN = GameState(None, None, None)
 MEMORY = (MemoryEntry(Observation(FRAME, "before.png", UNKNOWN), Press("UP"),

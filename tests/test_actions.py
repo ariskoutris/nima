@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 from fakes import Game, start
 
-from mystery_dungeon.actions import (
+from nima.actions import (
     ACTION_NAMES,
     GAME_ACTIONS,
     Press,
@@ -14,7 +14,7 @@ from mystery_dungeon.actions import (
     name,
     to_json,
 )
-from mystery_dungeon.prompts import ACTION_DESCRIPTIONS
+from nima.prompts import ACTION_DESCRIPTIONS
 
 
 def test_names_round_trip_serialize_and_have_descriptions():

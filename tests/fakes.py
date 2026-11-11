@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from emulator import Frame
-from mystery_dungeon.actions import GAME_ACTIONS, Outcome, Stop
-from mystery_dungeon.model import Reply
-from mystery_dungeon.review import Finding
-from mystery_dungeon.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
+from nima.actions import GAME_ACTIONS, Outcome, Stop
+from nima.model import Reply
+from nima.review import Finding
+from nima.session import HOLD_TICKS, RELEASE_TICKS, GameplaySession, perform
 
 FRAME = Frame(16, 16, bytes(16 * 16 * 4))
 

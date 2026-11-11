@@ -10,10 +10,10 @@ import pytest
 from fakes import Game, ScriptedModel, ScriptedReviewer, rows, votes
 
 from emulator import Frame
-from mystery_dungeon import live
-from mystery_dungeon.actions import Press, Stop
-from mystery_dungeon.review import Finding
-from mystery_dungeon.session import Checkpoint
+from nima import live
+from nima.actions import Press, Stop
+from nima.review import Finding
+from nima.session import Checkpoint
 
 AGENT_PRESS = (8, ("A",))
 

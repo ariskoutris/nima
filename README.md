@@ -1,4 +1,4 @@
-# Mystery Dungeon Agent
+# nima
 
 A vision-based agent for Pokémon Mystery Dungeon: Red Rescue Team. Give it a task in the browser, and it chooses actions from screenshots of the game.
 
@@ -9,10 +9,10 @@ Install Python 3.12+ and `uv`. Provide a Red Rescue Team ROM, an mGBA Libretro c
 ## Run
 
 ```sh
-uv run --env-file .env -m mystery_dungeon.live
+uv run --env-file .env -m nima.live
 ```
 
-Open <http://127.0.0.1:8765> and enter a task. Input from the browser runs after the current agent turn. The agent starts out knowing `mystery_dungeon/knowledge/game-facts.md`, set by `knowledge` in `config.toml`; `--knowledge PATH` gives it another file.
+Open <http://127.0.0.1:8765> and enter a task. Input from the browser runs after the current agent turn. The agent starts out knowing `nima/knowledge/game-facts.md`, set by `knowledge` in `config.toml`; `--knowledge PATH` gives it another file.
 
 ## How it works
 
@@ -27,7 +27,7 @@ uv run python -m pytest -q
 ## Benchmark
 
 ```sh
-uv run --env-file .env -m mystery_dungeon.benchmark
+uv run --env-file .env -m nima.benchmark
 ```
 
 It records the model settings, memory length, an instructions hash and the hashes of the ROM, core, checkpoints and knowledge in `config.json`. Results are saved under `runs/benchmarks/`.

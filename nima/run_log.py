@@ -11,16 +11,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Mapping
 
-from mystery_dungeon.actions import GameAction, Stop, to_json
-from mystery_dungeon.model import internal_reasoning, token_usage
-from mystery_dungeon.review import Finding, ReviewError
+from nima.actions import GameAction, Stop, to_json
+from nima.model import internal_reasoning, token_usage
+from nima.review import Finding, ReviewError
 
 if TYPE_CHECKING:
     from emulator import Frame
-    from mystery_dungeon.actions import Outcome
-    from mystery_dungeon.agent import Context, ModelError, Turn
-    from mystery_dungeon.model import Model, Reply
-    from mystery_dungeon.session import Observation, Transition
+    from nima.actions import Outcome
+    from nima.agent import Context, ModelError, Turn
+    from nima.model import Model, Reply
+    from nima.session import Observation, Transition
 
 FORMAT_VERSION = 22  # of run and benchmark output; bump when a field changes
 RECENT_ROWS = 50  # turn messages retained in the live feed

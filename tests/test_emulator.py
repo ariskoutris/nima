@@ -3,8 +3,8 @@
 import pytest
 
 from emulator import GbaEmulator
-from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
-from mystery_dungeon.session import GameplaySession, read_checkpoint
+from nima.benchmark import CHECKPOINTS, CORE, ROM
+from nima.session import GameplaySession, read_checkpoint
 
 
 def test_core_log_messages_are_not_printed(tmp_path, capfd):

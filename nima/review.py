@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
-from mystery_dungeon.actions import name
-from mystery_dungeon.model import (
+from nima.actions import name
+from nima.model import (
     ChatSettings,
     api_key,
     decode,
@@ -20,7 +20,7 @@ from mystery_dungeon.model import (
 )
 
 if TYPE_CHECKING:
-    from mystery_dungeon.agent import Turn
+    from nima.agent import Turn
 
 # Each request reviews this many turns, so its size and answer stay bounded on long tasks. On
 # the plaza dialogue cases, 20-turn chunks recalled as many dialogue boxes as whole tasks did

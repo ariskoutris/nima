@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mystery_dungeon.benchmark import CASES  # noqa: E402 (needs ROOT on sys.path)
-from mystery_dungeon.model import read_settings  # noqa: E402
+from nima.benchmark import CASES  # noqa: E402 (needs ROOT on sys.path)
+from nima.model import read_settings  # noqa: E402
 
-GAME_FACTS = ROOT / "mystery_dungeon/knowledge/game-facts.md"
+GAME_FACTS = ROOT / "nima/knowledge/game-facts.md"
 VARIANTS = {"baseline": None, "facts": GAME_FACTS}  # variant → knowledge file
 
 
@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> None:
             if knowledge is None:
                 knowledge = output / "empty-knowledge.txt"
                 knowledge.write_text("")
-            command = [sys.executable, "-m", "mystery_dungeon.benchmark",
+            command = [sys.executable, "-m", "nima.benchmark",
                        "--output", str(output / variant), "--knowledge", str(knowledge)]
             for case in cases:
                 command += ["--case", case]

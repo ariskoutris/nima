@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const {test} = require('node:test');
 
-const html = fs.readFileSync(`${__dirname}/../mystery_dungeon/static/live.html`, 'utf8');
+const html = fs.readFileSync(`${__dirname}/../nima/static/live.html`, 'utf8');
 
 function page() {
   let focused;

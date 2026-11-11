@@ -10,9 +10,9 @@ import pytest
 from fakes import ScriptedModel, ScriptedReviewer, press, rows, votes
 
 from emulator import GbaEmulator
-from mystery_dungeon import benchmark
-from mystery_dungeon.actions import Press
-from mystery_dungeon.benchmark import (
+from nima import benchmark
+from nima.actions import Press
+from nima.benchmark import (
     CASES,
     CHECKPOINT_NAMES,
     CHECKPOINTS,
@@ -23,11 +23,11 @@ from mystery_dungeon.benchmark import (
     build_fixtures,
     run_case,
 )
-from mystery_dungeon.model import ChatSettings
-from mystery_dungeon.ram_state import GameRam
-from mystery_dungeon.review import Finding
-from mystery_dungeon.run_log import FORMAT_VERSION
-from mystery_dungeon.session import GameplaySession, read_ss0, restore
+from nima.model import ChatSettings
+from nima.ram_state import GameRam
+from nima.review import Finding
+from nima.run_log import FORMAT_VERSION
+from nima.session import GameplaySession, read_ss0, restore
 
 
 def test_ss0_can_be_read_from_upload_bytes():

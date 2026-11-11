@@ -6,10 +6,10 @@ import pytest
 from fakes import ScriptedModel, press
 
 from emulator import GbaEmulator
-from mystery_dungeon.actions import Press, Stop
-from mystery_dungeon.agent import Agent
-from mystery_dungeon.benchmark import CHECKPOINTS, CORE, ROM
-from mystery_dungeon.ram_state import (
+from nima.actions import Press, Stop
+from nima.agent import Agent
+from nima.benchmark import CHECKPOINTS, CORE, ROM
+from nima.ram_state import (
     DUNGEON,
     GROUND_LIVE_DIRECTION,
     GROUND_LIVES,
@@ -17,7 +17,7 @@ from mystery_dungeon.ram_state import (
     GameRam,
     check_rom,
 )
-from mystery_dungeon.session import GameplaySession, read_ss0, restore
+from nima.session import GameplaySession, read_ss0, restore
 
 
 @pytest.mark.parametrize("checkpoint,ready_mode", [

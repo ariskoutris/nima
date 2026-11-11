@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Callable, assert_never
 
 from emulator import Frame, GbaEmulator
-from mystery_dungeon.actions import GameAction, Press, Wait
-from mystery_dungeon.ram_state import GameRam, RamState
+from nima.actions import GameAction, Press, Wait
+from nima.ram_state import GameRam, RamState
 
 TICK_SECONDS = 1 / 60  # one tick at the GBA's refresh rate
 HOLD_TICKS = 8  # ticks each action holds its input

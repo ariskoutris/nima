@@ -6,11 +6,11 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from mystery_dungeon.actions import Action, GameAction, Stop
+from nima.actions import Action, GameAction, Stop
 
 if TYPE_CHECKING:
-    from mystery_dungeon.model import Model
-    from mystery_dungeon.session import GameState, Observation, Transition
+    from nima.model import Model
+    from nima.session import GameState, Observation, Transition
 
 MEMORY_TURNS = 5  # not yet tuned
 

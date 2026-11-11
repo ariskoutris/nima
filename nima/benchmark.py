@@ -11,15 +11,15 @@ from datetime import datetime
 from pathlib import Path
 
 from emulator import GbaEmulator
-from mystery_dungeon import CHECKPOINTS, CORE, KNOWLEDGE, ROM
-from mystery_dungeon.actions import Stop
-from mystery_dungeon.agent import MEMORY_TURNS, Agent, ModelError, Turn
-from mystery_dungeon.model import ChatModel, Model, read_settings
-from mystery_dungeon.prompts import INSTRUCTIONS
-from mystery_dungeon.ram_state import GameRam, check_rom
-from mystery_dungeon.review import ChatReviewer, Reviewer, ReviewError, review
-from mystery_dungeon.run_log import FORMAT_VERSION, RunLog
-from mystery_dungeon.session import (
+from nima import CHECKPOINTS, CORE, KNOWLEDGE, ROM
+from nima.actions import Stop
+from nima.agent import MEMORY_TURNS, Agent, ModelError, Turn
+from nima.model import ChatModel, Model, read_settings
+from nima.prompts import INSTRUCTIONS
+from nima.ram_state import GameRam, check_rom
+from nima.review import ChatReviewer, Reviewer, ReviewError, review
+from nima.run_log import FORMAT_VERSION, RunLog
+from nima.session import (
     HOLD_TICKS,
     RELEASE_TICKS,
     TICK_SECONDS,

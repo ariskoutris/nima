@@ -15,14 +15,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from emulator import Frame, GbaEmulator
-from mystery_dungeon import CORE, KNOWLEDGE, ROM, STATE
-from mystery_dungeon.actions import GAME_ACTIONS, GameAction, Stop
-from mystery_dungeon.agent import Agent, ModelError, Turn
-from mystery_dungeon.model import ChatModel, Model, read_settings
-from mystery_dungeon.ram_state import check_rom
-from mystery_dungeon.review import ChatReviewer, Finding, Reviewer, ReviewError, review
-from mystery_dungeon.run_log import RunLog
-from mystery_dungeon.session import (
+from nima import CORE, KNOWLEDGE, ROM, STATE
+from nima.actions import GAME_ACTIONS, GameAction, Stop
+from nima.agent import Agent, ModelError, Turn
+from nima.model import ChatModel, Model, read_settings
+from nima.ram_state import check_rom
+from nima.review import ChatReviewer, Finding, Reviewer, ReviewError, review
+from nima.run_log import RunLog
+from nima.session import (
     HOLD_TICKS,
     RELEASE_TICKS,
     TICK_SECONDS,

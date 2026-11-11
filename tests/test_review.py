@@ -7,11 +7,11 @@ import threading
 import pytest
 from fakes import FRAME, ScriptedReviewer
 
-from mystery_dungeon import model
-from mystery_dungeon.actions import Press, Stop
-from mystery_dungeon.agent import Context, Turn
-from mystery_dungeon.model import ChatSettings
-from mystery_dungeon.review import (
+from nima import model
+from nima.actions import Press, Stop
+from nima.agent import Context, Turn
+from nima.model import ChatSettings
+from nima.review import (
     REVIEW_INSTRUCTIONS,
     REVIEW_MAX_TOKENS,
     REVIEW_TURNS,
@@ -20,7 +20,7 @@ from mystery_dungeon.review import (
     ReviewError,
     review,
 )
-from mystery_dungeon.session import Character, GameState, Observation
+from nima.session import Character, GameState, Observation
 
 SETTINGS = ChatSettings("http://endpoint/v1/chat/completions", "vendor/model", "TEST_KEY")
 STATE = GameState((100, 100), None, "down", characters=(
