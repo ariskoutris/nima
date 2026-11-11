@@ -165,6 +165,16 @@ def test_north_exit_requires_leaving_pokemon_square(town):
     assert grader.reached()
 
 
+def test_north_exit_grading_does_not_require_a_spawned_player():
+    ram = Mock(spec=GameRam)
+    ram.player_position.return_value = (0, 0)
+    ram.ground_map.return_value = benchmark.WHISCASH_POND
+    case = next(case for case in CASES if case.id == "square_north_exit")
+    grader = Grader(case, ram)
+    ram.player_position.return_value = None
+    assert grader.reached()
+
+
 def test_buying_requires_choosing_a_friend_area(town):
     game, seeds, _ = town
     restore(game, seeds["shop-interact"])

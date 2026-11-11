@@ -115,6 +115,8 @@ class Grader:
 
     def reached(self) -> bool:
         self._listen()  # before the position check, so a box during a fade still counts
+        if self.case.criterion == "north_exit":
+            return self.ram.ground_map() == WHISCASH_POND
         position = self.ram.player_position()
         if position is None:
             return False
@@ -123,8 +125,6 @@ class Grader:
         match self.case.criterion:
             case "down":
                 return x == self.initial_x and y >= self.initial_y + 16
-            case "north_exit":
-                return self.ram.ground_map() == WHISCASH_POND
             case "approach":
                 npc = self.ram.npc_position(GRANBULL)
                 return (npc is not None and abs(x - npc[0]) <= 12 and

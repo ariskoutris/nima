@@ -152,9 +152,9 @@ class GameRam:
         return self._value(textbox + 0x462, "<h") if textbox is not None else None
 
     def player_position(self) -> tuple[int, int] | None:
-        """Return the leader's ground position in pixels, or None outside ground maps."""
+        """Return the leader's ground position in pixels, or None when it is unavailable."""
         lives = self._ground_lives()
-        if lives is None:
+        if lives is None or self._value(lives + 2, "<h") == -1:
             return None
         return _position(self._game.read_memory(lives + GROUND_LIVE_POSITION, 8))
 

@@ -1,4 +1,4 @@
-"""RAM observations against the local Red Rescue Team checkpoints."""
+"""RAM observations against local Red Rescue Team checkpoints."""
 
 import struct
 
@@ -121,6 +121,8 @@ def test_player_direction_masks_flag_bits_and_skips_unspawned_leader():
         assert GameRam(flagged).player_direction() == "east"
         unspawned = PatchedRam(game, {lives + 2: struct.pack("<h", -1)})
         assert GameRam(unspawned).player_direction() is None
+        assert GameRam(unspawned).player_position() is None
+        assert GameRam(unspawned).player_species() is None
 
         restore(game, read_ss0(CHECKPOINTS / "normal-maze.ss0"))
         stale = PatchedRam(game, {DUNGEON: struct.pack("<I", 0x02000000 - TEAM_POKEMON)})
