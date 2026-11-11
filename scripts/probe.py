@@ -89,10 +89,11 @@ def main(argv: list[str] | None = None) -> None:
     try:
         for variant in variants:
             knowledge = VARIANTS[variant]
+            if knowledge is None:
+                knowledge = output / "empty-knowledge.txt"
+                knowledge.write_text("")
             command = [sys.executable, "-m", "mystery_dungeon.benchmark",
-                       "--output", str(output / variant)]
-            if knowledge:
-                command += ["--knowledge", str(knowledge)]
+                       "--output", str(output / variant), "--knowledge", str(knowledge)]
             for case in cases:
                 command += ["--case", case]
             print(variant, flush=True)

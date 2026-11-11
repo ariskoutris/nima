@@ -27,9 +27,11 @@ def write_result(command, ended="stop"):
 
 def test_variants_and_summary(tmp_path, monkeypatch):
     calls = []
+    knowledge = []
 
     def run(command, **kwargs):
         calls.append((command, kwargs))
+        knowledge.append(Path(command[command.index("--knowledge") + 1]).read_text())
         write_result(command)
 
     monkeypatch.setattr(probe.subprocess, "run", run)
@@ -37,7 +39,7 @@ def test_variants_and_summary(tmp_path, monkeypatch):
     probe.main(["--case", "square_down", "--variant", "baseline",
                 "--variant", "facts", "--output", str(output)])
     assert len(calls) == 2
-    assert "--knowledge" not in calls[0][0]
+    assert knowledge == ["", probe.GAME_FACTS.read_text()]
     assert calls[1][0][calls[1][0].index("--knowledge") + 1] == str(probe.GAME_FACTS)
     assert probe.GAME_FACTS.is_file()
     assert all(call[1]["check"] for call in calls)
