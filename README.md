@@ -2,6 +2,8 @@
 
 An agent that plays Pokémon Mystery Dungeon: Red Rescue Team using a vision model. Give it a task such as talking to a character or buying an item, and watch it play in the browser. You can follow its reasoning and take control between turns.
 
+![The agent talks to Tyranitar and walks back to the center of the square](assets/demo.gif)
+
 ## The agent loop
 
 The agent is given a task and operates in a simple loop:
